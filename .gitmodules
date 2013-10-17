@@ -1,0 +1,6 @@
+[submodule "scripts/aeroSnap"]
+	path = scripts/aeroSnap
+	url = https://github.com/lanrat/aeroSnap.git
+[submodule "prog/py/SetWall"]
+	path = prog/py/SetWall
+	url = https://github.com/BlaiseRitchie/SetWall.git

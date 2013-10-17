@@ -1,0 +1,10 @@
+~/prog/scripts/fixres.sh &
+tint2 &
+compton --config ~/.compton.conf -b &
+
+mpd ~/.mpd.conf &
+
+xrdb -merge ~/.Xresources &
+opensnap -d &
+~/prog/py/SetWall/main.py &
+sleep 2 && volumeicon -t &

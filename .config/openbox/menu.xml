@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<openbox_menu xmlns="http://openbox.org/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://openbox.org/                 file:///usr/share/openbox/menu.xsd">
+	<menu id="root-menu" label="Openbox 3">
+		<item label="Terminal emulator">
+			<action name="Execute">
+				<execute>x-terminal-emulator -geometry 115x35</execute>
+			</action>
+		</item>
+		<item label="Nautilus">
+			<action name="Execute">
+				<execute>nautilus</execute>
+			</action>
+		</item>
+		<item label="Sonata">
+			<action name="Execute">
+				<execute>sonata</execute>
+			</action>
+		</item>
+		<item label="Web browser">
+			<action name="Execute">
+				<execute>x-www-browser</execute>
+			</action>
+		</item>
+		<!-- This requires the presence of the 'menu' package to work -->
+		<item label="Sublime Text">
+			<action name="Execute">
+				<execute>sublime_text</execute>
+			</action>
+		</item>
+		<item label="playonlinux">
+			<action name="Execute">
+				<execute>playonlinux</execute>
+			</action>
+		</item>
+		<item label="Eclipse">
+			<action name="Execute">
+				<execute>eclipse</execute>
+			</action>
+		</item>
+		<item label="Calibre">
+			<action name="Execute">
+				<execute>calibre</execute>
+			</action>
+		</item>
+		<item label="Deluge">
+			<action name="Execute">
+				<execute>deluge</execute>
+			</action>
+		</item>
+		<item label="HipChat">
+			<action name="Execute">
+				<execute>hipchat</execute>
+			</action>
+		</item>
+		<item label="Steam">
+			<action name="Execute">
+				<execute>steam</execute>
+			</action>
+		</item>
+		<menu id="/Debian"/>
+		<separator/>
+		<menu id="client-list-menu"/>
+		<separator/>
+		<item label="Set Wallpaper">
+			<action name="Execute">
+				<execute>~/prog/py/SetWall/main.py</execute>
+			</action>
+		</item>
+		<item label="Obmenu">
+			<action name="Execute">
+				<execute>obmenu</execute>
+			</action>
+		</item>
+		<item label="ObConf">
+			<action name="Execute">
+				<execute>obconf</execute>
+			</action>
+		</item>
+		<item label="Reconfigure">
+			<action name="Reconfigure"/>
+		</item>
+		<item label="Restart">
+			<action name="Restart"/>
+		</item>
+		<separator/>
+		<item label="Exit">
+			<action name="Exit"/>
+		</item>
+	</menu>
+</openbox_menu>
