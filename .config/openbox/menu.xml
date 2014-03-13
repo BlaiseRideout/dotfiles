@@ -11,9 +11,9 @@
 				<execute>nautilus</execute>
 			</action>
 		</item>
-		<item label="Sonata">
+		<item label="Minecraft">
 			<action name="Execute">
-				<execute>sonata</execute>
+				<execute>primusrun /home/blaise/MultiMC/MultiMC</execute>
 			</action>
 		</item>
 		<item label="Web browser">
@@ -22,6 +22,16 @@
 			</action>
 		</item>
 		<!-- This requires the presence of the 'menu' package to work -->
+		<item label="Mumble">
+			<action name="Execute">
+				<execute>mumble</execute>
+			</action>
+		</item>
+		<item label="Tor Browser">
+			<action name="Execute">
+				<execute>~/.tor-browser/start-tor-browser</execute>
+			</action>
+		</item>
 		<item label="Sublime Text">
 			<action name="Execute">
 				<execute>sublime_text</execute>
@@ -29,7 +39,7 @@
 		</item>
 		<item label="playonlinux">
 			<action name="Execute">
-				<execute>playonlinux</execute>
+				<execute>primusrun playonlinux</execute>
 			</action>
 		</item>
 		<item label="Eclipse">
@@ -45,6 +55,11 @@
 		<item label="Deluge">
 			<action name="Execute">
 				<execute>deluge</execute>
+			</action>
+		</item>
+		<item label="Skype">
+			<action name="Execute">
+				<execute>/media/home/prog/scripts/skype.sh</execute>
 			</action>
 		</item>
 		<item label="HipChat">
@@ -81,6 +96,27 @@
 		</item>
 		<item label="Restart">
 			<action name="Restart"/>
+		</item>
+		<separator/>
+		<item label="Suspend">
+			<action name="Execute">
+				<execute>systemctl suspend</execute>
+			</action>
+		</item>
+		<item label="Hibernate">
+			<action name="Execute">
+				<execute>systemctl hibernate</execute>
+			</action>
+		</item>
+		<item label="Reboot">
+			<action name="Execute">
+				<execute>systemctl reboot</execute>
+			</action>
+		</item>
+		<item label="Shutdown">
+			<action name="Execute">
+				<execute>systemctl poweroff</execute>
+			</action>
 		</item>
 		<separator/>
 		<item label="Exit">

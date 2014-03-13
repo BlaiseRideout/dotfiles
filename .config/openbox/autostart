@@ -1,10 +1,14 @@
+setxkbmap dvorak &
 ~/prog/scripts/fixres.sh &
-tint2 &
-compton --config ~/.compton.conf -b &
+(compton -f -i 0.7 -e 0.7 -I .04 -O .04 -r 12 -l -15 -t -15 -o .7 -CGc --shadow-ignore-shaped -b  && tint2) &
+~/.fehbg &
+xmodmap ~/.Xmodmap &
 
 mpd ~/.mpd.conf &
 
 xrdb -merge ~/.Xresources &
-opensnap -d &
 ~/prog/py/SetWall/main.py &
 sleep 2 && volumeicon -t &
+
+~/prog/scripts/nosleep.sh &
+~/.autostart.sh &

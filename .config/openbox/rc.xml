@@ -353,6 +353,11 @@
         <command>~/prog/scripts/aeroSnap/minimize.sh</command>
       </action>
     </keybind>
+    <keybind key="W-v">
+      <action name="Execute">
+        <command>~/prog/scripts/typedate.sh</command>
+      </action>
+    </keybind>
     <!-- Take screenshot when print is pressed -->
     <keybind key="Print">
       <action name="Execute">
@@ -405,22 +410,7 @@
     </context>
     <context name="Titlebar">
       <mousebind button="Left" action="Drag">
-        <action name="if">
-          <maximizedvertical>yes</maximizedvertical>
-          <then>
-            <action name="Unmaximize"/>
-              <direction>vertical</direction>
-            <action name="MoveResizeTo">
-              <x>center</x>
-              <!-- For aerosnap -->
-              <y>current</y>
-            </action>
-            <action name="Move"/>
-          </then>
-          <else>
-            <action name="Move"/>
-          </else>
-        </action>
+        <action name="Move"/>
       </mousebind>
       <mousebind button="Left" action="DoubleClick">
         <action name="ToggleMaximize"/>
