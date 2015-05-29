@@ -152,7 +152,8 @@ bindsym $mod+w exec x-www-browser
 bindsym Control+Shift+Escape exec i3-sensible-terminal -e htop
 
 # toggle keyborad layout
-bindcode Control+50 exec ~/scripts/keymap.sh
+bindcode --release Shift+50 exec ~/scripts/keymap.sh
+bindcode --release Shift+62 exec ~/scripts/keymap.sh
 
 # lock
 bindsym $mod+l exec i3lock -c 000000
