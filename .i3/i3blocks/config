@@ -1,0 +1,92 @@
+# i3blocks config file
+#
+# Please see man i3blocks for a complete reference!
+# The man page is also hosted at http://vivien.github.io/i3blocks
+#
+# List of valid properties:
+#
+# align
+# color
+# command
+# full_text
+# instance
+# interval
+# label
+# min_width
+# name
+# separator
+# separator_block_width
+# short_text
+# signal
+# urgent
+
+# Global properties
+separator_block_width=15
+
+[keyboard]
+command=~/.i3/i3blocks/keyboard
+interval=once
+signal=1
+
+[volume]
+#label=🔊
+command=~/.i3/i3blocks/volume
+interval=once
+signal=10
+
+[wireless]
+label=
+instance=wlan0
+command=~/.i3/i3blocks/network
+interval=10
+
+[battery]
+label=⚡
+command=/usr/share/i3blocks/battery
+interval=30
+
+[date]
+command=date '+%A, %B %d, %Y'
+interval=5
+
+[time]
+command=date '+%H:%M'
+interval=5
+
+#[memory]
+#
+#label=MEM
+#command=/usr/share/i3blocks/memory
+#separator=false
+#interval=30
+#
+#[swap]
+#label=SWAP
+#instance=swap
+#command=/usr/share/i3blocks/memory
+#interval=30
+#
+#[disk-home]
+#instance=$HOME
+#command=/usr/share/i3blocks/disk
+#interval=30
+#
+#[ethernet]
+#label=E
+#instance=eth0
+##instance=enp0s25
+#command=~/.i3/i3blocks/network
+#short_text=True
+#interval=10
+
+#[cpu]
+#label=CPU
+#command=/usr/share/i3blocks/cpu_usage
+#interval=10
+#min_width=CPU: 100.00%
+#separator=false
+
+#[load]
+#command=/usr/share/i3blocks/load_average
+#interval=10
+

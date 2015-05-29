@@ -1,0 +1,10 @@
+#!/bin/sh
+
+LAYOUT=$(setxkbmap -query | awk '/layout/{print $2}')
+VARIANT=$(setxkbmap -query | awk '/variant/{print $2}')
+
+if [ "$VARIANT" != "" ]; then
+	LAYOUT="$VARIANT"
+fi
+
+echo "$LAYOUT"

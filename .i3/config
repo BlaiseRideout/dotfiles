@@ -151,14 +151,18 @@ bindsym $mod+w exec x-www-browser
 # start htop
 bindsym Control+Shift+Escape exec i3-sensible-terminal -e htop
 
+# toggle keyborad layout
+bindcode Control+50 exec ~/scripts/keymap.sh
+
 # lock
 bindsym $mod+l exec i3lock -c 000000
 
 # Start i3bar to display a workspace bar (plus the system information i3status
 # finds out, if available)
 bar {
-        status_command i3status -c ~/.i3/status
-	position top
+        status_command i3blocks -c ~/.i3/i3blocks/config
+	position bottom
+	separator_symbol "|"
 	colors {
 		background #101010
 		statusline #999999
@@ -170,5 +174,13 @@ bar {
 	}
 }
 
+# colors
+client.focused		#555555 #555555 #cccccc #555555
+client.focused_inactive	#333333 #333333 #cccccc #333333
+client.unfocused	#2a2a2a #2a2a2a #cccccc #2a2a2a
+client.urgent		#cc5252 #cc5252 #cccccc #cc5252
+client.placeholder	#101010 #101010 #cccccc #101010
+
+mouse_warping none
 
 exec ~/.i3/autostart
