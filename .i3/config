@@ -107,7 +107,7 @@ bindsym $mod+Shift+6 move container to workspace 6; workspace 6
 bindsym $mod+Shift+7 move container to workspace 7; workspace 7
 bindsym $mod+Shift+8 move container to workspace 8; workspace 8
 bindsym $mod+Shift+9 move container to workspace 9; workspace 9
-bindsym $mod+Shift+0 move container to workspace 10; orkspace 10
+bindsym $mod+Shift+0 move container to workspace 10; workspace 10
 
 # reload the configuration file
 bindsym $mod+Shift+j reload
@@ -158,6 +158,17 @@ bindsym $mod+l exec i3lock -c 000000
 # finds out, if available)
 bar {
         status_command i3status -c ~/.i3/status
+	position top
+	colors {
+		background #101010
+		statusline #999999
+		separator #888888
+		focused_workspace #2a2a2a #2a2a2a #aaaaaa
+		active_workspace #101010 #101010 #777777
+		inactive_workspace #101010 #101010 #777777
+		urgent_workspace #cc5252 #cc5252 #101010
+	}
 }
+
 
 exec ~/.i3/autostart
