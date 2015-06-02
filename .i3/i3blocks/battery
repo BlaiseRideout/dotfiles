@@ -1,0 +1,34 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+import re
+import subprocess
+
+def run(command):
+  call = subprocess.Popen(command, shell = True, stdout = subprocess.PIPE)
+  stdout = call.communicate()[0]
+  return stdout.strip().decode('utf-8'), call.returncode
+
+if __name__ == "__main__":
+    acpi = run('acpi -b')[0]
+    if acpi is None or acpi == "":
+        exit(-1)
+    battery = re.search('\d*%', acpi).group(0)
+    battery_int = int(battery[:-1])
+    is_charging = bool(re.search('Charging|Unknown', acpi))
+
+    full_text=""
+
+    if is_charging:
+        full_text = ''
+    elif battery_int > 90:
+        full_text = ''
+    elif battery_int > 50:
+        full_text = ''
+    elif battery_int > 20:
+        full_text = ''
+    else:
+        full_text = ''
+
+    full_text += " " + str(battery_int)
+
+    print full_text

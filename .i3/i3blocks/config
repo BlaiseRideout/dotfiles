@@ -21,7 +21,7 @@
 # urgent
 
 # Global properties
-separator_block_width=15
+separator_block_width=7
 
 [keyboard]
 command=~/.i3/i3blocks/keyboard
@@ -29,28 +29,35 @@ interval=once
 signal=1
 
 [volume]
-#label=🔊
 command=~/.i3/i3blocks/volume
 interval=once
 signal=10
 
+[ethernet]
+label=
+instance=eth0
+command=~/.i3/i3blocks/network
+interval=10
+
 [wireless]
-label=
+label=
 instance=wlan0
 command=~/.i3/i3blocks/network
 interval=10
 
 [battery]
-label=⚡
-command=/usr/share/i3blocks/battery
+command=~/.i3/i3blocks/battery
 interval=30
 
 [date]
-command=date '+%A, %B %d, %Y'
+label=
+instance=+%a, %B %d, %Y
+command=~/.i3/i3blocks/datetime
 interval=5
 
 [time]
-command=date '+%H:%M'
+label=
+command=~/.i3/i3blocks/datetime
 interval=5
 
 #[memory]

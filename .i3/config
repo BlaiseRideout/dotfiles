@@ -145,6 +145,15 @@ bindsym $mod+p mode "resize"
 new_window 1pixel
 hide_edge_borders both
 
+# dialogs
+for_window [class="(?i)gsimplecal"] floating enable
+for_window [window_role="pop-up"] floating enable
+for_window [window_role="task_dialog"] floating enable
+
+#gaps inner 10px
+#gaps outer 0px
+#smart_gaps on
+
 # start x-www-browser
 bindsym $mod+w exec x-www-browser
 
@@ -156,14 +165,15 @@ bindcode --release Shift+50 exec ~/scripts/keymap.sh
 bindcode --release Shift+62 exec ~/scripts/keymap.sh
 
 # lock
-bindsym $mod+l exec i3lock -c 000000
+bindsym $mod+l exec ~/scripts/lock.sh -u
 
 # Start i3bar to display a workspace bar (plus the system information i3status
 # finds out, if available)
 bar {
-        status_command i3blocks -c ~/.i3/i3blocks/config
+	status_command i3blocks -c ~/.i3/i3blocks/config
 	position bottom
-	separator_symbol "|"
+	font pango:Icons, DejaVu Sans Mono 8
+	separator_symbol " "
 	colors {
 		background #101010
 		statusline #999999

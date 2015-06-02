@@ -1,5 +1,9 @@
 #!/bin/sh
 
+case $BLOCK_BUTTON in
+	1) ~/scripts/keymap.sh ;;
+esac
+
 LAYOUT=$(setxkbmap -query | awk '/layout/{print $2}')
 VARIANT=$(setxkbmap -query | awk '/variant/{print $2}')
 
@@ -7,4 +11,4 @@ if [ "$VARIANT" != "" ]; then
 	LAYOUT="$VARIANT"
 fi
 
-echo "$LAYOUT"
+echo " $LAYOUT"

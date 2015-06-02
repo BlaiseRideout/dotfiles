@@ -1,0 +1,9 @@
+#!/bin/sh
+
+case $BLOCK_BUTTON in
+	1) gsimplecal ;;
+esac
+
+FORMAT="${BLOCK_INSTANCE:-+%H:%M}"
+
+date "$FORMAT"

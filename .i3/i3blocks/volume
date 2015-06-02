@@ -56,7 +56,17 @@ format() {
   # If dB was selected, print that instead
   perl_filter+=$([[ $STEP = *dB ]] && echo '$3' || echo '$1')
   perl_filter+='"; exit}'
-  perl -ne "$perl_filter"
+  volume=$(perl -ne "$perl_filter")
+  if [ $volume = "MUTE" ]; then
+	  volume=" muted"
+  elif [ $volume -gt 80 ]; then
+	  volume=" $volume"
+  elif [ $volume -gt 40 ]; then
+	  volume=" $volume"
+  else
+	  volume=" $volume"
+  fi
+  echo -n "$volume"
 }
 
 #------------------------------------------------------------------------
