@@ -15,7 +15,7 @@ set $mod Mod4
 # is used in the bar {} block below.
 # This font is widely installed, provides lots of unicode glyphs, right-to-left
 # text rendering and scalability on retina/hidpi displays (thanks to pango).
-font pango:DejaVu Sans Mono 8
+font pango:Terminus 10px
 # Before i3 v4.8, we used to recommend this one as the default:
 # font -misc-fixed-medium-r-normal--13-120-75-75-C-70-iso10646-1
 # The font above is very space-efficient, that is, it looks good, sharp and
@@ -172,7 +172,7 @@ bindsym $mod+l exec ~/scripts/lock.sh -u
 bar {
 	status_command i3blocks -c ~/.i3/i3blocks/config
 	position bottom
-	font pango:Icons, DejaVu Sans Mono 8
+	font pango:Icons, Terminus 10px
 	separator_symbol " "
 	colors {
 		background #101010

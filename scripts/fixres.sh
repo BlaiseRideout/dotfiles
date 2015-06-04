@@ -10,3 +10,4 @@ for((i=0;i<${#outputs[@]}-1;++i)); do
 	xrandr --output "${outputs[i]}" --right-of "${outputs[i+1]}"
 done
 
+xrandr --dpi 96
