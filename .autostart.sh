@@ -1,8 +1,13 @@
+#!/bin/bash
+
 ~/scripts/fixres.sh
 
-~/.fehbg &
-
 xrdb -merge ~/.Xresources &
+xmodmap ~/.Xmodmap &
+
+compton --config ~/.compton.conf &
+
+~/.fehbg &
 
 xset -dpms
 xset s off
