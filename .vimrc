@@ -122,4 +122,5 @@ set wildmenu
 map <F1> <Esc>
 imap <F1> <Esc>
 
-command W :execute ':silent w !sudo tee % > /dev/null' | :edit!
+command! W :execute ':silent w !sudo tee % > /dev/null' | :edit!
+nnoremap Q <nop>
