@@ -129,3 +129,4 @@ stty -ixon
 #fi
 
 shopt -s globstar
+ssh-add -L > /dev/null || ssh-add
