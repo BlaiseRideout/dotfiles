@@ -123,5 +123,5 @@ map <F1> <Esc>
 imap <F1> <Esc>
 
 command! W :execute ':silent w !sudo tee % > /dev/null' | :edit!
-command! Wq :execute ':silent w !sudo tee % > /dev/null' | :q
+command! Wq :execute ':silent w !sudo tee % > /dev/null' | :edit! | :q
 nnoremap Q <nop>
