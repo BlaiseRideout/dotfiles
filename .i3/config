@@ -167,7 +167,7 @@ bindcode --release Shift+50 exec ~/scripts/keymap.sh
 bindcode --release Shift+62 exec ~/scripts/keymap.sh
 
 # lock
-bindsym $mod+l exec ~/scripts/lock.sh -u
+bindsym $mod+l exec ~/scripts/lock.sh
 
 # Start i3bar to display a workspace bar (plus the system information i3status
 # finds out, if available)
