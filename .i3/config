@@ -107,7 +107,6 @@ bindsym $mod+Shift+6 move container to workspace 6; workspace 6
 bindsym $mod+Shift+7 move container to workspace 7; workspace 7
 bindsym $mod+Shift+8 move container to workspace 8; workspace 8
 bindsym $mod+Shift+9 move container to workspace 9; workspace 9
-bindsym $mod+Shift+0 move container to workspace 10; workspace 10
 
 # reload the configuration file
 bindsym $mod+Shift+j reload
@@ -142,7 +141,7 @@ mode "resize" {
 
 bindsym $mod+p mode "resize"
 
-new_window 1pixel
+new_window pixel 3px
 hide_edge_borders both
 
 # dialogs
@@ -150,12 +149,15 @@ for_window [class="(?i)gsimplecal"] floating enable
 for_window [window_role="pop-up"] floating enable
 for_window [window_role="task_dialog"] floating enable
 
-#gaps inner 10px
-#gaps outer 0px
-#smart_gaps on
+gaps inner 10
+gaps outer 0
+smart_gaps on
 
 # start x-www-browser
 bindsym $mod+w exec x-www-browser
+
+# start file manager
+bindsym $mod+e exec spacefm
 
 # start htop
 bindsym Control+Shift+Escape exec i3-sensible-terminal -e htop
@@ -165,7 +167,7 @@ bindcode --release Shift+50 exec ~/scripts/keymap.sh
 bindcode --release Shift+62 exec ~/scripts/keymap.sh
 
 # lock
-bindsym $mod+l exec ~/scripts/lock.sh -u
+bindsym $mod+l exec ~/scripts/lock.sh
 
 # file manager
 bindsym $mod+e exec spacefm

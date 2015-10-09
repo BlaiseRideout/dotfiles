@@ -103,7 +103,7 @@ nnoremap <silent> <C-\> :TmuxNavigatePrevious<cr>
 set splitbelow
 set splitright
 
-nmap <S-Enter> O<Esc>
+nmap <C-J> O<Esc>
 nmap <CR> o<Esc>
 
 "remove trailing whitespace on save
@@ -115,3 +115,13 @@ augroup reload_vimrc " {
 augroup END " }
 
 autocmd CompleteDone * pclose
+
+set wildmode=longest,list,full
+set wildmenu
+
+map <F1> <Esc>
+imap <F1> <Esc>
+
+command! W :execute ':silent w !sudo tee % > /dev/null' | :edit!
+command! Wq :execute ':silent w !sudo tee % > /dev/null' | :edit! | :q
+nnoremap Q <nop>

@@ -127,3 +127,6 @@ stty -ixon
 #	script -t 2>$HOME/.shell_logs/$filename.time $HOME/.shell_logs/$filename.script
 #	exit
 #fi
+
+shopt -s globstar
+ssh-add -L > /dev/null || ssh-add
