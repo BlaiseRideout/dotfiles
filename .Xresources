@@ -26,3 +26,6 @@ URxvt*geometry:		115x35
 
 URxvt.perl-ext-common:	fullscreen
 URxvt.keysym.F11:	perl:fullscreen:switch
+
+URxvt.iso14755: False
+URxvt.iso14755_52: False
