@@ -19,6 +19,7 @@ Plugin 'terryma/vim-multiple-cursors'
 Plugin 'christoomey/vim-tmux-navigator'
 
 Plugin 'pangloss/vim-javascript'
+Plugin 'rust-lang/rust.vim'
 
 Bundle 'Raimondi/delimitMate'
 
