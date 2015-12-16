@@ -41,6 +41,12 @@ interval=10
 
 [wireless]
 label=
+instance=wlp1s0
+command=~/.i3/i3blocks/network
+interval=10
+
+[wireless]
+label=
 instance=wlan0
 command=~/.i3/i3blocks/network
 interval=10
