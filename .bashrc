@@ -129,7 +129,7 @@ stty -ixon
 #fi
 
 shopt -s globstar
-ssh-add -L > /dev/null || ssh-add
+if [ ! -z $SSH_AGENT_PID ]; then ssh-add -L > /dev/null || ssh-add; fi
 
 # TMUX
 if which tmux >/dev/null 2>&1; then
