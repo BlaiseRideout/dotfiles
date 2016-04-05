@@ -15,6 +15,9 @@ compton --config ~/.compton.conf &
 
 ~/.fehbg &
 
+autocutsel -f
+autocutself -selection PRIMARY -f
+
 xset -dpms
 xset s off
 xset s noblank
