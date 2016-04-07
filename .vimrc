@@ -48,6 +48,7 @@ nnoremap <C-y> :call NumberToggle()<cr>
 
 set foldmethod=syntax
 set foldlevelstart=0
+set tabstop=2 shiftwidth=2
 
 set showmatch
 
