@@ -130,3 +130,6 @@ nnoremap Q <nop>
 
 set viminfo='20,\"100,:20,%,n~/.viminfo'
 set history=50
+
+set noerrorbells visualbell t_vb=
+autocmd GUIEnter * set visualbell t_vb=
