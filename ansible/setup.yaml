@@ -1,0 +1,124 @@
+---
+- hosts: computers
+  user: blaise
+  become: yes
+  become_user: root
+  become_method: sudo
+
+  tasks:
+    - name: Google Chrome PGP Key
+      apt_key: url=https://dl.google.com/linux/linux_signing_key.pub state=present
+    - name: Google Chrome Repository
+      apt_repository: repo="deb http://dl.google.com/linux/chrome/deb/ stable main" state=present #filename="google-chrome"
+    - name: Dropbox PGP Key
+      apt_key: id=1C61A2656FB57B7E4DE0F4C1FC918B335044912E keyserver=pgp.mit.edu state=present
+    - name: Dropbox Repository
+      apt_repository: repo="deb [arch=i386,amd64] http://linux.dropbox.com/debian sid main" state=present #filename="dropbox"
+    - name: Remove i3 Apt Package
+      apt:
+        name: i3
+        state: absent
+    - name: Install Software
+      apt:
+        update_cache: yes
+        name:
+          - git
+          - vim-nox
+          - python
+          - build-essential
+          - pkg-config
+          - cmake
+          - nodejs
+          - npm
+          - alsa-utils
+          - htop
+          - lightdm
+          - xfonts-terminus
+          - network-manager-gnome
+          - i3blocks
+          - compton
+          - rxvt-unicode-256color
+          - google-chrome-stable
+          - spacefm
+          - keepassx
+          - gsimplecal
+          - mpv
+          - feh
+          - scrot
+          - imagemagick
+          - autocutsel
+          - tmux
+          - python-dev
+          - dropbox
+          - libxcb1-dev
+          - libxcb-keysyms1-dev
+          - libpango1.0-dev
+          - libxcb-util0-dev
+          - libxcb-icccm4-dev
+          - libyajl-dev
+          - libstartup-notification0-dev
+          - libxcb-randr0-dev
+          - libev-dev
+          - libxcb-cursor-dev
+          - libxcb-xinerama0-dev
+          - libxcb-xkb-dev
+          - libxkbcommon-dev
+          - libxkbcommon-x11-dev
+
+    - name: Retrieve i3-gaps
+      git: repo="https://www.github.com/Airblader/i3" dest="/tmp/i3-gaps" version="gaps"
+    - name: Compile and install i3-gaps
+      shell: make && make install chdir="/tmp/i3-gaps"
+    - name: Get NodeJS Location
+      command: which nodejs
+      register: nodejs
+    - name: Make Node Link
+      file: src="{{ nodejs.stdout }}" dest="/usr/local/bin/node" state=link force=yes
+    - name: Configure User
+      user: name="{{ ansible_user }}" shell=/bin/bash groups=sudo append=yes
+    - name: Ensure LightDM Started
+      service: name=lightdm enabled=yes state=started
+
+
+- hosts: computers
+  user: blaise
+
+  tasks:
+    - name: Retrieve Dotfiles
+      git: repo="https://github.com/BlaiseRitchie/dotfiles.git" dest="{{ ansible_env.HOME }}/.dotfiles"
+    - name: Ensure Dotfile Directories Existence
+      file: path={{ item }} state=directory mode=0755
+      with_items:
+        - "{{ ansible_env.HOME }}/.config"
+        - "{{ ansible_env.HOME }}/.vim"
+        - "{{ ansible_env.HOME }}/.vim/bundle"
+        - "{{ ansible_env.HOME }}/.ssh"
+        - "{{ ansible_env.HOME }}/.fonts"
+    - name: Link Dotfiles
+      file: src="{{ ansible_env.HOME }}/.dotfiles/{{ item }}" dest="{{ ansible_env.HOME }}/{{ item }}" state=link force=yes
+      with_items:
+        - ".autostart.sh"
+        - ".vimrc"
+        - ".vim/colors/Tommorrow-Night.vim"
+        - ".compton.conf"
+        - ".bashrc"
+        - ".Xmodmap"
+        - ".Xresources"
+        - ".tmux.conf"
+        - ".ssh/config"
+        - ".ssh/authorized_keys"
+        - ".i3"
+        - ".config/gsimplecal"
+        - ".config/openbox"
+        - ".config/tint2"
+        - ".fonts/icons.ttf"
+
+    - name: Retrieve Vundle
+      git: repo="https://github.com/VundleVim/Vundle.vim.git" dest="{{ ansible_env.HOME }}/.vim/bundle/Vundle.vim"
+    - name: Install Vundle Plugins
+      shell: vim -E -s -c "source {{ ansible_env.HOME }}/.vimrc" +PluginInstall +qall
+      ignore_errors: yes
+    - name: Compile YCM (Log Written to ~/.vim/bundle/YouCompleteMe.log)
+      shell: python "{{ ansible_env.HOME }}/.vim/bundle/YouCompleteMe/install.py" --clang-completer --tern-completer chdir="{{ ansible_env.HOME }}/.vim/bundle/YouCompleteMe" > "{{ ansible_env.HOME }}/.vim/bundle/YouCompleteMe/install.log" 2> "{{ ansible_env.HOME }}/.vim/bundle/YouCompleteMe/install.log"
+      args:
+              creates: "{{ ansible_env.HOME }}/.vim/bundle/YouCompleteMe/install.log"
