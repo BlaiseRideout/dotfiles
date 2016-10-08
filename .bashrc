@@ -151,3 +151,6 @@ export GOPATH=$HOME/prog/go
 export GOBIN=$GOPATH/bin
 
 export PATH=$PATH:$GOBIN
+
+export LD_LIBRARY_PATH="/usr/local/lib"
+export PATH=$PATH:/usr/local/lib
