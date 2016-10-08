@@ -4,9 +4,8 @@
 ~/scripts/synaptics.sh &
 
 spacefm -d &
-nm-applet &
+pidof nm-applet || nm-applet &
 dropbox start &
-keepassx -min -lock &
 
 xrdb -merge ~/.Xresources &
 xmodmap ~/.Xmodmap &
