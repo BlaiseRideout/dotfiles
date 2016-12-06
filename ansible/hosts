@@ -1,4 +1,2 @@
 [computers]
 localhost
-desktop ansible_host=blaise.in ansible_port=222
-nas ansible_host=blaise.in ansible_port=2222
