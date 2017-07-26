@@ -6,7 +6,6 @@
 spacefm -d &
 nm-applet &
 dropbox start &
-keepassx -min -lock &
 
 xrdb -merge ~/.Xresources &
 xmodmap ~/.Xmodmap &
