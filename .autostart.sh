@@ -4,7 +4,7 @@
 ~/scripts/synaptics.sh &
 
 spacefm -d &
-nm-applet &
+pidof nm-applet || nm-applet &
 dropbox start &
 
 xrdb -merge ~/.Xresources &
