@@ -150,7 +150,11 @@ export GOROOT=/usr/local/go
 export GOPATH=$HOME/prog/go
 export GOBIN=$GOPATH/bin
 
-export PATH=$PATH:$GOBIN
+export JAVA_HOME=/opt/jdk
+export ANDROID_HOME=$HOME/Android/Sdk
+export ANDROID_NDK=$HOME/Android/Ndk
+
+export PATH=$PATH:$GOBIN:$JAVA_HOME/bin:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$ANDROID_NDK
 
 export LD_LIBRARY_PATH="/usr/local/lib"
 export PATH=$PATH:/usr/local/lib
