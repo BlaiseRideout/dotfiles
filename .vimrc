@@ -133,3 +133,4 @@ set history=50
 
 set noerrorbells visualbell t_vb=
 autocmd GUIEnter * set visualbell t_vb=
+set timeoutlen=1000 ttimeoutlen=0
