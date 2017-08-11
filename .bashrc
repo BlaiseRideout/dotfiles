@@ -118,7 +118,6 @@ alias incognito="set +o history;clear"
 alias uncognito="set -o history;clear"
 
 export EDITOR="vim"
-export PATH="$PATH:$HOME/.local/bin"
 
 stty -ixon
 
@@ -152,9 +151,11 @@ export GOBIN=$GOPATH/bin
 
 export JAVA_HOME=/opt/jdk
 export ANDROID_HOME=$HOME/Android/Sdk
-export ANDROID_NDK=$HOME/Android/Ndk
+export ANDROID_NDK=$ANDROID_HOME/ndk-bundle
 
-export PATH=$PATH:$GOBIN:$JAVA_HOME/bin:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$ANDROID_NDK
+export PATH="$JAVA_HOME/bin:$PATH:$GOBIN:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin/:$ANDROID_HOME/platform-tools:$ANDROID_NDK:$ANDROID_HOME/build-tools/23.0.3"
 
 export LD_LIBRARY_PATH="/usr/local/lib"
-export PATH=$PATH:/usr/local/lib
+export PATH="$PATH:/usr/local/lib"
+
+export PATH="$PATH:$HOME/.local/bin"
