@@ -1,21 +1,24 @@
 #!/bin/bash
 
-~/scripts/fixres.sh
+~/scripts/fixres.sh &
 ~/scripts/synaptics.sh &
-
-spacefm -d &
-nm-applet &
-dropbox start &
 
 xrdb -merge ~/.Xresources &
 xmodmap ~/.Xmodmap &
-
-compton --config ~/.compton.conf &
-
-~/.fehbg &
+if [ ! $(pidof unity-settings-daemon) ]; then
+	spacefm -d &
+	nm-applet &
+	dropbox start &
+	if [ -f ~/.compton.conf ]; then
+		compton --config ~/.compton.conf &
+	fi
+	if [ -f ~/.fehbg ]; then
+		~/.fehbg &
+	fi
+fi
 
 autocutsel -f
-autocutself -selection PRIMARY -f
+autocutsel -selection PRIMARY -f
 
 xset -dpms
 xset s off
