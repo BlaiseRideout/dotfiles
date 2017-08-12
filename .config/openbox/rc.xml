@@ -318,6 +318,11 @@
         <command>x-www-browser</command>
       </action>
     </keybind>
+    <keybind key="C-A-l">
+      <action name="Execute">
+				<command>~/scripts/lock.sh</command>
+      </action>
+    </keybind>
     <!-- Take screenshot when print is pressed -->
     <keybind key="Print">
       <action name="Execute">

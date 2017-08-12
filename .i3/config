@@ -55,7 +55,7 @@ bindsym $mod+Shift+s move right
 bindsym $mod+d split h
 
 # split in vertical orientation
-bindsym $mod+k split v
+bindsym $mod+v split v
 
 # enter fullscreen mode for the focused container
 bindsym $mod+u fullscreen
@@ -156,6 +156,8 @@ smart_gaps on
 # start x-www-browser
 bindsym $mod+w exec x-www-browser
 
+# start keepassx
+bindsym $mod+k exec keepassx
 # start file manager
 bindsym $mod+e exec spacefm
 

@@ -5,16 +5,18 @@
 
 xrdb -merge ~/.Xresources &
 xmodmap ~/.Xmodmap &
+pidof nm-applet || nm-applet &
+
 if [ ! $(pidof unity-settings-daemon) ]; then
 	spacefm -d &
-	nm-applet &
 	dropbox start &
-	if [ -f ~/.compton.conf ]; then
-		compton --config ~/.compton.conf &
-	fi
-	if [ -f ~/.fehbg ]; then
-		~/.fehbg &
-	fi
+fi
+
+if [ -f ~/.compton.conf ]; then
+	compton --config ~/.compton.conf &
+fi
+if [ -f ~/.fehbg ]; then
+	~/.fehbg &
 fi
 
 autocutsel -f
