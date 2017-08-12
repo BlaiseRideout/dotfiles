@@ -148,6 +148,7 @@ fi
 
 export GOROOT=/usr/local/go
 export GOPATH=$HOME/prog/go
-export GOBIN=$GOPATH/bin
 
-export PATH=$PATH:$GOBIN
+export PATH=$PATH:$GOROOT/bin:$GOPATH/bin
+
+$GOBIN
