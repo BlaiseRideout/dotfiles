@@ -147,13 +147,14 @@ fi
 
 export GOROOT=/usr/local/go
 export GOPATH=$HOME/prog/go
-export GOBIN=$GOPATH/bin
+export PATH="$PATH:$GOROOT/bin:$GOPATH/bin"
 
 export JAVA_HOME=/opt/jdk
+export PATH="$JAVA_HOME/bin:$PATH:"
+
 export ANDROID_HOME=$HOME/Android/Sdk
 export ANDROID_NDK_HOME=$HOME/Android/Ndk
-
-export PATH="$JAVA_HOME/bin:$PATH:$GOBIN:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin/:$ANDROID_HOME/platform-tools:$ANDROID_NDK_HOME:$ANDROID_HOME/build-tools/26.0.1"
+export PATH="$PATH:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin/:$ANDROID_HOME/platform-tools:$ANDROID_NDK_HOME:$ANDROID_HOME/build-tools/26.0.1"
 
 export LD_LIBRARY_PATH="/usr/local/lib"
 export PATH="$PATH:/usr/local/lib"
