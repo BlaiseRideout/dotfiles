@@ -151,9 +151,9 @@ export GOBIN=$GOPATH/bin
 
 export JAVA_HOME=/opt/jdk
 export ANDROID_HOME=$HOME/Android/Sdk
-export ANDROID_NDK=$ANDROID_HOME/ndk-bundle
+export ANDROID_NDK_HOME=$HOME/Android/Ndk
 
-export PATH="$JAVA_HOME/bin:$PATH:$GOBIN:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin/:$ANDROID_HOME/platform-tools:$ANDROID_NDK:$ANDROID_HOME/build-tools/23.0.3"
+export PATH="$JAVA_HOME/bin:$PATH:$GOBIN:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin/:$ANDROID_HOME/platform-tools:$ANDROID_NDK_HOME:$ANDROID_HOME/build-tools/26.0.1"
 
 export LD_LIBRARY_PATH="/usr/local/lib"
 export PATH="$PATH:/usr/local/lib"
