@@ -1,4 +1,4 @@
-URxvt*font: xft:Terminus:pixelsize=10
+URxvt*font: xft:Inconsolata:size=8:antialias=true:hinting=true;xft:Terminus:size=10:antialias=false:hinting=false
 
 URxvt*foreground:	#c5c8c6
 URxvt*background:	#1d1f21
