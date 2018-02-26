@@ -130,6 +130,16 @@ stty -ixon
 #fi
 
 shopt -s globstar
+
+# ssh-agent configuration
+if [ -z "$(pgrep ssh-agent)" ]; then
+		rm -rf /tmp/ssh-*
+		eval $(ssh-agent -s) > /dev/null
+	else
+		export SSH_AGENT_PID=$(pgrep ssh-agent)
+		export SSH_AUTH_SOCK=$(find /tmp/ssh-* -name agent.*)
+fi
+
 if [ ! -z $SSH_AGENT_PID ]; then ssh-add -L > /dev/null || ssh-add; fi
 
 # TMUX
