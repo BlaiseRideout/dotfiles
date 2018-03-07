@@ -78,6 +78,11 @@ let g:multi_cursor_quit_key='<Esc>'
 no - $
 no j s
 
+noremap <Leader>y "*y
+noremap <Leader>p "*p
+noremap <Leader>Y "+y
+noremap <Leader>P "+p
+
 " Fix bindings for netrw
 augroup netrw_dvorak_fix
 	autocmd!
