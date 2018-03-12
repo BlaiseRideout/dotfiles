@@ -10,17 +10,12 @@ call vundle#begin()
 " let Vundle manage Vundle, required
 Plugin 'VundleVim/Vundle.vim'
 
-Plugin 'marijnh/tern_for_vim'
 Plugin 'Valloric/YouCompleteMe'
 Plugin 'tmhedberg/SimpylFold'
 
 Plugin 'terryma/vim-multiple-cursors'
 
 Plugin 'christoomey/vim-tmux-navigator'
-
-Plugin 'pangloss/vim-javascript'
-Plugin 'rust-lang/rust.vim'
-Plugin 'fatih/vim-go'
 
 Bundle 'Raimondi/delimitMate'
 
@@ -82,6 +77,8 @@ noremap <Leader>y "*y
 noremap <Leader>p "*p
 noremap <Leader>Y "+y
 noremap <Leader>P "+p
+
+set clipboard=unnamed
 
 " Fix bindings for netrw
 augroup netrw_dvorak_fix
