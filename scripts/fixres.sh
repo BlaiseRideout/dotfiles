@@ -11,3 +11,6 @@ for((i=0;i<${#outputs[@]}-1;++i)); do
 done
 
 xrandr --dpi 96
+if [ -f "$HOME/.xrandr.sh" ]; then
+	"$HOME/.xrandr.sh"
+fi
