@@ -10,7 +10,6 @@ call vundle#begin()
 " let Vundle manage Vundle, required
 Plugin 'VundleVim/Vundle.vim'
 
-Plugin 'marijnh/tern_for_vim'
 Plugin 'Valloric/YouCompleteMe'
 Plugin 'tmhedberg/SimpylFold'
 
@@ -18,9 +17,7 @@ Plugin 'terryma/vim-multiple-cursors'
 
 Plugin 'christoomey/vim-tmux-navigator'
 
-Plugin 'pangloss/vim-javascript'
-Plugin 'rust-lang/rust.vim'
-Plugin 'fatih/vim-go'
+Plugin 'andymass/vim-matchup'
 
 Bundle 'Raimondi/delimitMate'
 
@@ -50,6 +47,7 @@ nnoremap <C-y> :call NumberToggle()<cr>
 set foldmethod=syntax
 set foldlevelstart=0
 set tabstop=2 shiftwidth=2
+set expandtab
 
 set showmatch
 
@@ -77,6 +75,13 @@ let g:multi_cursor_quit_key='<Esc>'
 
 no - $
 no j s
+
+noremap <Leader>y "*y
+noremap <Leader>p "*p
+noremap <Leader>Y "+y
+noremap <Leader>P "+p
+
+set clipboard=unnamed
 
 " Fix bindings for netrw
 augroup netrw_dvorak_fix
@@ -121,6 +126,7 @@ autocmd CompleteDone * pclose
 
 set wildmode=longest,list,full
 set wildmenu
+set wildignorecase
 
 map <F1> <Esc>
 imap <F1> <Esc>
@@ -135,3 +141,5 @@ set history=50
 set noerrorbells visualbell t_vb=
 autocmd GUIEnter * set visualbell t_vb=
 set timeoutlen=1000 ttimeoutlen=0
+let g:ycm_global_ycm_extra_conf = '~/.ycm_extra_conf.py'
+let g:ycm_confirm_extra_conf = 0
