@@ -134,15 +134,15 @@ stty -ixon
 shopt -s globstar
 
 # ssh-agent configuration
-if [ -z "$(pgrep ssh-agent)" ]; then
-		rm -rf /tmp/ssh-*
-		eval $(ssh-agent -s) > /dev/null
-	else
-		export SSH_AGENT_PID=$(pgrep ssh-agent)
-		export SSH_AUTH_SOCK=$(find /tmp/ssh-* -name agent.*)
+if [[ -z "$(pgrep ssh-agent)" ]]; then
+  rm -rf /tmp/ssh-*
+  eval $(ssh-agent -s) > /dev/null
+else
+  export SSH_AGENT_PID=$(pgrep ssh-agent | head -n 1)
+  export SSH_AUTH_SOCK=$(find /tmp/ssh-* -name agent.* | head -n 1)
 fi
 
-if [ ! -z $SSH_AGENT_PID ]; then ssh-add -L > /dev/null || ssh-add; fi
+if [[ ! -z $SSH_AGENT_PID ]]; then ssh-add -L > /dev/null || ssh-add; fi
 
 # TMUX
 if which tmux >/dev/null 2>&1; then
