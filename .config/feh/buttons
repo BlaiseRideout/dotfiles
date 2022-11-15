@@ -1,0 +1,6 @@
+# Remove scroll binding to switch images
+prev_img
+next_img
+# Scroll to zoom
+zoom_in 4
+zoom_out 5
