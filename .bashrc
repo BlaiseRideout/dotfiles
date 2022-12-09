@@ -173,3 +173,4 @@ export LD_LIBRARY_PATH="/usr/local/lib"
 export PATH="$PATH:/usr/local/lib"
 
 export PATH="$PATH:$HOME/.local/bin"
+. "$HOME/.cargo/env"

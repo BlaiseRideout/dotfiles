@@ -1,27 +1,11 @@
 set nocompatible              " be iMproved, required
 filetype off                  " required
 
-" set the runtime path to include Vundle and initialize
-set rtp+=~/.vim/bundle/Vundle.vim
-call vundle#begin()
-" alternatively, pass a path where Vundle should install plugins
-"call vundle#begin('~/some/path/here')
-
-" let Vundle manage Vundle, required
-Plugin 'VundleVim/Vundle.vim'
-
-Plugin 'Valloric/YouCompleteMe'
-Plugin 'tmhedberg/SimpylFold'
-
-Plugin 'terryma/vim-multiple-cursors'
-
-Plugin 'christoomey/vim-tmux-navigator'
-
-Plugin 'andymass/vim-matchup'
-
-Bundle 'Raimondi/delimitMate'
-
-call vundle#end()
+lua require('plugins')
+augroup packer_user_config
+  autocmd!
+  autocmd BufWritePost plugins.lua source <afile> | PackerCompile
+augroup end
 
 filetype plugin indent on
 syntax on
@@ -44,8 +28,8 @@ autocmd InsertLeave * :set relativenumber
 
 nnoremap <C-y> :call NumberToggle()<cr>
 
-set foldmethod=syntax
-set foldlevelstart=0
+"set foldmethod=syntax
+"set foldlevelstart=0
 set tabstop=2 shiftwidth=2
 set expandtab
 
@@ -76,6 +60,7 @@ let g:multi_cursor_quit_key='<Esc>'
 no - $
 no j s
 
+let mapleader=","
 noremap <Leader>y "*y
 noremap <Leader>p "*p
 noremap <Leader>Y "+y
@@ -99,14 +84,6 @@ no - $
 no _ ^
 no T 8<Down>
 no N 8<Up>
-
-let g:tmux_navigator_no_mappings = 1
-
-nnoremap <silent> <C-h> :TmuxNavigateLeft<cr>
-nnoremap <silent> <C-t> :TmuxNavigateDown<cr>
-nnoremap <silent> <C-n> :TmuxNavigateUp<cr>
-nnoremap <silent> <C-s> :TmuxNavigateRight<cr>
-nnoremap <silent> <C-\> :TmuxNavigatePrevious<cr>
 
 set splitbelow
 set splitright
@@ -141,5 +118,3 @@ set history=50
 set noerrorbells visualbell t_vb=
 autocmd GUIEnter * set visualbell t_vb=
 set timeoutlen=1000 ttimeoutlen=0
-let g:ycm_global_ycm_extra_conf = '~/.ycm_extra_conf.py'
-let g:ycm_confirm_extra_conf = 0
