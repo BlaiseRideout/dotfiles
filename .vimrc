@@ -8,9 +8,13 @@ augroup packer_user_config
 augroup end
 
 filetype plugin indent on
-syntax on
+syntax enable
 
-colorscheme Tomorrow-Night
+colorscheme xresources
+highlight Folded ctermbg=Red ctermfg=White
+
+let g:airline_powerline_fonts = 1
+let g:airline_theme='wombat'
 
 set number
 set relativenumber
@@ -33,6 +37,7 @@ nnoremap <C-y> :call NumberToggle()<cr>
 set tabstop=2 shiftwidth=2
 set expandtab
 
+set noshowmode
 set showmatch
 
 set ignorecase
@@ -111,6 +116,7 @@ imap <F1> <Esc>
 command! W :execute ':silent w !sudo tee % > /dev/null' | :edit!
 command! Wq :execute ':silent w !sudo tee % > /dev/null' | :edit! | :q
 nnoremap Q <nop>
+map D <nop>
 
 set viminfo='20,\"100,:20,%,n~/.viminfo'
 set history=50

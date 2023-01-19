@@ -4,6 +4,13 @@ return require("packer").startup(function(use)
 	--   -- Packer can manage itself
 	use("wbthomason/packer.nvim")
 
+	use("vim-airline/vim-airline")
+	use("vim-airline/vim-airline-themes")
+
+	use("cshjsc/xresources-nvim")
+
+	use({ "Jxstxs/conceal.nvim", requires = "nvim-treesitter/nvim-treesitter" })
+
 	use({
 		"alexghergh/nvim-tmux-navigation",
 		config = function()
@@ -94,16 +101,49 @@ return require("packer").startup(function(use)
 		config = function()
 			local rt = require("rust-tools")
 
-			rt.setup({
-				server = {
-					on_attach = function(_, bufnr)
-						-- Hover actions
-						-- vim.keymap.set("n", "<C-space>", rt.hover_actions.hover_actions, { buffer = bufnr })
-						-- Code action groups
-						vim.keymap.set("n", "<Leader>a", rt.code_action_group.code_action_group, { buffer = bufnr })
-					end,
+			-- LSP Diagnostics Options Setup
+			local sign = function(opts)
+				vim.fn.sign_define(opts.name, {
+					texthl = opts.name,
+					text = opts.text,
+					numhl = "",
+				})
+			end
+
+			sign({ name = "DiagnosticSignError", text = "" })
+			sign({ name = "DiagnosticSignWarn", text = "" })
+			sign({ name = "DiagnosticSignHint", text = "" })
+			sign({ name = "DiagnosticSignInfo", text = "" })
+
+			vim.diagnostic.config({
+				virtual_text = false,
+				signs = true,
+				update_in_insert = true,
+				underline = true,
+				severity_sort = false,
+				float = {
+					border = "rounded",
+					source = "always",
+					header = "",
+					prefix = "",
 				},
 			})
+
+			vim.cmd([[
+      set signcolumn=yes
+      autocmd CursorHold * lua vim.diagnostic.open_float(nil, { focusable = false })
+      ]])
+
+			--rt.setup({
+			--server = {
+			--on_attach = function(_, bufnr)
+			---- Hover actions
+			--vim.keymap.set("n", "<C-space>", rt.hover_actions.hover_actions, { buffer = bufnr })
+			---- Code action groups
+			--vim.keymap.set("n", "<Leader>a", rt.code_action_group.code_action_group, { buffer = bufnr })
+			--end,
+			--},
+			--})
 		end,
 	})
 
@@ -220,4 +260,25 @@ return require("packer").startup(function(use)
 	-- Treesitter folding
 	vim.wo.foldmethod = "expr"
 	vim.wo.foldexpr = "nvim_treesitter#foldexpr()"
+
+	use("puremourning/vimspector")
+	-- Vimspector options
+	vim.cmd([[
+  let g:vimspector_sidebar_width = 85
+  let g:vimspector_bottombar_height = 15
+  let g:vimspector_terminal_maxwidth = 70
+  ]])
+
+	-- Vimspector
+	vim.cmd([[
+  nmap <F5> <cmd>call vimspector#Launch()<cr>
+  nmap <F5> <cmd>call vimspector#Continue()<cr>
+  nmap <F10> <cmd>call vimspector#StepOver()<cr>
+  nmap <F11> <cmd>call vimspector#StepInto()<cr>")
+  nmap <F12> <cmd>call vimspector#StepOut()<cr>")
+  nmap <F9> <cmd>call vimspector#ToggleBreakpoint()<cr>
+  nmap <F3> <cmd>call vimspector#Reset()<cr>
+  nmap <F4> <cmd>call vimspector#Restart()<cr>
+  nmap <F6> <cmd>call vimspector#Pause()<cr>")
+  ]])
 end)

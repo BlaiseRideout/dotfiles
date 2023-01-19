@@ -75,6 +75,13 @@ xterm*|rxvt*)
     ;;
 esac
 
+if which powerline-daemon  >/dev/null 2>&1; then
+  powerline-daemon -q
+  POWERLINE_BASH_CONTINUATION=1
+  POWERLINE_BASH_SELECT=1
+  . /usr/share/powerline/bindings/bash/powerline.sh
+fi
+
 # enable color support of ls and also add handy aliases
 if [ -x /usr/bin/dircolors ]; then
     test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
@@ -173,4 +180,7 @@ export LD_LIBRARY_PATH="/usr/local/lib"
 export PATH="$PATH:/usr/local/lib"
 
 export PATH="$PATH:$HOME/.local/bin"
-. "$HOME/.cargo/env"
+if [ -f "$HOME/.cargo/env" ]; then
+  . "$HOME/.cargo/env"
+  export RUSTFLAGS="-C target-cpu=native"
+fi

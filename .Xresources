@@ -1,32 +1,34 @@
-URxvt*font: xft:Terminus:pixelsize=12:antialias=false:hinting=false;xft:Inconsolata:size=11:antialias=true:hinting=true
-URxvt*letterSpace: 0
+*.font: xft:Cascadia Code PL:pixelsize=10:antialias=true:hinting=true:autohint=true:embeddedbitmap=true
+URxvt.letterSpace: 0
 
-URxvt*foreground:	#c5c8c6
-URxvt*background:	#1d1f21
-URxvt*cursorColor:	#aeafad
-URxvt*color0:		#000000
-URxvt*color1:		#912226
-URxvt*color2:		#778900
-URxvt*color3:		#ae7b00
-URxvt*color4:		#1d2594
-URxvt*color5:		#682a9b
-URxvt*color6:		#2b6651
-URxvt*color7:		#929593
-URxvt*color8:		#666666
-URxvt*color9:		#cc6666
-URxvt*color10:		#b5bd68
-URxvt*color11:		#f0c674
-URxvt*color12:		#81a2be
-URxvt*color13:		#b294bb
-URxvt*color14:		#8abeb7
-URxvt*color15:		#ecebec
+Xcursor.theme: DMZ-White
 
-URxvt*scrollBar: 	False
+*.scrollBar:   False
 
-URxvt*geometry:		165x75
+*.geometry:    165x75
 
-URxvt.perl-ext-common:	fullscreen
-URxvt.keysym.F11:	perl:fullscreen:switch
+URxvt.perl-ext-common:  fullscreen
+URxvt.keysym.F11:  perl:fullscreen:switch
 
-URxvt*iso14755:		False
-URxvt*iso14755_52:	False
+URxvt*iso14755:    False
+URxvt*iso14755_52:  False
+
+*.background:            #1d1d1d
+*.foreground:            #f7f6ec
+*.cursorColor:           #eccf4f
+*.color0:                #343835
+*.color8:                #585a58
+*.color1:                #ce3e60
+*.color9:                #d18ea6
+*.color2:                #7bb75b
+*.color10:               #767e2b
+*.color3:                #e8b32a
+*.color11:               #77592e
+*.color4:                #4c99d3
+*.color12:               #135879
+*.color5:                #a57fc4
+*.color13:               #5f4190
+*.color6:                #389aac
+*.color14:               #76bbca
+*.color7:                #f9faf6
+*.color15:               #b1b5ae

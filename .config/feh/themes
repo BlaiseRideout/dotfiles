@@ -1,1 +1,1 @@
-feh -. -x --magick-timeout 0
+feh -. -x --conversion-timeout 0
