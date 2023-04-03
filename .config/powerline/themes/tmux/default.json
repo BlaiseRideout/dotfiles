@@ -17,6 +17,12 @@
 				}
 			},
 			{
+				"function": "powerline.segments.common.env.environment",
+				"args": {
+          "variable": "TMUX_ACTIVE"
+        }
+			},
+			{
 				"function": "powerline.segments.common.net.hostname"
 			}
 		]

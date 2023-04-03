@@ -10,7 +10,12 @@ augroup end
 filetype plugin indent on
 syntax enable
 
-colorscheme xresources
+if exists('$DISPLAY')
+  colorscheme xresources
+else
+  colorscheme Tomorrow-Night
+endif
+
 highlight Folded ctermbg=Red ctermfg=White
 
 let g:airline_powerline_fonts = 1
