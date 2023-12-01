@@ -8,6 +8,11 @@ case $- in
       *) return;;
 esac
 
+# If loading bashrc from VSCode, don't do anything
+case $TERM in
+  dumb) return;;
+esac
+
 # don't put duplicate lines or lines starting with space in the history.
 # See bash(1) for more options
 HISTCONTROL=ignoreboth
