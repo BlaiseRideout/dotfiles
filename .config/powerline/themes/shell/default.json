@@ -27,6 +27,7 @@
         },
         {
           "function": "powerline.segments.shell.cwd",
+          "dir_limit_depth": 5,
           "priority": 10
         },
         {

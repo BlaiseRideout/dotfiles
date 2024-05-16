@@ -1,0 +1,12 @@
+[Unit]
+Description = "SSH key agent"
+
+[Service]
+type = Simple
+Environment=SSH_AUTH_SOCK=%t/ssh-agent.socket
+# Wayland display env required for ssh-askpass to work.
+Environment=WAYLAND_DISPLAY=wayland-1
+ExecStart=/usr/bin/ssh-agent -D -a $SSH_AUTH_SOCK
+
+[Install]
+WantedBy=default.target
