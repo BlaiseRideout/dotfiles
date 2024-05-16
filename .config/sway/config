@@ -102,6 +102,8 @@ bindsym $mod+BackSpace input type:keyboard xkb_switch_layout next
     bindsym $mod+r exec x-terminal-emulator --class=launcher bash -c 'compgen -c | grep -v fzf | sort -u | fzf --layout=reverse | xargs swaymsg exec --'
     for_window [app_id="^launcher$"] floating enable, opacity 0.8
 
+    bindsym $mod+escape exec makoctl dismiss
+
     # Drag floating windows by holding down $mod and left mouse button.
     # Resize them with right mouse button + $mod.
     # Despite the name, also works for non-floating windows.
