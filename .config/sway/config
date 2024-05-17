@@ -151,10 +151,10 @@ bindsym $mod+BackSpace input type:keyboard xkb_switch_layout next
 # Workspaces:
 #
 
-    bindsym $mod+ctrl+$left workspace prev
-    bindsym $mod+ctrl+$right workspace next
-    bindsym $mod+ctrl+Shift+$left move container to workspace prev; workspace prev
-    bindsym $mod+ctrl+Shift+$right move container to workspace next; workspace next
+    bindsym $mod+ctrl+$left exec ~/.config/sway/swayworkspace.sh navigate prev
+    bindsym $mod+ctrl+$right exec ~/.config/sway/swayworkspace.sh navigate next
+    bindsym $mod+ctrl+Shift+$left exec ~/.config/sway/swayworkspace.sh move prev
+    bindsym $mod+ctrl+Shift+$right exec ~/.config/sway/swayworkspace.sh move next
     bindsym $mod+greater move workspace to output right
     bindsym $mod+less move workspace to output left
 
@@ -298,6 +298,8 @@ exec --no-startup-id dex --autostart --environment sway
 # NetworkManager is the most popular way to manage wireless networks on Linux,
 # and nm-applet is a desktop environment-independent system tray GUI for it.
 exec --no-startup-id nm-applet
+
+exec_always ~/.config/sway/swayworkspace.sh startup
 
 bindswitch --reload lid:on exec systemctl suspend
 
