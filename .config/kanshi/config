@@ -1,0 +1,31 @@
+profile default {
+  output eDP-1 enable mode 3840x2400 position 0,0 scale 2
+  output 'Monoprice.Inc 34CHR Unknown' enable mode 3440x1440@60Hz position 1920,0 scale 1
+  output 'AOC 24G15N AP15338Z04043' enable mode 1920x1080@60Hz transform 270 position 5360,0 scale 1
+  exec swaymsg workspace 9, move workspace to "'AOC 24G15N AP15338Z04043'"
+  exec swaymsg workspace 10, move workspace to eDP-1
+  exec swaymsg workspace 1, move workspace to "'Monoprice.Inc 34CHR Unknown'"
+}
+
+profile kens {
+  output eDP-1 enable mode 3840x2400 position 0,0 scale 2
+  output 'Samsung Electric Company U28D590 HCPFB01917' enable mode 2560x1440@60Hz position 1920,0 scale 1
+  exec ~/.config/kanshi/move_workspaces.sh
+}
+
+profile office-4k {
+  output eDP-1 enable mode 3840x2400 position 0,0 scale 2
+  output * mode 3840x2160@60Hz position 1920,0 scale 1.25
+  exec ~/.config/kanshi/move_workspaces.sh
+}
+
+profile office {
+  output eDP-1 enable mode 3840x2400 position 0,0 scale 2
+  output * mode 2560x1440@60Hz position 1920,0 scale 1
+  exec ~/.config/kanshi/move_workspaces.sh
+}
+
+profile laptop-only {
+  output eDP-1 enable
+  exec swaymsg workspace 1, move workspace to eDP-1
+}

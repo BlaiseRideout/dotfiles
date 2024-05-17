@@ -280,23 +280,24 @@ mouse_warping container
 include /etc/sway/config.d/*
 include ~/.config/sway/config.d/*
 
+
 #
 # Startup execs
 #
 exec {
-  # Start XDG autostart .desktop files using dex. See also
-  # https://wiki.archlinux.org/index.php/XDG_Autostart
-  exec --no-startup-id dex --autostart --environment sway
-
-  exec waybar
-
-  # NetworkManager is the most popular way to manage wireless networks on Linux,
-  # and nm-applet is a desktop environment-independent system tray GUI for it.
-  exec --no-startup-id nm-applet
+  waybar
 
   gsettings set org.gnome.desktop.interface gtk-theme 'Fluent-round-orange-Dark-compact'
   gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 }
+
+# Start XDG autostart .desktop files using dex. See also
+# https://wiki.archlinux.org/index.php/XDG_Autostart
+exec --no-startup-id dex --autostart --environment sway
+
+# NetworkManager is the most popular way to manage wireless networks on Linux,
+# and nm-applet is a desktop environment-independent system tray GUI for it.
+exec --no-startup-id nm-applet
 
 bindswitch --reload lid:on exec systemctl suspend
 
