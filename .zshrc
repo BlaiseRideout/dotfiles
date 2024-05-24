@@ -88,6 +88,7 @@ fi
 
 source /usr/share/doc/fzf/examples/completion.zsh
 source /usr/share/doc/fzf/examples/key-bindings.zsh
+bindkey '^Y' fzf-file-widget
 
 if [ -f "$HOME/.systemspecificrc" ]; then
   source $HOME/.systemspecificrc
@@ -107,4 +108,17 @@ if which tmux >/dev/null 2>&1; then
 			exit
 		fi
 	fi
+fi
+
+setopt interactivecomments
+
+# Alt-arrows
+bindkey "^[[1;3C" forward-word
+bindkey "^[[1;3D" backward-word
+# Ctrl-arrows
+bindkey "^[[1;5C" forward-word
+bindkey "^[[1;5D" backward-word
+
+if which zoxide >/dev/null 2>&1; then
+  eval "$(zoxide init --cmd cd zsh)"
 fi
