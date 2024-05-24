@@ -146,16 +146,20 @@ stty -ixon
 
 shopt -s globstar
 
+# handled by environment.d now
 # ssh-agent configuration
-if [[ -z "$(pgrep ssh-agent)" ]]; then
-  rm -rf /tmp/ssh-*
-  eval $(ssh-agent -s) > /dev/null
-else
-  export SSH_AGENT_PID=$(pgrep ssh-agent | head -n 1)
-  export SSH_AUTH_SOCK=$(find /tmp/ssh-* -name agent.* 2>&1 | grep -v "Permission Denied" | head -n 1)
-fi
+#if [[ -z "$(pgrep ssh-agent)" ]]; then
+#  rm -rf /tmp/ssh-*
+#  eval $(ssh-agent -s) > /dev/null
+#else
+#  export SSH_AGENT_PID=$(pgrep ssh-agent | head -n 1)
+  #export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/gcr/ssh"
+  #export SSH_AUTH_SOCK=$(find /run/user -name agent.* 2>&1 | grep -vi "Permission Denied" | head -n 1)
+#fi
 
-if [[ ! -z $SSH_AGENT_PID ]]; then ssh-add -L > /dev/null || ssh-add; fi
+#export SSH_AUTH_SOCK="${XDG_RUNTIME_DIR}/ssh-agent.socket"
+
+#if [[ ! -z $SSH_AGENT_PID ]]; then ssh-add -L > /dev/null || ssh-add; fi
 
 # TMUX
 if which tmux >/dev/null 2>&1; then
@@ -192,3 +196,5 @@ if [ -f "$HOME/.cargo/env" ]; then
 fi
 
 source /usr/share/doc/fzf/examples/key-bindings.bash
+
+source ~/.systemspecificrc
