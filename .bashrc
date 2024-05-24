@@ -80,11 +80,13 @@ xterm*|rxvt*)
     ;;
 esac
 
-if which powerline-daemon  >/dev/null 2>&1; then
-  powerline-daemon -q
-  POWERLINE_BASH_CONTINUATION=1
-  POWERLINE_BASH_SELECT=1
-  . /usr/share/powerline/bindings/bash/powerline.sh
+if [ -f /usr/share/powerline/bindings/bash/powerline.sh ]; then
+  if which powerline-daemon  >/dev/null 2>&1; then
+    powerline-daemon -q
+    POWERLINE_BASH_CONTINUATION=1
+    POWERLINE_BASH_SELECT=1
+      . /usr/share/powerline/bindings/bash/powerline.sh
+  fi
 fi
 
 # enable color support of ls and also add handy aliases
@@ -161,19 +163,6 @@ shopt -s globstar
 
 #if [[ ! -z $SSH_AGENT_PID ]]; then ssh-add -L > /dev/null || ssh-add; fi
 
-# TMUX
-if which tmux >/dev/null 2>&1; then
-	if [[ -z "$TMUX" ]] ;then
-		ID="$(tmux ls | grep -vm1 attached | cut -d: -f1)" # get the id of a deattached session
-		if [[ -z "$ID" ]] ;then # if not available create a new one
-			tmux new-session
-			exit
-		else
-			tmux attach-session -t "$ID" # if available attach to it
-			exit
-		fi
-	fi
-fi
 
 export GOROOT=/usr/local/go
 export GOPATH=$HOME/prog/go
@@ -198,3 +187,17 @@ fi
 source /usr/share/doc/fzf/examples/key-bindings.bash
 
 source ~/.systemspecificrc
+
+# TMUX
+if which tmux >/dev/null 2>&1; then
+	if [[ -z "$TMUX" ]] ;then
+		ID="$(tmux ls | grep -vm1 attached | cut -d: -f1)" # get the id of a deattached session
+		if [[ -z "$ID" ]] ;then # if not available create a new one
+			tmux new-session
+			exit
+		else
+			tmux attach-session -t "$ID" # if available attach to it
+			exit
+		fi
+	fi
+fi

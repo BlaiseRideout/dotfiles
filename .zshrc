@@ -65,18 +65,6 @@ alias uncognito="set -o history;clear"
 export EDITOR="vim"
 
 stty -ixon
-if which tmux >/dev/null 2>&1; then
-	if [[ -z "$TMUX" ]] ;then
-		ID="$(tmux ls | grep -vm1 attached | cut -d: -f1)" # get the id of a deattached session
-		if [[ -z "$ID" ]] ;then # if not available create a new one
-			tmux new-session
-			exit
-		else
-			tmux attach-session -t "$ID" # if available attach to it
-			exit
-		fi
-	fi
-fi
 
 export GOROOT=/usr/local/go
 export GOPATH=$HOME/prog/go
@@ -107,3 +95,16 @@ fi
 
 autoload -U select-word-style
 select-word-style bash
+
+if which tmux >/dev/null 2>&1; then
+	if [[ -z "$TMUX" ]] ;then
+		ID="$(tmux ls | grep -vm1 attached | cut -d: -f1)" # get the id of a deattached session
+		if [[ -z "$ID" ]] ;then # if not available create a new one
+			tmux new-session
+			exit
+		else
+			tmux attach-session -t "$ID" # if available attach to it
+			exit
+		fi
+	fi
+fi
