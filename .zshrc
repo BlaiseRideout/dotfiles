@@ -41,9 +41,11 @@ if [ -z "${debian_chroot:-}" ] && [ -r /etc/debian_chroot ]; then
     debian_chroot=$(cat /etc/debian_chroot)
 fi
 
-if which powerline-daemon  >/dev/null 2>&1; then
-  powerline-daemon -q
-  . /usr/share/powerline/bindings/zsh/powerline.zsh
+if [ -f /usr/share/powerline/bindings/zsh/powerline.zsh ]; then
+  if which powerline-daemon  >/dev/null 2>&1; then
+    powerline-daemon -q
+    . /usr/share/powerline/bindings/zsh/powerline.zsh
+  fi
 fi
 
 if [ -x /usr/bin/dircolors ]; then
@@ -97,6 +99,7 @@ if [ -f "$HOME/.cargo/env" ]; then
 fi
 
 source /usr/share/doc/fzf/examples/completion.zsh
+source /usr/share/doc/fzf/examples/key-bindings.zsh
 
 if [ -f "$HOME/.systemspecificrc" ]; then
   source $HOME/.systemspecificrc
