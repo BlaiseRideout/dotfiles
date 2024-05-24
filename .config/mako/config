@@ -22,3 +22,7 @@ border-color=#d08770
 [urgency=high]
 border-color=#bf616a
 default-timeout=0
+
+# == Mode: Do Not Disturb ==
+[mode=dnd]
+invisible=1

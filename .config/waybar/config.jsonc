@@ -16,6 +16,7 @@
     ],
     "modules-right": [
         "custom/media",
+        "custom/makomode",
         "idle_inhibitor",
         "pulseaudio",
         // "network",
@@ -183,6 +184,16 @@
         "format-source-muted": "",
         "format-icons": ["", "", ""],
         "on-click": "pavucontrol"
+    },
+    "custom/makomode": {
+        "format": "{}",
+        "interval": 5,
+        "signal": 8,
+        "return-type": "text",
+        "max-length": 40,
+        "escape": true,
+        "exec": "$HOME/.config/waybar/dndctl.sh",
+        "on-click": "$HOME/.config/waybar/dndctl.sh toggle"
     },
     "custom/media": {
         "format": "{icon}  {}",

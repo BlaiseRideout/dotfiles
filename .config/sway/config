@@ -14,7 +14,8 @@ set $down t
 set $up n
 set $right s
 # Your preferred terminal emulator
-set $term kitty
+#set $term kitty
+set $term x-terminal-emulator
 
 include /etc/sway/config-vars.d/*
 
@@ -99,10 +100,11 @@ bindsym $mod+BackSpace input type:keyboard xkb_switch_layout next
     bindsym $mod+d exec wofi --show drun
     bindsym --release Super_L exec wofi --show drun
 
-    bindsym $mod+r exec x-terminal-emulator --class=launcher bash -c 'compgen -c | grep -v fzf | sort -u | fzf --layout=reverse | xargs swaymsg exec --'
+    bindsym $mod+r exec $term --app-id=launcher bash -c 'compgen -c | grep -v fzf | sort -u | fzf --layout=reverse | xargs swaymsg exec --'
     for_window [app_id="^launcher$"] floating enable, opacity 0.8
 
     bindsym $mod+escape exec makoctl dismiss
+    bindsym $mod+Shift+escape exec makoctl dismiss -a
 
     # Drag floating windows by holding down $mod and left mouse button.
     # Resize them with right mouse button + $mod.
@@ -186,9 +188,9 @@ bindsym $mod+BackSpace input type:keyboard xkb_switch_layout next
 # Layout stuff:
 #
     # You can "split" the current object of your focus with
-    # $mod+b or $mod+v, for horizontal and vertical splits
+    # $mod+m or $mod+v, for horizontal and vertical splits
     # respectively.
-    bindsym $mod+b splith
+    bindsym $mod+m splith
     bindsym $mod+v splitv
 
     # Switch the current container between different layout styles
@@ -260,6 +262,11 @@ bindsym XF86AudioPlay exec playerctl play-pause
 bindsym XF86AudioNext exec playerctl next
 bindsym XF86AudioPrev exec playerctl previous
 
+# Screenshots
+bindsym --to-code Print exec 'wl-copy < "$(grimshot save area "$HOME/Pictures/Screenshots/Screenshot from $(date "+%Y-%m-%d %H-%M-%S").png")"'
+bindsym --to-code Shift+Print exec 'wl-copy < "$(grimshot save window "$HOME/Pictures/Screenshots/Screenshot from $(date "+%Y-%m-%d %H-%M-%S").png")"'
+bindsym --to-code Ctrl+Print exec 'wl-copy < "$(grimshot save screen "$HOME/Pictures/Screenshots/Screenshot from $(date "+%Y-%m-%d %H-%M-%S").png")"'
+
 #
 # Status Bar:
 #
@@ -273,7 +280,7 @@ client.placeholder      #000000 #0C0C0C #FFFFFF #000000   #0C0C0C
 
 client.background       #FFFFFF
 default_border pixel 5
-gaps inner 10
+gaps inner 5
 
 mouse_warping container
 

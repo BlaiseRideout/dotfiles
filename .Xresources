@@ -1,17 +1,10 @@
-*.font: xft:Cascadia Code PL:pixelsize=10:antialias=true:hinting=true:autohint=true:embeddedbitmap=true
-URxvt.letterSpace: 0
+*.font: xft:Cascadia Code PL:size=10:antialias=true:hinting=true:autohint=true:embeddedbitmap=true:fontfeatures=ss19 ss20 ss02
 
 Xcursor.theme: DMZ-White
 
 *.scrollBar:   False
 
 *.geometry:    165x75
-
-URxvt.perl-ext-common:  fullscreen
-URxvt.keysym.F11:  perl:fullscreen:switch
-
-URxvt*iso14755:    False
-URxvt*iso14755_52:  False
 
 *.background:            #1d1d1d
 *.foreground:            #f7f6ec
