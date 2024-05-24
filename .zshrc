@@ -104,3 +104,6 @@ source /usr/share/doc/fzf/examples/key-bindings.zsh
 if [ -f "$HOME/.systemspecificrc" ]; then
   source $HOME/.systemspecificrc
 fi
+
+autoload -U select-word-style
+select-word-style bash
