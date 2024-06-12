@@ -1,6 +1,6 @@
 #!/bin/bash
 
-outputs=$(swaymsg -t get_outputs | jq '[.[] | select(.name!="eDP-1")] | sort_by(.current_mode) | .[].name')
+outputs=$(swaymsg -t get_outputs | jq '[.[] | select(.name!="eDP-1")] | sort_by(.name) | sort_by(.current_mode) | .[].name')
 
 NUM=$(echo $outputs | wc -w)
 
