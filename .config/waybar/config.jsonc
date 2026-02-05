@@ -28,7 +28,8 @@
         "backlight",
         "sway/language",
         "battery",
-        "clock",
+        "custom/clockworkaround",
+        //"clock",
         "tray"
     ],
     "sway/language": {
@@ -86,10 +87,23 @@
         "show-passive-items": true,
         "spacing": 10
     },
+    "custom/clockworkaround": {
+      "format": "{}",
+      "interval": 1,
+      "tooltip": true,
+      "return-type": "json",
+      "exec": "$HOME/.config/waybar/clockworkaround.sh",
+      "on-scroll-up": "$HOME/.config/waybar/clockworkaround.sh shift_down",
+      "on-scroll-down": "$HOME/.config/waybar/clockworkaround.sh shift_up"
+    },
+
     "clock": {
-        // "timezone": "America/New_York",
+        "timezone": "America/Los_Angeles",
+        //"timezone": "Pacific",
         "format": "{:%a, %b %d %R}",
         "format-alt": "{:%Y-%m-%d}",
+        //"format": "",
+        //"format-alt": "",
         //"on-click": "gsimplecal"
         "tooltip-format": "<tt><small>{calendar}</small></tt>",
         "calendar": {
@@ -104,15 +118,14 @@
             "weekdays":   "<span color='#ffcc66'><b>{}</b></span>",
             "today":      "<span color='#ff6699'><b><u>{}</u></b></span>"
           }
-	},
-	"actions": {
-		"on-click-right": "mode",
-		"on-click-forward": "tz_up",
-		"on-click-backward": "tz_down",
-		"on-scroll-up": "shift_down",
-		"on-scroll-down": "shift_up"
-	}
-
+        },
+        "actions": {
+            "on-click-right": "mode",
+            "on-click-forward": "tz_up",
+            "on-click-backward": "tz_down",
+            "on-scroll-up": "shift_down",
+            "on-scroll-down": "shift_up"
+        }
     },
     "cpu": {
         "format": "  {usage}%",
@@ -192,8 +205,8 @@
         "return-type": "text",
         "max-length": 40,
         "escape": true,
-        "exec": "$HOME/.config/waybar/dndctl.sh",
-        "on-click": "$HOME/.config/waybar/dndctl.sh toggle"
+        "exec": "$HOME/scripts/dndctl.sh",
+        "on-click": "$HOME/scripts/dndctl.sh toggle"
     },
     "custom/media": {
         "format": "{icon}  {}",

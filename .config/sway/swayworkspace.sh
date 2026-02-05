@@ -26,21 +26,24 @@
 #   bindsym $mod+left exec swayworkspace navigate prev
 
 
-# Navigate to another workspace
+# Navigate to another workspace or move the focused container to another workspace
 # Args:
-#   $1 = Direction (next or prev) or output number
-function navigate {
+#   $1 = nav or move
+#   $2 = Direction (next or prev) or output number
+function send_msg {
+    CMD="$1"
+    DIR="$2"
+
     FOCUSED_WORKSPACE_NUM=$(swaymsg -t get_workspaces | jq --raw-output '. | map(select(.focused == true)) | .[0].name' | awk '{print $1}')
     #FOCUSED_OUTPUT_NUM=$(swaymsg -t get_outputs | jq --raw-output '. | map(select(.focused==true)) | .[0].id')
     #FOCUSED_WORKSPACE_NUM=$(expr ${FOCUSED_WORKSPACE_NUM} - ${FOCUSED_OUTPUT_NUM} \* 100)
-
     # Find the next workspace number
-    if [[ $1 == "next" ]]; then
+    if [[ $DIR == "next" ]]; then
         TARGET_WORKSPACE_NUM=$(expr ${FOCUSED_WORKSPACE_NUM} + 1)
-    elif [[ $1 == "prev" ]]; then
+    elif [[ $DIR == "prev" ]]; then
         TARGET_WORKSPACE_NUM=$(expr ${FOCUSED_WORKSPACE_NUM} - 1)
     else
-        TARGET_WORKSPACE_NUM=$1
+        TARGET_WORKSPACE_NUM=$DIR
     fi
 
     if [[ $TARGET_WORKSPACE_NUM == "11" ]]; then
@@ -53,35 +56,26 @@ function navigate {
     #OUTPUT_AND_WORKSPACE_NUM=$(expr ${FOCUSED_OUTPUT_NUM} \* 100 + ${TARGET_WORKSPACE_NUM})
     TARGET_WORKSPACE_NAME=${TARGET_WORKSPACE_NUM}
 
-    swaymsg "workspace ${TARGET_WORKSPACE_NUM}"
+    if [[ $CMD == "nav" ]]; then
+      swaymsg "workspace ${TARGET_WORKSPACE_NUM}"
+    elif [[ $CMD == "move" ]]; then
+      swaymsg "move container to workspace ${TARGET_WORKSPACE_NUM}; workspace ${TARGET_WORKSPACE_NUM}"
+    fi
 }
 
-# Move the focused container to another workspace
+
+# Navigate to another workspace
+# Args:
+#   $1 = Direction (next or prev) or output number
+function navigate {
+    send_msg "nav" "$1"
+}
+
+# Move
 # Args:
 #   $1 = Direction (next or prev) or output number
 function move {
-    FOCUSED_WORKSPACE_NUM=$(swaymsg -t get_workspaces | jq --raw-output '. | map(select(.focused == true)) | .[0].name' | awk '{print $1}')
-    #FOCUSED_OUTPUT_NUM=$(swaymsg -t get_outputs | jq --raw-output '. | map(select(.focused==true)) | .[0].id')
-    #FOCUSED_WORKSPACE_NUM=$(expr ${FOCUSED_WORKSPACE_NUM} - ${FOCUSED_OUTPUT_NUM} \* 100)
-
-    # Find the next workspace number
-    if [[ $1 == "next" ]]; then
-        TARGET_WORKSPACE_NUM=$(expr ${FOCUSED_WORKSPACE_NUM} + 1)
-    elif [[ $1 == "prev" ]]; then
-        TARGET_WORKSPACE_NUM=$(expr ${FOCUSED_WORKSPACE_NUM} - 1)
-    else
-        TARGET_WORKSPACE_NUM=$1
-    fi
-
-    if [[ $TARGET_WORKSPACE_NUM == "11" ]]; then
-        TARGET_WORKSPACE_NUM=1
-    fi
-
-
-    #OUTPUT_AND_WORKSPACE_NUM=$(expr ${FOCUSED_OUTPUT_NUM} \* 100 + ${TARGET_WORKSPACE_NUM})
-    TARGET_WORKSPACE_NAME=${TARGET_WORKSPACE_NUM}
-
-    swaymsg "move container to workspace ${TARGET_WORKSPACE_NUM}; workspace ${TARGET_WORKSPACE_NUM}"
+    send_msg "move" "$1"
 }
 
 # Initialize workspaces on all screens
@@ -98,9 +92,9 @@ function startup {
 }
 
 if [[ $1 == "navigate" ]]; then
-    navigate $2
+    navigate "$2"
 elif [[ $1 == "move" ]]; then
-    move $2
+    move "$2"
 elif [[ $1 == "startup" ]]; then
     startup
 else

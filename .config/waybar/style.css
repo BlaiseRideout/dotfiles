@@ -17,6 +17,12 @@ window#waybar.hidden {
     opacity: 0.2;
 }
 
+#custom-clockworkaround span {
+  color: rgb(43, 48, 59);
+  background-color: #ffffff;
+  font-weight: bold;
+}
+
 /*
 window#waybar.empty {
     background-color: transparent;

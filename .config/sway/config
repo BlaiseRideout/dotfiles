@@ -22,7 +22,7 @@ include /etc/sway/config-vars.d/*
 ### Output configuration
 #
 # Default wallpaper (more resolutions are available in /usr/share/backgrounds/sway/)
-output * bg /usr/share/backgrounds/sway/Sway_Wallpaper_Blue_1920x1080.png fill
+#output * bg /usr/share/backgrounds/sway/Sway_Wallpaper_Blue_1920x1080.png fill
 
 #
 # Example configuration:
@@ -31,7 +31,7 @@ output * bg /usr/share/backgrounds/sway/Sway_Wallpaper_Blue_1920x1080.png fill
 #
 # You can get the names of your outputs by running: swaymsg -t get_outputs
 # outputs handled by kanshi
-exec_always killall kanshi; kanshi
+exec_always "killall kanshi; kanshi"
 
 ### Idle configuration
 #
@@ -46,9 +46,9 @@ exec_always killall kanshi; kanshi
 # your displays after another 300 seconds, and turn your screens back on when
 # resumed. It will also lock your screen before your computer goes to sleep.
 exec swayidle -w \
-         timeout 300 'swaylock -f -c 000000' \
-         timeout 600 'swaymsg "output * power off"' resume 'swaymsg "output * power on"' \
-         before-sleep 'swaylock -f -c 000000'
+         timeout 600 '~/scripts/lock.sh' \
+         timeout 900 'swaymsg "output * power off"' resume 'swaymsg "output * power on"' \
+         before-sleep '~/scripts/lock.sh'
 bindsym $mod+l exec ~/scripts/lock.sh
 
 ### Input configuration
@@ -65,10 +65,10 @@ bindsym $mod+l exec ~/scripts/lock.sh
 # You can get the names of your inputs by running: swaymsg -t get_inputs
 # Read `man 5 sway-input` for more information about this section.
 input type:keyboard {
-  xkb_layout us,us
-  xkb_variant dvorak,
+  xkb_layout us
+  xkb_variant dvorak
 }
-bindsym $mod+BackSpace input type:keyboard xkb_switch_layout next
+#bindsym $mod+BackSpace input type:keyboard xkb_switch_layout next
 
 
 # Your preferred application launcher
@@ -103,8 +103,9 @@ bindsym $mod+BackSpace input type:keyboard xkb_switch_layout next
     bindsym $mod+r exec $term --class=launcher bash -c 'compgen -c | grep -v fzf | sort -u | fzf --layout=reverse | xargs swaymsg exec --'
     for_window [app_id="^launcher$"] floating enable, opacity 0.8
 
-    bindsym $mod+escape exec makoctl dismiss
-    bindsym $mod+Shift+escape exec makoctl dismiss -a
+
+    bindsym $mod+BackSpace exec makoctl dismiss
+    bindsym $mod+Shift+BackSpace exec makoctl dismiss -a
 
     # Drag floating windows by holding down $mod and left mouse button.
     # Resize them with right mouse button + $mod.
@@ -157,6 +158,12 @@ bindsym $mod+BackSpace input type:keyboard xkb_switch_layout next
     bindsym $mod+ctrl+$right exec ~/.config/sway/swayworkspace.sh navigate next
     bindsym $mod+ctrl+Shift+$left exec ~/.config/sway/swayworkspace.sh move prev
     bindsym $mod+ctrl+Shift+$right exec ~/.config/sway/swayworkspace.sh move next
+
+    bindsym $mod+ctrl+Left exec ~/.config/sway/swayworkspace.sh navigate prev
+    bindsym $mod+ctrl+Right exec ~/.config/sway/swayworkspace.sh navigate next
+    bindsym $mod+ctrl+Shift+Left exec ~/.config/sway/swayworkspace.sh move prev
+    bindsym $mod+ctrl+Shift+Right exec ~/.config/sway/swayworkspace.sh move next
+
     bindsym $mod+greater move workspace to output right
     bindsym $mod+less move workspace to output left
 
@@ -208,7 +215,7 @@ bindsym $mod+BackSpace input type:keyboard xkb_switch_layout next
     bindsym $mod+space focus mode_toggle
 
     # Move focus to the parent container
-    bindsym $mod+a focus parent
+    bindsym $mod+escape focus parent
 #
 # Scratchpad:
 #
@@ -249,7 +256,8 @@ mode "resize" {
     bindsym Return mode "default"
     bindsym Escape mode "default"
 }
-bindsym $mod+p mode "resize"
+bindsym $mod+Equal exec ~/.config/sway/equalize_split.py
+#bindsym $mod+p mode "resize"
 
 # media/brightness buttons
 bindsym XF86AudioRaiseVolume exec --no-startup-id pactl set-sink-volume @DEFAULT_SINK@ +5%
@@ -263,9 +271,9 @@ bindsym XF86AudioNext exec playerctl next
 bindsym XF86AudioPrev exec playerctl previous
 
 # Screenshots
-bindsym --to-code Print exec 'wl-copy < "$(grimshot save area "$HOME/Pictures/Screenshots/Screenshot from $(date "+%Y-%m-%d %H-%M-%S").png")"'
-bindsym --to-code Shift+Print exec 'wl-copy < "$(grimshot save window "$HOME/Pictures/Screenshots/Screenshot from $(date "+%Y-%m-%d %H-%M-%S").png")"'
-bindsym --to-code Ctrl+Print exec 'wl-copy < "$(grimshot save screen "$HOME/Pictures/Screenshots/Screenshot from $(date "+%Y-%m-%d %H-%M-%S").png")"'
+bindsym --to-code Print exec 'wl-copy < "$(grimshot save area "$HOME/Pictures/Screenshots/Screenshot_from_$(date "+%Y-%m-%d_%H-%M-%S").png")"'
+bindsym --to-code Shift+Print exec 'wl-copy < "$(grimshot save window "$HOME/Pictures/Screenshots/Screenshot_from_$(date "+%Y-%m-%d_%H-%M-%S").png")"'
+bindsym --to-code Ctrl+Print exec 'wl-copy < "$(grimshot save screen \"$HOME/Pictures/Screenshots/Screenshot_from_$(date "+%Y-%m-%d_%H-%M-%S").png\")"'
 
 #
 # Status Bar:
@@ -291,9 +299,8 @@ include ~/.config/sway/config.d/*
 #
 # Startup execs
 #
+exec_always "killall waybar; waybar"
 exec {
-  waybar
-
   gsettings set org.gnome.desktop.interface gtk-theme 'Fluent-round-orange-Dark-compact'
   gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 }
@@ -306,7 +313,6 @@ exec --no-startup-id dex --autostart --environment sway
 # and nm-applet is a desktop environment-independent system tray GUI for it.
 exec --no-startup-id nm-applet
 
-exec_always ~/.config/sway/swayworkspace.sh startup
 exec ~/.config/sway/autotiling.py -sr 1.61
 
 bindswitch --reload lid:on exec systemctl suspend

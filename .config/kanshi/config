@@ -1,36 +1,77 @@
 profile default {
   output eDP-1 enable mode 3840x2400 position 0,0 scale 2
-  output 'Monoprice.Inc 34CHR Unknown' enable mode 3440x1440@60Hz position 1920,0 scale 1
-  output 'AOC 24G15N AP15338Z04043' enable mode 1920x1080@60Hz transform 270 position 5360,0 scale 1
+  #output eDP-1 disable
+  #output 'Monoprice.Inc 34CHR Unknown' enable mode 3440x1440@100Hz position 1920,0 scale 1
+  #output 'Monoprice.Inc 34CHR Unknown' enable mode 3440x1440@60Hz position 1920,0 scale 1
+  output 'Samsung Electric Company Odyssey G95C HNTY301994' enable mode 5120x1440 position 1920,0 scale 1
+  #output 'Monoprice.Inc 34CHR Unknown' disable
+  #output '*' enable mode 1920x1080@60Hz transform 270 position 7040,0 scale 1
+  output 'AOC 24G15N AP15338Z04043' enable mode 1920x1080@60Hz transform 270 position 7040,0 scale 1
+  #output 'AOC 24G15N AP15338Z04043' disable
+
+  exec ~/.config/sway/swayworkspace.sh startup
   exec ~/.config/kanshi/move_workspaces.sh
+  exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/home_wallpapers.json
 }
 
 profile kens-double {
   output eDP-1 enable mode 3840x2400 position 0,0 scale 2
-  output 'Samsung Electric Company U28D590 HCPFB01917' enable mode 2560x1440@60Hz position 1920,0 scale 1
+
+  output 'Monoprice.Inc 34CHR Unknown' enable mode 3440x1440@60Hz position 1920,0 scale 1
+  #output 'Samsung Electric Company U28D590 HCPFB01917' enable mode 2560x1440@60Hz position 1920,0 scale 1
+
+  exec ~/.config/sway/swayworkspace.sh startup
   exec ~/.config/kanshi/move_workspaces.sh
+  exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/home_wallpapers.json
 }
 
 profile kens-triple {
   output eDP-1 enable mode 3840x2400 position 0,0 scale 2
-  output 'Ancor Communications Inc ASUS PB278 FCLMTF170535' enable mode 2560x1440@60Hz position 1920,0 scale 1
-  output 'Samsung Electric Company U28D590 HCPFB01917' enable mode 2560x1440@60Hz position 4480,0 scale 1
+  #output eDP-1 disable
+
+  output 'Ancor Communications Inc ASUS PB278 FCLMTF170535' enable mode 2560x1440@60Hz transform 270 position 1920,0 scale 1
+  #output 'Ancor Communications Inc ASUS PB278 FCLMTF170535' disable
+
+  #output 'Monoprice.Inc 34CHR Unknown' enable mode 3440x1440@100Hz position 3360,0 scale 1
+  output 'Monoprice.Inc 34CHR Unknown' enable mode 3440x1440@60Hz position 3360,768 scale 1
+
+  #output * enable mode 2560x1440@60Hz position 1920,0 scale 1
+  #output 'AccuScene Corporation Ltd ASL 4K 0x04867576' enable position 1920,0 scale 1
+  #output 'Samsung Electric Company U28D590 Unknown' enable mode 2560x1440@60Hz position 4480,0 scale 1
+  #output 'Samsung Electric Company U28D590 Unknown' enable position 4480,0 scale 1
+  #output 'Samsung Electric Company U28D590 Unknown' enable mode 3840x2160@60Hz position 4480,0 scale 1.25
+  #output * enable mode 3840x2160@60Hz position 4480,0 scale 1.5
+
+  exec ~/.config/sway/swayworkspace.sh startup
   exec ~/.config/kanshi/move_workspaces.sh
+  #exec python3 ~/.config/sway/setwallpapers.py -c ~/.config/sway/office_wallpapers.json
+  exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/home_wallpapers.json
 }
 
-profile office-4k {
-  output eDP-1 enable mode 3840x2400 position 0,0 scale 2
-  output * mode 3840x2160@60Hz position 1920,0 scale 1.25
-  exec ~/.config/kanshi/move_workspaces.sh
-}
+#profile office-4k {
+  #output eDP-1 enable mode 3840x2400 position 0,0 scale 2
+  #output * mode 3840x2160@60Hz position 1920,0 scale 1.25
+
+  #exec ~/.config/kanshi/move_workspaces.sh
+  #exec python3 ~/.config/sway/setwallpapers.py -c ~/.config/sway/office_wallpapers.json
+  #exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/office_wallpapers.json
+#}
 
 profile office {
   output eDP-1 enable mode 3840x2400 position 0,0 scale 2
-  output * mode 2560x1440@60Hz position 1920,0 scale 1
+  output * position 1920,0 scale 1
+
+  exec ~/.config/sway/swayworkspace.sh startup
   exec ~/.config/kanshi/move_workspaces.sh
+  #exec python3 ~/.config/sway/setwallpapers.py -c ~/.config/sway/office_wallpapers.json
+  exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/office_wallpapers.json
 }
 
 profile laptop-only {
   output eDP-1 enable mode 3840x2400 position 0,0 scale 2
+
+  exec ~/.config/sway/swayworkspace.sh startup
   exec swaymsg workspace 1, move workspace to eDP-1
+  #exec python3 ~/.config/sway/setwallpapers.py -c ~/.config/sway/office_wallpapers.json
+  exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/office_wallpapers.json
 }
