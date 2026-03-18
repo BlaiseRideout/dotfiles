@@ -1,4 +1,13 @@
 profile default {
+  output 'Samsung Electric Company Odyssey G95C HNTY301994' enable mode 5120x1440 position 1920,0 scale 1
+  output 'AOC 24G15N AP15338Z04043' enable mode 1920x1080@60Hz transform 270 position 7040,0 scale 1
+
+  exec ~/.config/sway/swayworkspace.sh startup
+  exec ~/.config/kanshi/move_workspaces.sh
+  exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/home_wallpapers.json
+}
+
+profile home-office {
   output eDP-1 enable mode 3840x2400 position 0,0 scale 2
   #output eDP-1 disable
   #output 'Monoprice.Inc 34CHR Unknown' enable mode 3440x1440@100Hz position 1920,0 scale 1
