@@ -8,6 +8,17 @@ if vim.fn.has("nvim-0.11") == 0 then
 end
 local nvim_012 = vim.fn.has("nvim-0.12") == 1
 
+-- When launched from Nemo or the menu, Neovim gets the desktop session's PATH,
+-- which may lack the dirs your shell adds. Add them so tree-sitter, cargo and
+-- rust-analyzer are found however nvim is started.
+for _, dir in ipairs({ "~/.cargo/bin", "~/.local/bin" }) do
+	dir = vim.fn.expand(dir)
+	local path = ":" .. vim.env.PATH .. ":"
+	if vim.fn.isdirectory(dir) == 1 and not path:find(":" .. dir .. ":", 1, true) then
+		vim.env.PATH = dir .. ":" .. vim.env.PATH
+	end
+end
+
 -- Bootstrap lazy.nvim ---------------------------------------------------------
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
 if not vim.uv.fs_stat(lazypath) then
