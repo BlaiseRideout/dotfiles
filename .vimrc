@@ -1,14 +1,15 @@
 set nocompatible              " be iMproved, required
 filetype off                  " required
 
+" Set leader before loading plugins so plugin mappings use it
+let mapleader=","
+let g:python3_host_prog = expand('~/.local/share/nvim/py3/bin/python')
+
 lua require('plugins')
-augroup packer_user_config
-  autocmd!
-  autocmd BufWritePost plugins.lua source <afile> | PackerCompile
-augroup end
 
 filetype plugin indent on
 syntax enable
+
 
 if exists('$DISPLAY')
   colorscheme xresources
@@ -70,7 +71,6 @@ let g:multi_cursor_quit_key='<Esc>'
 no - $
 no j s
 
-let mapleader=","
 noremap <Leader>y "*y
 noremap <Leader>p "*p
 noremap <Leader>Y "+y
