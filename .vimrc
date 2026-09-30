@@ -3,7 +3,6 @@ filetype off                  " required
 
 " Set leader before loading plugins so plugin mappings use it
 let mapleader=","
-let g:python3_host_prog = expand('~/.local/share/nvim/py3/bin/python')
 
 lua require('plugins')
 
