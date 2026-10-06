@@ -1,5 +1,5 @@
 profile default {
-  output 'Samsung Electric Company Odyssey G95C HNTY301994' enable mode 5120x1440@239.761Hz position 0,191 scale 1
+  output 'Samsung Electric Company Odyssey G95C HNTY301994' enable mode 5120x1440@239.761Hz position 0,100 scale 1
   output 'AOC 24G15N AP15338Z04043' enable mode 1920x1080@180.003Hz transform 270 position 5120,0 scale 1
   #output HDMI-A-1 enable mode 3840x2160 position 6200,0 scale 1.5
   #output HDMI-A-1 enable mode 2560x1440@50Hz position 6200,0 scale 1.5
@@ -11,7 +11,7 @@ profile default {
 }
 
 profile office-notv {
-  output 'Samsung Electric Company Odyssey G95C HNTY301994' enable mode 5120x1440@239.761Hz position 0,191 scale 1
+  output 'Samsung Electric Company Odyssey G95C HNTY301994' enable mode 5120x1440@239.761Hz position 0,100 scale 1
   output 'AOC 24G15N AP15338Z04043' enable mode 1920x1080@180Hz transform 270 position 5120,0 scale 1
   output HDMI-A-1 disable
 
