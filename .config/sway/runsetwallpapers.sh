@@ -6,4 +6,4 @@ if [[ $1 ]]; then
 fi
 
 pkill -f '^python3 [^ ]*setwallpapers.py'
-python3 ~/.config/sway/setwallpapers.py -c ~/.config/sway/wallpapers.json -i 15m -v & disown
+python3 ~/.config/sway/setwallpapers.py -c ~/.config/sway/wallpapers.json -i 15m & disown
