@@ -8,6 +8,10 @@
 # one external monitor, 10 goes to the secondary while the TV is off) and moves
 # back when that output is re-enabled.
 #
+# --keep-view restores the workspaces each output was showing and the focused
+# one afterwards, for use mid-session (tv-autotoggle.sh). Without it the script
+# ends on workspace 1, as at login.
+#
 # DRY_RUN=1 reads `swaymsg -t get_outputs -r` JSON from stdin and prints the
 # commands instead of running them.
 
@@ -53,9 +57,21 @@ done
 msg "workspace 9 output $(echo $ws_9)"
 msg "workspace 10 output $(echo $ws_10)"
 
+if [[ $1 == --keep-view && ! $DRY_RUN ]]; then
+  workspaces=$(swaymsg -t get_workspaces -r)
+  shown=$(jq -r '.[] | select(.visible and (.focused | not)) | .name' <<<"$workspaces")
+  focused=$(jq -r '.[] | select(.focused) | .name' <<<"$workspaces")
+fi
+
 # Move existing workspaces, finishing with 1 focused and 9/10 visible
 msg "workspace 10, move workspace to $(first_active "$ws_10")"
 msg "workspace 9, move workspace to $(first_active "$ws_9")"
 for I in $(seq 8 -1 1); do
   msg "workspace $I, move workspace to $primary"
 done
+
+if [[ $focused ]]; then
+  for ws in $shown $focused; do
+    msg "workspace $ws"
+  done
+fi

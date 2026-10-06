@@ -4,6 +4,10 @@
 # watch its network API, which goes away within ~15s of the TV turning off.
 # Sway keeps the mode/position/scale kanshi set, so enable restores them.
 
+# Only one copy, so a second `exec` can't fight the first
+exec 9>"${XDG_RUNTIME_DIR:-/tmp}/tv-autotoggle.lock"
+flock -n 9 || exit 0
+
 TV_URL=http://192.168.0.114:8001/api/v2/
 INTERVAL=3
 
@@ -31,6 +35,8 @@ while :; do
       else
         swaymsg output "$1" disable >/dev/null
       fi
+      # Put workspace 10 back on the TV, or on the secondary while it's off
+      ~/.config/kanshi/move_workspaces.sh --keep-view >/dev/null 2>&1
     fi
   fi
   last=$want
