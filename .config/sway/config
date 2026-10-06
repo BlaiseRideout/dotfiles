@@ -31,7 +31,14 @@ include /etc/sway/config-vars.d/*
 #
 # You can get the names of your outputs by running: swaymsg -t get_outputs
 # outputs handled by kanshi
+# Start with the TV off so kanshi sets the G95C to 240Hz before lighting it;
+# the driver rejects 240Hz if the TV is already on. The TV's serial changes
+# with its HDMI input (HDMI 1, HDMI 3), and naming it keeps laptop HDMI monitors on.
+output 'Samsung Electric Company SAMSUNG 0x01000601' disable
+output 'Samsung Electric Company SAMSUNG 0x01000001' disable
 exec_always "killall kanshi; kanshi"
+# The TV stays "connected" when off, so follow its network state instead
+exec ~/.config/sway/tv-autotoggle.sh
 
 ### Idle configuration
 #

@@ -1,6 +1,19 @@
 profile default {
-  output 'Samsung Electric Company Odyssey G95C HNTY301994' enable mode 5120x1440 position 1920,0 scale 1
-  output 'AOC 24G15N AP15338Z04043' enable mode 1920x1080@60Hz transform 270 position 7040,0 scale 1
+  output 'Samsung Electric Company Odyssey G95C HNTY301994' enable mode 5120x1440@239.761Hz position 0,191 scale 1
+  output 'AOC 24G15N AP15338Z04043' enable mode 1920x1080@180.003Hz transform 270 position 5120,0 scale 1
+  #output HDMI-A-1 enable mode 3840x2160 position 6200,0 scale 1.5
+  #output HDMI-A-1 enable mode 2560x1440@50Hz position 6200,0 scale 1.5
+  output HDMI-A-1 enable mode 1920x1080@60Hz position 6200,0 scale 1
+
+  exec ~/.config/sway/swayworkspace.sh startup
+  exec ~/.config/kanshi/move_workspaces.sh
+  exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/home_wallpapers.json
+}
+
+profile office-notv {
+  output 'Samsung Electric Company Odyssey G95C HNTY301994' enable mode 5120x1440@239.761Hz position 0,191 scale 1
+  output 'AOC 24G15N AP15338Z04043' enable mode 1920x1080@180Hz transform 270 position 5120,0 scale 1
+  output HDMI-A-1 disable
 
   exec ~/.config/sway/swayworkspace.sh startup
   exec ~/.config/kanshi/move_workspaces.sh
@@ -53,7 +66,6 @@ profile kens-triple {
 
   exec ~/.config/sway/swayworkspace.sh startup
   exec ~/.config/kanshi/move_workspaces.sh
-  #exec python3 ~/.config/sway/setwallpapers.py -c ~/.config/sway/office_wallpapers.json
   exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/home_wallpapers.json
 }
 
@@ -62,7 +74,6 @@ profile kens-triple {
   #output * mode 3840x2160@60Hz position 1920,0 scale 1.25
 
   #exec ~/.config/kanshi/move_workspaces.sh
-  #exec python3 ~/.config/sway/setwallpapers.py -c ~/.config/sway/office_wallpapers.json
   #exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/office_wallpapers.json
 #}
 
@@ -72,7 +83,6 @@ profile office {
 
   exec ~/.config/sway/swayworkspace.sh startup
   exec ~/.config/kanshi/move_workspaces.sh
-  #exec python3 ~/.config/sway/setwallpapers.py -c ~/.config/sway/office_wallpapers.json
   exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/office_wallpapers.json
 }
 
@@ -81,6 +91,5 @@ profile laptop-only {
 
   exec ~/.config/sway/swayworkspace.sh startup
   exec swaymsg workspace 1, move workspace to eDP-1
-  #exec python3 ~/.config/sway/setwallpapers.py -c ~/.config/sway/office_wallpapers.json
   exec ~/.config/sway/runsetwallpapers.sh ~/.config/sway/office_wallpapers.json
 }
