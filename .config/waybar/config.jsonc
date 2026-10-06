@@ -62,7 +62,7 @@
             "7": [],
             "8": [],
             "9": [],
-            "10": ["eDP-1"], // Always show a workspace with name '10', on output 'eDP-1' if it does not exists
+            "10": [], // On every bar like the others; move_workspaces.sh decides where it opens (laptop, TV or secondary)
         }
     },
     "sway/mode": {
