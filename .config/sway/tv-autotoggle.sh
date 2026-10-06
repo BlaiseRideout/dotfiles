@@ -7,37 +7,32 @@
 TV_URL=http://192.168.0.114:8001/api/v2/
 INTERVAL=3
 
-# The sway config is shared with the laptop, so only act on the TV's output
+# The sway config is shared with the laptop, so only act on the TV's output.
+# Prints "<name> <active>", or nothing if the TV isn't connected.
 tv_output() {
-  swaymsg -t get_outputs -r | jq -r '.[] | select(.model == "SAMSUNG") | .name' | head -1
+  swaymsg -t get_outputs -r | jq -r '.[] | select(.model == "SAMSUNG") | "\(.name) \(.active)"' | head -1
 }
 
 tv_state() {
-  if curl -s -m 2 -o /dev/null "$TV_URL"; then echo on; else echo off; fi
+  if curl -s -m 2 -o /dev/null "$TV_URL"; then echo true; else echo false; fi
 }
 
-prev=
-pending=
+# Compare against sway's actual output state rather than the last change, so
+# something else re-enabling the output (e.g. re-running kanshi) gets corrected.
+last=
 while :; do
-  state=$(tv_state)
+  want=$(tv_state)
   # Require two matching reads in a row so one dropped request doesn't toggle it.
-  if [ "$state" != "$prev" ]; then
-    if [ "$state" = "$pending" ]; then
-      output=$(tv_output)
-      if [ -z "$output" ]; then
-        :
-      elif [ "$state" = on ]; then
-        swaymsg output "$output" enable >/dev/null
+  if [ "$want" = "$last" ]; then
+    set -- $(tv_output)
+    if [ -n "$1" ] && [ "$2" != "$want" ]; then
+      if [ "$want" = true ]; then
+        swaymsg output "$1" enable >/dev/null
       else
-        swaymsg output "$output" disable >/dev/null
+        swaymsg output "$1" disable >/dev/null
       fi
-      prev=$state
-      pending=
-    else
-      pending=$state
     fi
-  else
-    pending=
   fi
+  last=$want
   sleep "$INTERVAL"
 done
