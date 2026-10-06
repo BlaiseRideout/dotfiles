@@ -347,3 +347,9 @@ label:focus {
 #privacy-item.audio-out {
     background-color: #0069d4;
 }
+
+/* The bell-slash icon is ~2px wider than the bell; fix the width so toggling
+   do-not-disturb doesn't shift the modules next to it */
+#custom-makomode {
+    min-width: 15px;
+}
