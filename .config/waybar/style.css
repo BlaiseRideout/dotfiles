@@ -1,6 +1,8 @@
 * {
     /* `otf-font-awesome` is required to be installed for icons */
-    font-family: Roboto, FontAwesome, "Font Awesome", "Font Awesome 6 Free", "Font Awesome 6", "MesloLGS NF", MesloLGS, sans-serif;
+    /* Text fonts before the icon fonts: Font Awesome 6 has letter glyphs and
+       would otherwise be used for text when Roboto isn't installed */
+    font-family: Roboto, Ubuntu, sans-serif, FontAwesome, "Font Awesome", "Font Awesome 6 Free", "Font Awesome 6", "MesloLGS NF", MesloLGS;
     font-size: 13px;
 }
 
