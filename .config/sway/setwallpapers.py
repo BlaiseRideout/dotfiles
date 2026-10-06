@@ -67,41 +67,45 @@ def update_wall(i3, verbose, config):
         print("Outputs:")
 
     for output in outputs:
-        aspect = output.rect.width / output.rect.height
-        matching_rows = list(row
-                             for name, row in config.items()
-                             if aspect_in_range(aspect, row['aspect_range'])
-        )
-        matching_rows = sorted(matching_rows, key = itemgetter('priority'), reverse = True)
-        top_match = matching_rows[0] if len(matching_rows) > 0 else config['default']
-        wp = top_match['wp']
-
-        if isinstance(wp, list):
-            wps = wp
-        elif os.path.isdir(wp):
-            wps = [os.path.join(wp, f) for f, mime in
-                   ((f, mimetypes.guess_type(f)[0]) for f in os.listdir(wp))
-                   if not f.startswith(".") and
-                       mime is not None and
-                       mime.startswith('image/')]
-        else:
-            wps = [wp]
-        wp = random.choice(wps)
-        cmd = f"output '{output.name}' bg '{wp}' fill"
-        needs_update = output_cmd_cache.get(output.name) != cmd
-
         if verbose:
             print(output.name, "(Enabled)" if output.active else "(Disabled)")
-            print(f"Rect: {output.rect.width}x{output.rect.height}\tPos: {output.rect.x},{output.rect.y}")
-            print(f"Res: {output.current_mode.width}x{output.current_mode.height}\tScale: x{output.scale}")
-            print(f"Matching configs: {matching_rows}")
-            print(f"Best config: {top_match}")
-            if isinstance(wps, list):
-                print(f"WPs:", wps)
-            if needs_update:
-                print(f"Running: {cmd}")
+
+        if output.active:
+            aspect = output.rect.width / output.rect.height
+            matching_rows = list(row
+                                 for name, row in config.items()
+                                 if 'aspect_range' not in row or aspect_in_range(aspect, row['aspect_range'])
+            )
+            matching_rows = sorted(matching_rows, key = itemgetter('priority'), reverse = True)
+            top_match = matching_rows[0] if len(matching_rows) > 0 else config['default']
+            wp = top_match['wp']
+
+            if isinstance(wp, list):
+                wps = wp
+            elif os.path.isdir(wp):
+                wps = [os.path.join(wp, f) for f, mime in
+                       ((f, mimetypes.guess_type(f)[0]) for f in os.listdir(wp))
+                       if not f.startswith(".") and
+                           mime is not None and
+                           mime.startswith('image/')]
             else:
-                print(f"No need to run: {cmd}")
+                wps = [wp]
+            wp = random.choice(wps)
+            cmd = f"output '{output.name}' bg '{wp}' fill"
+            needs_update = output_cmd_cache.get(output.name) != cmd
+
+            if verbose:
+                print(f"Rect: {output.rect.width}x{output.rect.height}\tPos: {output.rect.x},{output.rect.y}")
+                print(f"Res: {output.current_mode.width}x{output.current_mode.height}\tScale: x{output.scale}")
+                print(f"Matching configs: {matching_rows}")
+                print(f"Best config: {top_match}")
+                if isinstance(wps, list):
+                    print(f"WPs:", wps)
+                if needs_update:
+                    print(f"Running: {cmd}")
+                else:
+                    print(f"No need to run: {cmd}")
+        if verbose:
             print()
 
         if needs_update:
@@ -131,19 +135,21 @@ def eval_config(config):
         else:
             raise TypeError(f"Row {name} is of unsupported type {type(row)}")
 
+        aspect_range = None
         if 'aspect_range' in out_row:
             aspect_range = out_row['aspect_range']
         elif name in aspect_ranges:
             aspect_range = aspect_ranges[name]
 
-        if isinstance(aspect_range, str):
+        if aspect_range is not None and isinstance(aspect_range, str):
             if aspect_range in aspect_ranges:
                 aspect_range = aspect_ranges[aspect_range]
 
         if 'priority' not in out_row:
             out_row['priority'] = -sys.maxsize-1 if name == 'default' else 0
 
-        out_row['aspect_range'] = aspect_range
+        if aspect_range is not None:
+            out_row['aspect_range'] = aspect_range
         out_row['name'] = name
 
         out_config[name] = out_row
@@ -219,7 +225,7 @@ def main():
                 i3.main()
                 if args.verbose:
                     print("awaiting events")
-                running = False
+            running = False
         except ConnectionRefusedError:
             running = True
             continue
