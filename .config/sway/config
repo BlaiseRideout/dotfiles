@@ -323,6 +323,11 @@ exec --no-startup-id dex --autostart --environment sway
 # and nm-applet is a desktop environment-independent system tray GUI for it.
 exec --no-startup-id nm-applet
 
+# Password prompts for apps that need admin rights. Its autostart entry is
+# limited to Cinnamon/XFCE/Unity, so dex skips it. Path differs by distro.
+# Quoted so sway doesn't split the shell loop at its semicolons
+exec 'for a in /usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1 /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 /usr/libexec/polkit-gnome-authentication-agent-1; do [ -x "$a" ] && exec "$a"; done'
+
 exec ~/.config/sway/autotiling.py -sr 1.61
 # Keep a lone tiled window at most 2:1 and centered on the ultrawide
 exec ~/.config/sway/center_single.py --ratio 2
