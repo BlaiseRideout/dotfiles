@@ -313,7 +313,8 @@ include ~/.config/sway/config.d/*
 #
 exec_always "killall waybar; waybar"
 exec {
-  gsettings set org.gnome.desktop.interface gtk-theme 'Fluent-round-orange-Dark-compact'
+  # Follow GTK_THEME from ~/.config/environment.d (zz-local.conf overrides it per machine)
+  gsettings set org.gnome.desktop.interface gtk-theme "$GTK_THEME"
   gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 }
 
