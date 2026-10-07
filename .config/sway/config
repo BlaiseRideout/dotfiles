@@ -111,7 +111,8 @@ input type:keyboard {
     bindsym $mod+d exec wofi --show drun
     bindsym --release Super_L exec wofi --show drun
 
-    bindsym $mod+r exec $term --class=launcher bash -c 'compgen -c | grep -v fzf | sort -u | fzf --layout=reverse | xargs swaymsg exec --'
+    # Smaller than kitty.conf's 165c default so it fits the vertical monitor
+    bindsym $mod+r exec $term --class=launcher -o initial_window_width=100c -o initial_window_height=30c bash -c 'compgen -c | grep -v fzf | sort -u | fzf --layout=reverse | xargs swaymsg exec --'
     for_window [app_id="^launcher$"] floating enable, opacity 0.8
 
 
