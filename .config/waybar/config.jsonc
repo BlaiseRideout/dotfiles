@@ -26,7 +26,7 @@
         "cpu#freq",
         "temperature",
         "backlight",
-        "sway/language",
+        //"sway/language", // hide-single-layout needs a newer waybar than 0.9.24; only one layout is configured
         "battery",
         //"custom/clockworkaround",
         "clock",
