@@ -97,7 +97,8 @@ input type:keyboard {
     bindsym $mod+w exec x-www-browser
 
     # Start file manager
-    bindsym $mod+e exec nautilus
+    # Default folder handler (xdg-mime query default inode/directory)
+    bindsym $mod+e exec xdg-open ~
 
     # Start keepassxc
     bindsym $mod+k exec keepassxc
