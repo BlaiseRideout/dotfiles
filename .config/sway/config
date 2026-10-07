@@ -331,6 +331,11 @@ exec --no-startup-id nm-applet
 # Quoted so sway doesn't split the shell loop at its semicolons
 exec 'for a in /usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1 /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 /usr/libexec/polkit-gnome-authentication-agent-1; do [ -x "$a" ] && exec "$a"; done'
 
+# Automount removable drives (Cinnamon's settings daemon did this). No tray
+# icon: waybar shows passive icons (for Spotify), so --smart-tray's would never
+# hide. Eject drives from Nemo.
+exec udiskie --no-tray
+
 exec ~/.config/sway/autotiling.py -sr 1.61
 # Keep a lone tiled window at most 2:1 and centered on the ultrawide
 exec ~/.config/sway/center_single.py --ratio 2

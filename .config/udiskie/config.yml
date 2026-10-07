@@ -1,0 +1,5 @@
+# Only manage removable media. Internal disks (Windows partitions, the Files
+# drive mounted by fstab) are marked as system drives by udisks.
+device_config:
+- is_external: false
+  ignore: true
