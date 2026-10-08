@@ -307,6 +307,12 @@ mouse_warping container
 include /etc/sway/config.d/*
 include ~/.config/sway/config.d/*
 
+# The systemd user session can outlive a Cinnamon login and keep its desktop
+# name; portals (screen sharing, file pickers) read it to choose backends.
+# The system config.d above only imports DISPLAY, WAYLAND_DISPLAY and SWAYSOCK.
+exec systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+exec dbus-update-activation-environment --systemd XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+
 
 #
 # Startup execs
