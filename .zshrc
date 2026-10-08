@@ -64,7 +64,9 @@ alias uncognito="set -o history;clear"
 
 export EDITOR="vim"
 
-stty -ixon
+if [[ -t 0 && -t 1 ]]; then
+  stty -ixon
+fi
 
 export GOROOT=/usr/local/go
 export GOPATH=$HOME/prog/go
@@ -86,9 +88,11 @@ if [ -f "$HOME/.cargo/env" ]; then
   export RUSTFLAGS="-C target-cpu=native"
 fi
 
-source /usr/share/doc/fzf/examples/completion.zsh
-source /usr/share/doc/fzf/examples/key-bindings.zsh
-bindkey '^Y' fzf-file-widget
+if [[ -t 0 && -t 1 ]]; then
+  source /usr/share/doc/fzf/examples/completion.zsh
+  source /usr/share/doc/fzf/examples/key-bindings.zsh
+  bindkey '^Y' fzf-file-widget
+fi
 
 if [ -f "$HOME/.systemspecificrc" ]; then
   source $HOME/.systemspecificrc
@@ -97,7 +101,7 @@ fi
 autoload -U select-word-style
 select-word-style bash
 
-if which tmux >/dev/null 2>&1; then
+if [[ -t 0 && -t 1 ]] && which tmux >/dev/null 2>&1; then
 	if [[ -z "$TMUX" ]] ;then
 		ID="$(tmux ls | grep -vm1 attached | cut -d: -f1)" # get the id of a deattached session
 		if [[ -z "$ID" ]] ;then # if not available create a new one
