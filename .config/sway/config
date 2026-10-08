@@ -332,6 +332,10 @@ exec --no-startup-id dex --autostart --environment sway
 # and nm-applet is a desktop environment-independent system tray GUI for it.
 exec --no-startup-id nm-applet
 
+# Linux Mint Update Manager tray icon/notifications (auto-update timers run
+# via systemd regardless). Needs the waybar tray.
+exec --no-startup-id mintupdate-launcher
+
 # Password prompts for apps that need admin rights. Its autostart entry is
 # limited to Cinnamon/XFCE/Unity, so dex skips it. Path differs by distro.
 # Quoted so sway doesn't split the shell loop at its semicolons
