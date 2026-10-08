@@ -346,6 +346,9 @@ exec 'for a in /usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1 /u
 # hide. Eject drives from Nemo.
 exec udiskie --no-tray
 
+# Highlighting text copies it to the clipboard (autocutsel did this in Cinnamon)
+exec ~/.config/sway/selection-to-clipboard.sh
+
 exec ~/.config/sway/autotiling.py -sr 1.61
 # Keep a lone tiled window at most 2:1 and centered on the ultrawide
 exec ~/.config/sway/center_single.py --ratio 2
