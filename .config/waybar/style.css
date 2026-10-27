@@ -376,3 +376,9 @@ label:focus {
     padding: 0;
     min-width: 0;
 }
+
+/* Same space to the right of the last tray icon as between the icons (tray "spacing" in
+   config.jsonc) */
+#tray {
+    padding-right: 10px;
+}
