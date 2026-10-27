@@ -88,6 +88,16 @@
         // Needs a Waybar newer than 0.15.0; older versions ignore it and show the icon. Spotify's
         // tray icon duplicates the now-playing module
         "ignore-list": ["spotify"],
+        // Flat white replacements for icons with baked-in dark outlines. Keys are the
+        // apps' tray ids and must match exactly. A custom icon freezes the image, so
+        // Discord's unread dot won't show
+        "icons": {
+            "CopyQ_copyq": "/home/blaise/.config/waybar/icons/copyq.png",
+            "discord_status_icon_1": "/home/blaise/.config/waybar/icons/discord.svg",
+            // The id includes the process number, so it needs a wildcard (Waybar > 0.15.0
+            // with the glob patch); Dropbox's sync-state icon gets frozen too
+            "dropbox-client-*": "/home/blaise/.config/waybar/icons/dropbox.svg"
+        },
         "spacing": 10
     },
     "custom/clockworkaround": {
