@@ -66,16 +66,18 @@ class PlayerManager:
 
     def write_output(self, text, player):
         logger.debug(f"Writing output: {text}")
+        # The gap after the module's icon lives here so it vanishes along with the text
+        text = "  " + text if text else ""
 
         output = {"text": text,
-                  "class": "custom-" + player.props.player_name,
+                  "class": ["custom-" + player.props.player_name] + ([] if text else ["empty"]),
                   "alt": player.props.player_name}
 
         sys.stdout.write(json.dumps(output) + "\n")
         sys.stdout.flush()
 
     def clear_output(self):
-        sys.stdout.write("\n")
+        sys.stdout.write(json.dumps({"text": "", "class": "empty"}) + "\n")
         sys.stdout.flush()
 
     def on_playback_status_changed(self, player, status, _=None):
