@@ -28,19 +28,29 @@ int()    { local s; printf -v s '%2.0f' "$1"; printf '%s' "${s// /$'\xe2\x80\x87
 # rounded each glyph (measured on the bar; the plain font metrics suggest otherwise), so the module
 # doesn't resize, and shift everything else, when it replaces a reading
 DOTS=$'\xc2\xb7\xe2\x80\x86\xc2\xb7\xe2\x80\x86\xc2\xb7\xe2\x80\x8a'
-emit()   { jq -nc --arg text "$1" --arg tip "$2" --arg class "$3" '{text: $text, tooltip: $tip, class: $class}'; }
-hidden() { echo '{"text": "", "class": "hidden"}'; }
+emit()   { last_json=$(jq -nc --arg text "$1" --arg tip "$2" --arg class "$3" '{text: $text, tooltip: $tip, class: $class}'); echo "$last_json"; }
+hidden() { last_json=""; echo '{"text": "", "class": "hidden"}'; }
 
 declare -A prev_n=()
 PORT=$(find_port)
 prev_t=$EPOCHREALTIME
 active=0 last_rate="" last_at=0 idle_tok=0 idle_sec=0
+last_json="" fails=0
+FAILS_BEFORE_HIDING=3   # polls (2s apart) that may fail in a row before the module disappears
 
 while :; do
+    # Waybar leaves continuous scripts running when it restarts or reloads; once the parent shell is
+    # gone we're reparented to init, so stop (orphaned copies each polled the server every second)
+    [[ $(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ') == 1 ]] && exit 0
     BASE=http://127.0.0.1:$PORT
     if ! models=$(curl -fsS -m 2 "$BASE/models" 2>/dev/null); then
-        PORT=$(find_port); hidden; prev_n=(); active=0; sleep 2; continue
+        # A busy server can miss a poll; keep the last reading up on a brief failure, since hiding
+        # the module shifts everything beside it
+        PORT=$(find_port); prev_n=(); active=0
+        if ((++fails <= FAILS_BEFORE_HIDING)) && [[ -n $last_json ]]; then echo "$last_json"; else hidden; fi
+        sleep 2; continue
     fi
+    fails=0
     mapfile -t loaded < <(jq -r '.data[] | select(.status.value == "loaded") | .id' <<<"$models")
     if ((${#loaded[@]} == 0)); then hidden; prev_n=(); active=0; sleep 1; continue; fi
 
