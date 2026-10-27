@@ -354,3 +354,11 @@ label:focus {
     min-width: 15px;
     padding: 0 10px;
 }
+
+/* A label holding only a Font Awesome glyph sits ~1px below the baseline of
+   labels that also contain text; nudge the icon-only modules up to match */
+#custom-makomode,
+#idle_inhibitor,
+#custom-media.empty {
+    padding-bottom: 2px;
+}
