@@ -1,0 +1,251 @@
+// -*- mode: jsonc -*-
+// Shared by both bars in config.jsonc: the layout and the module definitions. Each bar there lists
+// its own modules-right.
+{
+    // "layer": "top", // Waybar at top layer
+    // "position": "bottom", // Waybar position (top|bottom|left|right)
+    "height": 30, // Waybar height (to be removed for auto height)
+    // "width": 1280, // Waybar width
+    "spacing": 5, // Gaps between modules (5px)
+    // Choose the order of the modules
+    "modules-left": [
+        "sway/workspaces",
+        "sway/mode",
+        "sway/scratchpad"
+    ],
+    "modules-center": [
+        "sway/window"
+    ],
+    "sway/language": {
+        "format": "  {}",
+        "hide-single-layout": true
+    },
+
+
+    // Modules configuration
+    "sway/workspaces": {
+        "all-outputs": false,
+        "warp-on-scroll": false,
+        "format": "{icon}  {name}",
+        "format-icons": {
+            "1": "",
+            "2": "",
+            "3": "",
+            "9": "",
+            "10": "",
+            "urgent": "",
+            "default": ""
+        },
+        "persistent-workspaces": {
+            "1": [], // Always show a workspace with name '3', on all outputs if it does not exists
+            "2": [], // Always show a workspace with name '3', on all outputs if it does not exists
+            "3": [], // Always show a workspace with name '3', on all outputs if it does not exists
+            "4": [], // Always show a workspace with name '4'
+            "5": [],
+            "6": [],
+            "7": [],
+            "8": [],
+            "9": [],
+            "10": [], // On every bar like the others; move_workspaces.sh decides where it opens (laptop, TV or secondary)
+        }
+    },
+    "sway/mode": {
+        "format": "<span style=\"italic\">{}</span>"
+    },
+    "sway/scratchpad": {
+        "format": "{icon}  {count}",
+        "show-empty": false,
+        "format-icons": ["", ""],
+        "tooltip": true,
+        "tooltip-format": "{app}: {title}"
+    },
+    "idle_inhibitor": {
+        "format": "{icon}",
+        "format-icons": {
+            "activated": "",
+            "deactivated": ""
+        }
+    },
+    "tray": {
+        // "icon-size": 21,
+        "show-passive-items": true,
+        // Needs a Waybar newer than 0.15.0; older versions ignore it and show the icon. Spotify's
+        // tray icon duplicates the now-playing module
+        "ignore-list": ["spotify"],
+        // Flat white replacements for icons with baked-in dark outlines. Keys are the
+        // apps' tray ids and must match exactly. A custom icon freezes the image, so
+        // Discord's unread dot won't show
+        "icons": {
+            "CopyQ_copyq": "/home/blaise/.config/waybar/icons/copyq.png",
+            "discord_status_icon_1": "/home/blaise/.config/waybar/icons/discord.svg",
+            // The id includes the process number, so it needs a wildcard (Waybar > 0.15.0
+            // with the glob patch); Dropbox's sync-state icon gets frozen too
+            "dropbox-client-*": "/home/blaise/.config/waybar/icons/dropbox.svg"
+        },
+        "spacing": 10
+    },
+    "custom/gpu": {
+        "format": "{}",
+        "interval": 2,
+        "return-type": "json",
+        "exec": "$HOME/.config/waybar/gpu.sh usage"
+    },
+    // llama.cpp tokens/s; continuous script (no interval), hidden while no model is loaded
+    "custom/llama": {
+        "format": "{}",
+        "return-type": "json",
+        "exec": "$HOME/.config/waybar/llama.sh"
+    },
+    "custom/gputemp": {
+        "format": "{}",
+        "interval": 2,
+        "return-type": "json",
+        "exec": "$HOME/.config/waybar/gpu.sh temp"
+    },
+    "custom/zmkbattery": {
+      "format": "{}",
+      "interval": 60,
+      "return-type": "json",
+      "exec": "$HOME/.config/waybar/zmk-battery.sh"
+    },
+    "custom/clockworkaround": {
+      "format": "{}",
+      "interval": 1,
+      "tooltip": true,
+      "return-type": "json",
+      "exec": "$HOME/.config/waybar/clockworkaround.sh",
+      "on-scroll-up": "$HOME/.config/waybar/clockworkaround.sh shift_down",
+      "on-scroll-down": "$HOME/.config/waybar/clockworkaround.sh shift_up"
+    },
+
+    "clock": {
+        "timezone": "America/Los_Angeles",
+        //"timezone": "Pacific",
+        "format": "{:%a, %b %d %R}",
+        "format-alt": "{:%Y-%m-%d}",
+        //"format": "",
+        //"format-alt": "",
+        //"on-click": "gsimplecal"
+        // Plain monospace calendar with today boxed, like the old ncal tooltip
+        "tooltip-format": "<tt>{calendar}</tt>",
+        "calendar": {
+          "mode"          : "month",
+          "mode-mon-col"  : 2,  // 3 per row is wider than GTK allows a tooltip and wraps
+          "on-scroll"     : 1,
+          "on-click-right": "mode",
+          "format": {
+            "months":     "<b>{}</b>",
+            "days":       "{}",
+            "weeks":      "",
+            "weekdays":   "{}",
+            "today":      "<span color='#2b303b' background='#ffffff'><b>{}</b></span>"
+          }
+        },
+        "actions": {
+            "on-click-right": "mode",
+            "on-click-forward": "tz_up",
+            "on-click-backward": "tz_down",
+            "on-scroll-up": "shift_down",
+            "on-scroll-down": "shift_up"
+        }
+    },
+    "cpu": {
+        "format": "  {usage:\u2007>2}%",
+        "tooltip": false
+    },
+    "cpu#freq": {
+        "format": "  {avg_frequency:0.1f}GHz",
+        "tooltip": false
+    },
+    "memory": {
+        "format": "  {percentage:\u2007>2}%",
+        "tooltip-format": "{used:0.1f}G / {total:0.1f}G"
+    },
+    "temperature": {
+        "thermal-zone": 2,
+        // "hwmon-path": "/sys/class/hwmon/hwmon2/temp1_input",
+        "critical-threshold": 80,
+        "format-critical": "{icon}  <span color='#ce3e60'><b>{temperatureC:\u2007>2}°C</b></span>",
+        "format": "{icon}  {temperatureC:\u2007>2}°C",
+        // All 10px wide, unlike temperature-low/high (16px), so the bar doesn't shift as it heats up
+        "format-icons": ["", "", ""]
+    },
+    "backlight": {
+        "min-length": 7,
+        "align": 0.5,
+        // "device": "acpi_video1",
+        "format": "{icon}  {percent}%",
+        "format-icons": ["", "", "", "", "", "", "", "", ""]
+    },
+    "battery": {
+        "min-length": 7,
+        "align": 0.5,
+        "states": {
+            // "good": 95,
+            "warning": 30,
+            "critical": 15
+        },
+        "format": "{icon}  {capacity}%",
+        "format-full": "{icon}  {capacity}%",
+        "format-charging": "  {capacity}%",
+        "format-plugged": "  {capacity}%",
+        "format-alt": "{icon}  {time}",
+        // "format-good": "", // An empty format will hide the module
+        // "format-full": "",
+        "format-icons": ["", "", "", "", ""]
+    },
+    "power-profiles-daemon": {
+      "format": "{icon}",
+      "tooltip-format": "Power profile: {profile}\nDriver: {driver}",
+      "tooltip": true,
+      "format-icons": {
+        "default": "",
+        "performance": "",
+        "balanced": "",
+        "power-saver": ""
+      }
+    },
+    "network": {
+        // "interface": "wlp2*", // (Optional) To force the use of this interface
+        "format-wifi": "  {essid} ({signalStrength}%)",
+        "format-ethernet": "  {ipaddr}/{cidr}",
+        "tooltip-format": "  {ifname} via {gwaddr}",
+        "format-linked": "  {ifname} (No IP)",
+        "format-disconnected": "⚠  Disconnected",
+        "format-alt": "{ifname}: {ipaddr}/{cidr}"
+    },
+    "pulseaudio": {
+        // "scroll-step": 1, // %, can be a float
+        "format": "{icon}  {volume:\u2007>3}%",
+        "format-bluetooth": "{icon}  {volume}% {format_source}",
+        "format-bluetooth-muted": "{icon}   {format_source}",
+        "format-muted": "",
+        "format-source": "  {volume}%",
+        "format-source-muted": "",
+        "format-icons": ["", "", ""],
+        "on-click": "pavucontrol"
+    },
+    "custom/makomode": {
+        "format": "{}",
+        "interval": 5,
+        "signal": 8,
+        "return-type": "text",
+        "max-length": 40,
+        "escape": true,
+        "exec": "$HOME/scripts/dndctl.sh",
+        "on-click": "$HOME/scripts/dndctl.sh toggle"
+    },
+    "custom/media": {
+        "format": "{icon}{text}",
+        "return-type": "json",
+        "max-length": 40,
+        "format-icons": {
+            "spotify": "",
+            "default": ""
+        },
+        "escape": true,
+        "exec": "$HOME/.config/waybar/mediaplayer.py 2> /dev/null", // Script in resources folder
+        "on-click": "sh -c 'case $(playerctl status 2>/dev/null) in Playing|Paused) playerctl play-pause;; *) setsid -f spotify >/dev/null 2>&1;; esac'"
+        // "exec": "$HOME/.config/waybar/mediaplayer.py --player spotify 2> /dev/null" // Filter player based on name
+    }
+}
