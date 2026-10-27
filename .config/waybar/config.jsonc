@@ -232,7 +232,7 @@
         },
         "escape": true,
         "exec": "$HOME/.config/waybar/mediaplayer.py 2> /dev/null", // Script in resources folder
-        "on-click": "playerctl play-pause"
+        "on-click": "sh -c 'case $(playerctl status 2>/dev/null) in Playing|Paused) playerctl play-pause;; *) setsid -f spotify >/dev/null 2>&1;; esac'"
         // "exec": "$HOME/.config/waybar/mediaplayer.py --player spotify 2> /dev/null" // Filter player based on name
     }
 }
