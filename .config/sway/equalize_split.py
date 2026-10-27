@@ -19,13 +19,15 @@ def main():
     i3 = Connection()
 
     workspace = next(w for w in i3.get_tree().workspaces() if any(win.focused for win in w.leaves()))
-    window_count = len(workspace.leaves())
+    # Equalize the workspace's direct children (columns when splith, rows when
+    # splitv). A column that is itself split vertically counts as one column.
+    children = workspace.nodes
 
     if workspace.layout == 'splith':
-        target = workspace.rect.width / window_count
+        target = workspace.rect.width / len(children)
         dimension = "width"
     elif workspace.layout == 'splitv':
-        target = workspace.rect.height / window_count
+        target = workspace.rect.height / len(children)
         dimension = "height"
     else:
         print(f"Don't know how to equalize tiling for layout {workspace.layout}", file=sys.stderr)
@@ -33,16 +35,13 @@ def main():
 
     target = int(target)
 
-    for leaf in workspace.leaves():
-        escaped_name = (leaf.name
-                        .replace('[','\\[').replace(']','\\]')
-                        .replace('"','\\"'))
-        cmd = f'[title="{escaped_name}" pid={leaf.pid}] resize set {dimension} {target}px'
+    for child in children:
+        cmd = f'[con_id={child.id}] resize set {dimension} {target}px'
         if args.verbose:
             print("Cmd:", cmd)
         res = i3.command(cmd)[0]
         if not res.success:
-            print(f"Failed to set {dimension} for {leaf.name} ({leaf.pid}): {res.error}", file=sys.stderr)
+            print(f"Failed to set {dimension} for container {child.id}: {res.error}", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
