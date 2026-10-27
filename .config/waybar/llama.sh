@@ -23,6 +23,11 @@ find_port() {
 # (a model is assumed to stay under 100 t/s); the tooltip keeps a decimal. Bytes rather than \u
 # so it doesn't depend on the locale
 int()    { local s; printf -v s '%2.0f' "$1"; printf '%s' "${s// /$'\xe2\x80\x87'}"; }
+# Stand-in for the number while there isn't one (reading the prompt, no stats yet): three middle
+# dots with six-per-em spaces and a trailing hair space. It's as wide as two digits once Pango has
+# rounded each glyph (measured on the bar; the plain font metrics suggest otherwise), so the module
+# doesn't resize, and shift everything else, when it replaces a reading
+DOTS=$'\xc2\xb7\xe2\x80\x86\xc2\xb7\xe2\x80\x86\xc2\xb7\xe2\x80\x8a'
 emit()   { jq -nc --arg text "$1" --arg tip "$2" --arg class "$3" '{text: $text, tooltip: $tip, class: $class}'; }
 hidden() { echo '{"text": "", "class": "hidden"}'; }
 
@@ -73,7 +78,7 @@ while :; do
             live=$(awk -v t="$live_tok" -v d="$dt" 'BEGIN {printf "%.1f", t / d}')
             text="$ICON  $(int "$live") t/s"; class=generating; now_line="now: $live t/s"
         else
-            text="$ICON  …"; class=prefill; now_line="now: reading the prompt"
+            text="$ICON  $DOTS t/s"; class=prefill; now_line="now: reading the prompt"
         fi
     else
         if ((active)); then   # a request just finished: its rate is the counters' delta since we last saw it idle
@@ -88,7 +93,7 @@ while :; do
         elif [[ -n $avg ]]; then
             text="$ICON  $(int "$avg") t/s"; class=idle
         else
-            text="$ICON  –"; class=idle
+            text="$ICON  $DOTS t/s"; class=idle
         fi
     fi
 
