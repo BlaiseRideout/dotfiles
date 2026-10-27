@@ -28,7 +28,8 @@ usage)
     printf '{"text": "\uf26c  %s%%", "tooltip": "%s", "class": "ok"}\n' "$(pad "$((util))" 2)" "$tip"
     ;;
 temp)
-    if (( temp < 50 )); then icon=$'\uf76b'; elif (( temp < 70 )); then icon=$'\uf2c9'; else icon=$'\uf769'; fi
+    # All 10px wide, unlike temperature-low/high (16px), so the bar doesn't shift as it heats up
+    if (( temp < 50 )); then icon=$'\uf2cb'; elif (( temp < 70 )); then icon=$'\uf2c9'; else icon=$'\uf2c7'; fi
     class=ok; (( temp >= CRITICAL )) && class=critical
     value="$(pad "$((temp))" 2)\u00b0C"
     # Same red bold text as the temperature module's critical state

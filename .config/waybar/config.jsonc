@@ -187,7 +187,8 @@
         "critical-threshold": 80,
         "format-critical": "{icon}  <span color='#ce3e60'><b>{temperatureC:\u2007>2}°C</b></span>",
         "format": "{icon}  {temperatureC:\u2007>2}°C",
-        "format-icons": ["", "", ""]
+        // All 10px wide, unlike temperature-low/high (16px), so the bar doesn't shift as it heats up
+        "format-icons": ["", "", ""]
     },
     "backlight": {
         "min-length": 7,
