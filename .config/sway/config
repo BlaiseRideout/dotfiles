@@ -341,10 +341,13 @@ exec --no-startup-id nm-applet
 # via systemd regardless). Needs the waybar tray.
 exec --no-startup-id mintupdate-launcher
 
-# Password prompts for apps that need admin rights. Its autostart entry is
-# limited to Cinnamon/XFCE/Unity, so dex skips it. Path differs by distro.
-# Quoted so sway doesn't split the shell loop at its semicolons
-exec 'for a in /usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1 /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 /usr/libexec/polkit-gnome-authentication-agent-1; do [ -x "$a" ] && exec "$a"; done'
+# Password prompts for apps that need admin rights (pkexec, the .deb installer).
+# Prefers the MATE agent: polkit-gnome segfaults after a failed or cancelled
+# prompt, leaving no agent and making Install buttons silently do nothing.
+# Falls back to polkit-gnome where mate-polkit isn't installed. Autostart
+# entries are limited to other desktops, so dex skips them. Path differs by
+# distro. Quoted so sway doesn't split the shell loop at its semicolons
+exec 'for a in /usr/libexec/polkit-mate-authentication-agent-1 /usr/lib/mate-polkit/polkit-mate-authentication-agent-1 /usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1 /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 /usr/libexec/polkit-gnome-authentication-agent-1; do [ -x "$a" ] && exec "$a"; done'
 
 # Automount removable drives (Cinnamon's settings daemon did this). No tray
 # icon: waybar shows passive icons (for Spotify), so --smart-tray's would never
