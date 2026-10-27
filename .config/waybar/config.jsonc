@@ -85,6 +85,9 @@
     "tray": {
         // "icon-size": 21,
         "show-passive-items": true,
+        // Needs a Waybar newer than 0.15.0; older versions ignore it and show the icon. Spotify's
+        // tray icon duplicates the now-playing module
+        "ignore-list": ["spotify"],
         "spacing": 10
     },
     "custom/clockworkaround": {
