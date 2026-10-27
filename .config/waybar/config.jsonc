@@ -25,6 +25,8 @@
         "cpu#freq",
         "cpu",
         "temperature",
+        "custom/gpu",
+        "custom/gputemp",
         "backlight",
         //"sway/language", // hide-single-layout needs a newer waybar than 0.9.24; only one layout is configured
         "custom/zmkbattery",
@@ -100,6 +102,18 @@
             "dropbox-client-*": "/home/blaise/.config/waybar/icons/dropbox.svg"
         },
         "spacing": 10
+    },
+    "custom/gpu": {
+        "format": "{}",
+        "interval": 2,
+        "return-type": "json",
+        "exec": "$HOME/.config/waybar/gpu.sh usage"
+    },
+    "custom/gputemp": {
+        "format": "{}",
+        "interval": 2,
+        "return-type": "json",
+        "exec": "$HOME/.config/waybar/gpu.sh temp"
     },
     "custom/zmkbattery": {
       "format": "{}",

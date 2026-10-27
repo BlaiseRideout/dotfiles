@@ -89,6 +89,8 @@ button:hover {
 #battery,
 #custom-zmkbattery,
 #cpu,
+#custom-gpu,
+#custom-gputemp,
 #memory,
 #disk,
 #temperature,
@@ -364,8 +366,10 @@ label:focus {
     padding-bottom: 2px;
 }
 
-/* Scripts that find nothing to show (no keyboard connected) print an
+/* Scripts that find nothing to show (no keyboard connected, no NVIDIA GPU) print an
    empty text; make sure no padded empty box is left behind */
-#custom-zmkbattery.disconnected {
+#custom-zmkbattery.disconnected,
+#custom-gpu.hidden,
+#custom-gputemp.hidden {
     padding: 0;
 }
