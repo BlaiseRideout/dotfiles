@@ -321,9 +321,10 @@ exec dbus-update-activation-environment --systemd XDG_CURRENT_DESKTOP XDG_SESSIO
 #
 # Startup execs
 #
-# Prefers the newer self-built Waybar in ~/.local/opt/waybar (tray ignore-list;
-# build script in ~/.local/src/waybar), else the system one
-exec_always 'killall waybar; if [ -x ~/.local/opt/waybar/bin/waybar ]; then exec ~/.local/opt/waybar/bin/waybar; else exec waybar; fi'
+# launch.sh starts Waybar (the newer self-built one when installed), tells it which output is
+# the primary one, and restarts it when that changes. A reload kills Waybar; the running
+# launcher starts it again, so the second launcher exits straight away
+exec_always 'killall waybar; exec ~/.config/waybar/launch.sh'
 exec {
   # Follow GTK_THEME from ~/.config/environment.d (zz-local.conf overrides it per machine)
   gsettings set org.gnome.desktop.interface gtk-theme "$GTK_THEME"
