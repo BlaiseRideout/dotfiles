@@ -91,6 +91,7 @@ button:hover {
 #cpu,
 #custom-gpu,
 #custom-gputemp,
+#custom-llama,
 #memory,
 #disk,
 #temperature,
@@ -370,6 +371,8 @@ label:focus {
    empty text; make sure no padded empty box is left behind */
 #custom-zmkbattery.disconnected,
 #custom-gpu.hidden,
-#custom-gputemp.hidden {
+#custom-gputemp.hidden,
+#custom-llama.hidden {
     padding: 0;
+    min-width: 0;
 }

@@ -27,6 +27,7 @@
         "temperature",
         "custom/gpu",
         "custom/gputemp",
+        "custom/llama",
         "backlight",
         //"sway/language", // hide-single-layout needs a newer waybar than 0.9.24; only one layout is configured
         "custom/zmkbattery",
@@ -108,6 +109,15 @@
         "interval": 2,
         "return-type": "json",
         "exec": "$HOME/.config/waybar/gpu.sh usage"
+    },
+    // llama.cpp tokens/s; continuous script (no interval), hidden while no model is loaded
+    "custom/llama": {
+        "format": "{}",
+        // Centered in a fixed width so the digits changing doesn't shift the bar
+        "min-length": 9,
+        "align": 0.5,
+        "return-type": "json",
+        "exec": "$HOME/.config/waybar/llama.sh"
     },
     "custom/gputemp": {
         "format": "{}",
