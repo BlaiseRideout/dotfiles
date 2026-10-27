@@ -317,7 +317,9 @@ exec dbus-update-activation-environment --systemd XDG_CURRENT_DESKTOP XDG_SESSIO
 #
 # Startup execs
 #
-exec_always "killall waybar; waybar"
+# Prefers the newer self-built Waybar in ~/.local/opt/waybar (tray ignore-list;
+# build script in ~/.local/src/waybar), else the system one
+exec_always 'killall waybar; if [ -x ~/.local/opt/waybar/bin/waybar ]; then exec ~/.local/opt/waybar/bin/waybar; else exec waybar; fi'
 exec {
   # Follow GTK_THEME from ~/.config/environment.d (zz-local.conf overrides it per machine)
   gsettings set org.gnome.desktop.interface gtk-theme "$GTK_THEME"
