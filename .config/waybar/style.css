@@ -352,4 +352,5 @@ label:focus {
    do-not-disturb doesn't shift the modules next to it */
 #custom-makomode {
     min-width: 15px;
+    padding: 0 10px;
 }
