@@ -105,6 +105,8 @@
         "spacing": 10
     },
     "custom/gpu": {
+        "min-length": 7,
+        "align": 0.5,
         "format": "{}",
         "interval": 2,
         "return-type": "json",
@@ -120,12 +122,16 @@
         "exec": "$HOME/.config/waybar/llama.sh"
     },
     "custom/gputemp": {
+        "min-length": 7,
+        "align": 0.5,
         "format": "{}",
         "interval": 2,
         "return-type": "json",
         "exec": "$HOME/.config/waybar/gpu.sh temp"
     },
     "custom/zmkbattery": {
+      "min-length": 10,
+      "align": 0.5,
       "format": "{}",
       "interval": 60,
       "return-type": "json",
@@ -173,18 +179,26 @@
         }
     },
     "cpu": {
+        "min-length": 7,
+        "align": 0.5,
         "format": "  {usage}%",
         "tooltip": false
     },
     "cpu#freq": {
+        "min-length": 9,
+        "align": 0.5,
         "format": "  {avg_frequency:0.1f}GHz",
         "tooltip": false
     },
     "memory": {
+        "min-length": 6,
+        "align": 0.5,
         "format": "  {}%",
         "tooltip-format": "{used:0.1f}G / {total:0.1f}G"
     },
     "temperature": {
+        "min-length": 7,
+        "align": 0.5,
         "thermal-zone": 2,
         // "hwmon-path": "/sys/class/hwmon/hwmon2/temp1_input",
         "critical-threshold": 80,
@@ -193,11 +207,15 @@
         "format-icons": ["", "", ""]
     },
     "backlight": {
+        "min-length": 7,
+        "align": 0.5,
         // "device": "acpi_video1",
         "format": "{icon}  {percent}%",
         "format-icons": ["", "", "", "", "", "", "", "", ""]
     },
     "battery": {
+        "min-length": 7,
+        "align": 0.5,
         "states": {
             // "good": 95,
             "warning": 30,
@@ -233,6 +251,8 @@
         "format-alt": "{ifname}: {ipaddr}/{cidr}"
     },
     "pulseaudio": {
+        "min-length": 7,
+        "align": 0.5,
         // "scroll-step": 1, // %, can be a float
         "format": "{icon}  {volume}%",
         "format-bluetooth": "{icon}  {volume}% {format_source}",
