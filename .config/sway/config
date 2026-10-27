@@ -93,6 +93,9 @@ input type:keyboard {
     # Start a terminal
     bindsym $mod+Return exec $term
 
+    # Task manager, like Windows
+    bindsym Ctrl+Shift+Escape exec $term htop
+
     # Start browser
     bindsym $mod+w exec x-www-browser
 
