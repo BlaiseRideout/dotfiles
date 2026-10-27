@@ -27,6 +27,7 @@
         "temperature",
         "backlight",
         //"sway/language", // hide-single-layout needs a newer waybar than 0.9.24; only one layout is configured
+        "custom/zmkbattery",
         "battery",
         //"custom/clockworkaround",
         "clock",
@@ -99,6 +100,12 @@
             "dropbox-client-*": "/home/blaise/.config/waybar/icons/dropbox.svg"
         },
         "spacing": 10
+    },
+    "custom/zmkbattery": {
+      "format": "{}",
+      "interval": 60,
+      "return-type": "json",
+      "exec": "$HOME/.config/waybar/zmk-battery.sh"
     },
     "custom/clockworkaround": {
       "format": "{}",

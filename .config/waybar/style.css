@@ -87,6 +87,7 @@ button:hover {
 
 #clock,
 #battery,
+#custom-zmkbattery,
 #cpu,
 #memory,
 #disk,
@@ -361,4 +362,10 @@ label:focus {
 #idle_inhibitor,
 #custom-media.empty {
     padding-bottom: 2px;
+}
+
+/* Scripts that find nothing to show (no keyboard connected) print an
+   empty text; make sure no padded empty box is left behind */
+#custom-zmkbattery.disconnected {
+    padding: 0;
 }
