@@ -109,7 +109,7 @@ button:hover {
 #power-profiles-daemon,
 #volume,
 #mpd {
-    padding: 0 10px;
+    padding: 0 5px;
     color: #ffffff;
     /*border-bottom: 3px solid rgba(255, 255, 255, 0.5);*/
     /* Use box-shadow instead of border so the text isn't offset
@@ -355,7 +355,7 @@ label:focus {
 /* The icon's width is fixed by min-length in config.jsonc, so toggling do-not-disturb
    doesn't shift the modules next to it */
 #custom-makomode {
-    padding: 0 10px;
+    padding: 0 5px;
 }
 
 /* A label holding only a Font Awesome glyph sits ~1px below the baseline of
