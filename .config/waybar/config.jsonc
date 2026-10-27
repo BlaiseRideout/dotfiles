@@ -22,8 +22,8 @@
         // "network",
         // "power-profiles-daemon",
         "memory",
-        "cpu",
         "cpu#freq",
+        "cpu",
         "temperature",
         "backlight",
         //"sway/language", // hide-single-layout needs a newer waybar than 0.9.24; only one layout is configured
