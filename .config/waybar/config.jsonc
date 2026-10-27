@@ -264,6 +264,10 @@
         "on-click": "pavucontrol"
     },
     "custom/makomode": {
+        // The bell-slash is ~2px wider than the bell; centering both in a fixed width keeps
+        // the icon from drifting when do-not-disturb is toggled
+        "min-length": 3,
+        "align": 0.5,
         "format": "{}",
         "interval": 5,
         "signal": 8,
