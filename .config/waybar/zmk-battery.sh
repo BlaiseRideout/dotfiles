@@ -10,6 +10,10 @@ LABELS=(L R)
 STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/zmk-battery"
 mkdir -p "$STATE_DIR"
 
+# Pads $1 to $2 characters with figure spaces (as wide as a digit in Roboto), so the module
+# keeps the same width as the number changes; bytes rather than \u so it doesn't depend on the locale
+pad() { local s; printf -v s '%*s' "$2" "$1"; printf '%s' "${s// /$'\xe2\x80\x87'}"; }
+
 bluez() { busctl --system "$@" 2>/dev/null; }
 
 objects=$(bluez tree org.bluez --list)
@@ -36,7 +40,7 @@ for dev in $(grep -E '^/org/bluez/hci[0-9]+/dev_[0-9A-F_]+$' <<<"$objects"); do
             found=1
             continue
         fi
-        parts+=("$level%")
+        parts+=("$(pad "$level" 2)%")
         tooltip+=("$name ($label): $level%")
         found=1
         (( level < worst )) && worst=$level

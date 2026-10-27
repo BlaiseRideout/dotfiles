@@ -11,6 +11,10 @@ hidden() {
     exit 0
 }
 
+# Pads $1 to $2 characters with figure spaces (as wide as a digit in Roboto), so the module
+# keeps the same width as the number changes; bytes rather than \u so it doesn't depend on the locale
+pad() { local s; printf -v s '%*s' "$2" "$1"; printf '%s' "${s// /$'\xe2\x80\x87'}"; }
+
 command -v nvidia-smi >/dev/null || hidden
 IFS=, read -r name util temp mem_used mem_total power clock < <(
     timeout 3 nvidia-smi --format=csv,noheader,nounits \
@@ -21,12 +25,12 @@ IFS=, read -r name util temp mem_used mem_total power clock < <(
 case $1 in
 usage)
     tip="$name\\nVRAM: $((mem_used)) / $((mem_total)) MiB\\nPower: $((${power%.*})) W\\nClock: $((clock)) MHz"
-    printf '{"text": "\uf26c  %s%%", "tooltip": "%s", "class": "ok"}\n' "$((util))" "$tip"
+    printf '{"text": "\uf26c  %s%%", "tooltip": "%s", "class": "ok"}\n' "$(pad "$((util))" 2)" "$tip"
     ;;
 temp)
     if (( temp < 50 )); then icon=$'\uf76b'; elif (( temp < 70 )); then icon=$'\uf2c9'; else icon=$'\uf769'; fi
     class=ok; (( temp >= CRITICAL )) && class=critical
-    value="$((temp))\u00b0C"
+    value="$(pad "$((temp))" 2)\u00b0C"
     # Same red bold text as the temperature module's critical state
     [[ $class == critical ]] && value="<span color='#ce3e60'><b>$value</b></span>"
     printf '{"text": "%s  %s", "tooltip": "%s", "class": "%s"}\n' "$icon" "$value" "$name" "$class"

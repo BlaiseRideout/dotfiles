@@ -19,7 +19,10 @@ find_port() {
         awk -v pat="pid=$pid," '$0 ~ pat {n=split($4,a,":"); print a[n]; exit}')
     echo "${p:-9931}"
 }
-int()    { printf '%.0f' "$1"; }   # the bar shows whole tokens/s; the tooltip keeps a decimal
+# The bar shows whole tokens/s, padded with figure spaces (as wide as a digit) to two digits
+# (a model is assumed to stay under 100 t/s); the tooltip keeps a decimal. Bytes rather than \u
+# so it doesn't depend on the locale
+int()    { local s; printf -v s '%2.0f' "$1"; printf '%s' "${s// /$'\xe2\x80\x87'}"; }
 emit()   { jq -nc --arg text "$1" --arg tip "$2" --arg class "$3" '{text: $text, tooltip: $tip, class: $class}'; }
 hidden() { echo '{"text": "", "class": "hidden"}'; }
 
