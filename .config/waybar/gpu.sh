@@ -24,8 +24,10 @@ IFS=, read -r name util temp mem_used mem_total power clock < <(
 
 case $1 in
 usage)
-    tip="$name\\nVRAM: $((mem_used)) / $((mem_total)) MiB\\nPower: $((${power%.*})) W\\nClock: $((clock)) MHz"
-    printf '{"text": "\uf26c  %s%%", "tooltip": "%s", "class": "ok"}\n' "$(pad "$((util))" 2)" "$tip"
+    # Show 100% as 99% so the number stays two digits wide; the tooltip has the real figure
+    shown=$(( util > 99 ? 99 : util ))
+    tip="$name\\nUtilization: $((util))%\\nVRAM: $((mem_used)) / $((mem_total)) MiB\\nPower: $((${power%.*})) W\\nClock: $((clock)) MHz"
+    printf '{"text": "\uf26c  %s%%", "tooltip": "%s", "class": "ok"}\n' "$(pad "$shown" 2)" "$tip"
     ;;
 temp)
     # All 10px wide, unlike temperature-low/high (16px), so the bar doesn't shift as it heats up
