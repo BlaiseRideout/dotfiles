@@ -1,124 +1,283 @@
 ---
-- hosts: computers
-  user: blaise
-  become: yes
-  become_user: root
-  become_method: sudo
-
-  tasks:
-    - name: Google Chrome PGP Key
-      apt_key: url=https://dl.google.com/linux/linux_signing_key.pub state=present
-    - name: Google Chrome Repository
-      apt_repository: repo="deb http://dl.google.com/linux/chrome/deb/ stable main" state=present #filename="google-chrome"
-    - name: Dropbox PGP Key
-      apt_key: id=1C61A2656FB57B7E4DE0F4C1FC918B335044912E keyserver=pgp.mit.edu state=present
-    - name: Dropbox Repository
-      apt_repository: repo="deb [arch=i386,amd64] http://linux.dropbox.com/debian sid main" state=present #filename="dropbox"
-    - name: Remove i3 Apt Package
-      apt:
-        name: i3
-        state: absent
-    - name: Install Software
-      apt:
-        update_cache: yes
-        name:
-          - git
-          - vim-nox
-          - python
-          - build-essential
-          - pkg-config
-          - cmake
-          - nodejs
-          - npm
-          - alsa-utils
-          - htop
-          - lightdm
-          - xfonts-terminus
-          - network-manager-gnome
-          - i3blocks
-          - compton
-          - rxvt-unicode-256color
-          - google-chrome-stable
-          - spacefm
-          - keepassx
-          - gsimplecal
-          - mpv
-          - feh
-          - scrot
-          - imagemagick
-          - autocutsel
-          - tmux
-          - python-dev
-          - dropbox
-          - libxcb1-dev
-          - libxcb-keysyms1-dev
-          - libpango1.0-dev
-          - libxcb-util0-dev
-          - libxcb-icccm4-dev
-          - libyajl-dev
-          - libstartup-notification0-dev
-          - libxcb-randr0-dev
-          - libev-dev
-          - libxcb-cursor-dev
-          - libxcb-xinerama0-dev
-          - libxcb-xkb-dev
-          - libxkbcommon-dev
-          - libxkbcommon-x11-dev
-
-    - name: Retrieve i3-gaps
-      git: repo="https://www.github.com/Airblader/i3" dest="/tmp/i3-gaps" version="gaps"
-    - name: Compile and install i3-gaps
-      shell: make && make install chdir="/tmp/i3-gaps"
-    - name: Get NodeJS Location
-      command: which nodejs
-      register: nodejs
-    - name: Make Node Link
-      file: src="{{ nodejs.stdout }}" dest="/usr/local/bin/node" state=link force=yes
-    - name: Configure User
-      user: name="{{ ansible_user }}" shell=/bin/bash groups=sudo append=yes
-    - name: Ensure LightDM Started
-      service: name=lightdm enabled=yes state=started
-
+# Set up a new Linux Mint / Ubuntu install: apt packages, Nix, the dotfiles via
+# Home Manager, and optionally the self-built Sway 1.11 and Waybar.
+#
+#   sudo apt install ansible git
+#   git clone --recursive https://github.com/BlaiseRideout/dotfiles.git ~/.dotfiles
+#   cd ~/.dotfiles/ansible
+#   ansible-playbook setup.yaml                        # Sway machine
+#   ansible-playbook setup.yaml -e build_sway=true     # ...plus Sway 1.11 + Waybar (NVIDIA)
+#   ansible-playbook setup.yaml -e desktop=openbox     # Openbox + tint2 machine
+#
+# It asks for the sudo password once. Safe to re-run.
+#
+# Home Manager uses the flake config named "<user>@<hostname>", or the one in
+# -e hm_config=<name> (e.g. laptop). See flake.nix.
 
 - hosts: computers
-  user: blaise
+  vars:
+    desktop: sway          # sway | openbox
+    build_sway: false      # build Sway 1.11 + Waybar into ~/.local/opt (needed on NVIDIA)
+    hm_config: "{{ ansible_user_id }}@{{ ansible_hostname }}"
+    dotfiles: "{{ ansible_env.HOME }}/.dotfiles"
+    dotfiles_repo: https://github.com/BlaiseRideout/dotfiles.git
+    nix: /nix/var/nix/profiles/default/bin/nix
+
+    # Pinned sources for the self-built Sway (see build/sway/build.sh)
+    sway_src: "{{ ansible_env.HOME }}/.local/src/sway-1.11"
+    sway_sources:
+      - { name: wayland,  repo: "https://gitlab.freedesktop.org/wayland/wayland.git",  version: "1.24.0" }
+      - { name: libinput, repo: "https://gitlab.freedesktop.org/libinput/libinput.git", version: "1.26.2" }
+      - { name: pixman,   repo: "https://gitlab.freedesktop.org/pixman/pixman.git",    version: "pixman-0.46.4" }
+      - { name: wlroots,  repo: "https://gitlab.freedesktop.org/wlroots/wlroots.git",  version: "0.19.3" }
+      - { name: sway,     repo: "https://github.com/swaywm/sway.git",                  version: "1.11" }
+    # Unreleased master, for the tray ignore-list (see build/waybar/build.sh)
+    waybar_src: "{{ ansible_env.HOME }}/.local/src/waybar"
+    waybar_version: 7121ff779c89da1cb0a81aa4b1ae0f1b9e098716
+
+    base_packages:
+      - git
+      - curl
+      - xz-utils          # for the Nix installer
+      - build-essential
+      - zsh
+      - tmux
+      - fzf
+      - htop
+      - jq
+      - ripgrep
+      - powerline         # zsh, bash and tmux prompts (~/.config/powerline)
+      - python3-powerline
+      - fonts-powerline
+      - pipx
+      - lm-sensors
+      - x11-xserver-utils # xrdb, xmodmap
+      - feh
+
+    sway_packages:
+      - sway              # Ubuntu's 1.9: fallback session, plus swaybg
+      - xwayland
+      - kanshi
+      - mako-notifier
+      - wofi
+      - swayidle
+      - swaylock
+      - grim
+      - slurp
+      - grimshot
+      - wl-clipboard
+      - udiskie
+      - mate-polkit       # polkit-gnome's agent crashes after a cancelled prompt
+      - playerctl
+      - brightnessctl
+      - pulseaudio-utils  # pactl
+      - dex
+      - network-manager-gnome
+      - blueman
+      - copyq
+      - gsimplecal
+      - kitty
+      - keepassxc
+      - python3-i3ipc     # sway/autotiling.py, center_single.py
+      - xdg-desktop-portal-wlr
+      - xdg-desktop-portal-gtk
+
+    openbox_packages:
+      - openbox
+      - tint2
+      - copyq
+      - network-manager-gnome
+
+    # For build/sway/build.sh and build/waybar/build.sh
+    build_packages:
+      - meson
+      - ninja-build
+      - cmake
+      - pkg-config
+      - scdoc
+      - hwdata
+      - wayland-protocols
+      - libffi-dev
+      - libexpat1-dev
+      - libxml2-dev
+      - libdrm-dev
+      - libgbm-dev
+      - libegl-dev
+      - libgles-dev
+      - libseat-dev
+      - libdisplay-info-dev
+      - libliftoff-dev
+      - libxkbcommon-dev
+      - libpixman-1-dev
+      - libpango1.0-dev
+      - libcairo2-dev
+      - libgdk-pixbuf-2.0-dev
+      - libjson-c-dev
+      - libpcre2-dev
+      - liblcms2-dev
+      - libsystemd-dev
+      - libudev-dev
+      - libevdev-dev
+      - libmtdev-dev
+      - libwacom-dev
+      - libxcb1-dev
+      - libxcb-composite0-dev
+      - libxcb-ewmh-dev
+      - libxcb-icccm4-dev
+      - libxcb-render0-dev
+      - libxcb-res0-dev
+      - libxcb-xfixes0-dev
+      # Waybar
+      - libgtkmm-3.0-dev
+      - libjsoncpp-dev
+      - libsigc++-2.0-dev
+      - libdbusmenu-gtk3-dev
+      - libpulse-dev
+      - libxkbregistry-dev
 
   tasks:
-    - name: Retrieve Dotfiles
-      git: repo="https://github.com/BlaiseRitchie/dotfiles.git" dest="{{ ansible_env.HOME }}/.dotfiles"
-    - name: Ensure Dotfile Directories Existence
-      file: path={{ item }} state=directory mode=0755
-      with_items:
-        - "{{ ansible_env.HOME }}/.config"
-        - "{{ ansible_env.HOME }}/.vim"
-        - "{{ ansible_env.HOME }}/.vim/bundle"
-        - "{{ ansible_env.HOME }}/.ssh"
-        - "{{ ansible_env.HOME }}/.fonts"
-    - name: Link Dotfiles
-      file: src="{{ ansible_env.HOME }}/.dotfiles/{{ item }}" dest="{{ ansible_env.HOME }}/{{ item }}" state=link force=yes
-      with_items:
-        - ".autostart.sh"
-        - ".vimrc"
-        - ".vim/colors/Tommorrow-Night.vim"
-        - ".compton.conf"
-        - ".bashrc"
-        - ".Xmodmap"
-        - ".Xresources"
-        - ".tmux.conf"
-        - ".ssh/config"
-        - ".ssh/authorized_keys"
-        - ".i3"
-        - ".config/gsimplecal"
-        - ".config/openbox"
-        - ".config/tint2"
-        - ".fonts/icons.ttf"
+    - name: Check the desktop variable
+      ansible.builtin.assert:
+        that: desktop in ['sway', 'openbox']
+        fail_msg: "desktop must be sway or openbox, not {{ desktop }}"
 
-    - name: Retrieve Vundle
-      git: repo="https://github.com/VundleVim/Vundle.vim.git" dest="{{ ansible_env.HOME }}/.vim/bundle/Vundle.vim"
-    - name: Install Vundle Plugins
-      shell: vim -E -s -c "source {{ ansible_env.HOME }}/.vimrc" +PluginInstall +qall
-      ignore_errors: yes
-    - name: Compile YCM (Log Written to ~/.vim/bundle/YouCompleteMe.log)
-      shell: python "{{ ansible_env.HOME }}/.vim/bundle/YouCompleteMe/install.py" --clang-completer --tern-completer chdir="{{ ansible_env.HOME }}/.vim/bundle/YouCompleteMe" > "{{ ansible_env.HOME }}/.vim/bundle/YouCompleteMe/install.log" 2> "{{ ansible_env.HOME }}/.vim/bundle/YouCompleteMe/install.log"
+    # --- System (root) ---------------------------------------------------------
+
+    - name: Install packages
+      become: true
+      ansible.builtin.apt:
+        update_cache: true
+        name: >-
+          {{ base_packages
+             + (sway_packages if desktop == 'sway' else openbox_packages)
+             + (build_packages if build_sway | bool else []) }}
+
+    - name: Use zsh as the login shell
+      become: true
+      ansible.builtin.user:
+        name: "{{ ansible_user_id }}"
+        shell: /usr/bin/zsh
+
+    - name: Install Nix (multi-user)
+      become: true
+      ansible.builtin.shell: curl -fsSL https://nixos.org/nix/install | sh -s -- --daemon --yes
       args:
-              creates: "{{ ansible_env.HOME }}/.vim/bundle/YouCompleteMe/install.log"
+        creates: "{{ nix }}"
+
+    - name: Enable flakes
+      become: true
+      ansible.builtin.lineinfile:
+        path: /etc/nix/nix.conf
+        regexp: '^experimental-features\s*='
+        line: experimental-features = nix-command flakes
+      register: nix_conf
+
+    - name: Restart the Nix daemon
+      become: true
+      ansible.builtin.systemd:
+        name: nix-daemon
+        state: restarted
+      when: nix_conf.changed
+
+    # --- Dotfiles and Home Manager ----------------------------------------------
+
+    - name: Clone the dotfiles
+      ansible.builtin.git:
+        repo: "{{ dotfiles_repo }}"
+        dest: "{{ dotfiles }}"
+        recursive: true
+        update: false   # never touch an existing checkout
+
+    # Home Manager writes into these, so they must be real folders, not links
+    # into the repo (as the pre-Home-Manager setup had them)
+    # (A folder link would make Home Manager's -b backup rename the repo's own files.)
+    - name: Check for old whole-folder links
+      ansible.builtin.stat:
+        path: "{{ ansible_env.HOME }}/{{ item }}"
+      loop: [.config/systemd, .config/environment.d, scripts]
+      register: old_links
+
+    - name: Remove old whole-folder links
+      ansible.builtin.file:
+        path: "{{ item.stat.path }}"
+        state: absent
+      loop: "{{ old_links.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stat.islnk | default(false)
+
+    # -b bak: existing files in the way are renamed to <name>.bak, not overwritten
+    - name: Apply the Home Manager config
+      ansible.builtin.command: >-
+        {{ nix }} run home-manager -- switch -b bak --flake {{ dotfiles }}#{{ hm_config }}
+      environment:
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+      register: hm
+      changed_when: "'Activating' in hm.stdout"
+
+    - name: Install sway_auto_floating (floating rules)
+      ansible.builtin.command: pipx install git+https://github.com/artemave/sway_auto_floating
+      args:
+        creates: "{{ ansible_env.HOME }}/.local/bin/sway_auto_floating"
+      when: desktop == 'sway'
+
+    # --- Self-built Sway 1.11 and Waybar (build_sway=true) ------------------------
+
+    - name: Build Sway 1.11 and Waybar
+      when: build_sway | bool
+      block:
+        - name: Fetch Sway sources
+          ansible.builtin.git:
+            repo: "{{ item.repo }}"
+            dest: "{{ sway_src }}/{{ item.name }}"
+            version: "{{ item.version }}"
+          loop: "{{ sway_sources }}"
+          loop_control:
+            label: "{{ item.name }} {{ item.version }}"
+          register: sway_git
+
+        - name: Check for built Sway and Waybar
+          ansible.builtin.stat:
+            path: "{{ ansible_env.HOME }}/.local/opt/{{ item }}/bin/{{ item }}"
+          loop: [sway, waybar]
+          register: built
+
+        - name: Build Sway (takes a few minutes)
+          ansible.builtin.command: "{{ dotfiles }}/build/sway/build.sh"
+          environment:
+            SRC: "{{ sway_src }}"
+          when: sway_git.changed or not built.results[0].stat.exists
+
+        - name: Install the Sway NVIDIA launcher
+          ansible.builtin.copy:
+            src: "{{ dotfiles }}/build/sway/sway-nvidia"
+            dest: "{{ ansible_env.HOME }}/.local/opt/sway/bin/sway-nvidia"
+            mode: "0755"
+
+        - name: Add the login session
+          become: true
+          ansible.builtin.copy:
+            dest: /usr/share/wayland-sessions/sway-1.11-nvidia.desktop
+            mode: "0644"
+            content: |
+              [Desktop Entry]
+              Name=Sway 1.11 (NVIDIA)
+              Comment=Self-built Sway with explicit sync
+              Exec={{ ansible_env.HOME }}/.local/opt/sway/bin/sway-nvidia
+              Type=Application
+              DesktopNames=sway
+
+        # force: build.sh patches a source file, which git would otherwise refuse to overwrite
+        - name: Fetch Waybar source
+          ansible.builtin.git:
+            repo: https://github.com/Alexays/Waybar
+            dest: "{{ waybar_src }}"
+            version: "{{ waybar_version }}"
+            force: true
+          register: waybar_git
+
+        - name: Build Waybar
+          ansible.builtin.command: "{{ dotfiles }}/build/waybar/build.sh"
+          environment:
+            SRC: "{{ waybar_src }}"
+          when: waybar_git.changed or sway_git.changed or not built.results[1].stat.exists

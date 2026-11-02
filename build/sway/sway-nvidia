@@ -1,0 +1,11 @@
+#!/bin/sh
+# Start the self-built Sway 1.11 (explicit sync) with the same NVIDIA settings
+# as /usr/local/bin/sway-nvidia, which still starts the system Sway 1.9.
+# Installed to ~/.local/opt/sway/bin by ansible/setup.yaml (build_sway=true).
+export GBM_BACKEND=nvidia-drm
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export WLR_NO_HARDWARE_CURSORS=1
+export WLR_RENDERER=gles2
+# Use this build's swaymsg/swaynag/swaybar rather than the system 1.9 ones
+export PATH="$HOME/.local/opt/sway/bin:$PATH"
+exec "$HOME/.local/opt/sway/bin/sway" --unsupported-gpu -d > "$HOME/sway-session.log" 2>&1
