@@ -1,0 +1,36 @@
+[Unit]
+Description=LLaMA Serve Router Server
+After=network.target
+# Models live on the NTFS partition (~/.cache/huggingface/hub is a symlink into it): don't start with the cache missing
+ConditionPathIsMountPoint=/mnt/files
+
+[Service]
+Type=simple
+ExecStart=/home/blaise/.llama-app/llama serve \
+    --device CUDA0 \
+    --gpu-layers auto \
+    --models-max 1 \
+    --models-preset /home/blaise/.config/llama-serve/models.ini \
+    --fit on \
+    --fit-target 1536 \
+    --cache-type-k q8_0 \
+    --cache-type-v q8_0 \
+    --sleep-idle-seconds 240 \
+    --metrics
+# Reload whichever model was resident when the service last stopped
+ExecStartPost=-/home/blaise/.local/bin/llama-state restore
+ExecStop=-/home/blaise/.local/bin/llama-state save $MAINPID
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=120
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+KillSignal=SIGINT
+TimeoutStopSec=30
+Nice=0
+MemoryMax=16G
+IOWeight=300
+
+[Install]
+WantedBy=default.target
