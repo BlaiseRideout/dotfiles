@@ -1,6 +1,5 @@
 #!/bin/bash
 
-~/scripts/fixres.sh &
 ~/scripts/synaptics.sh &
 
 xrdb -merge ~/.Xresources &
