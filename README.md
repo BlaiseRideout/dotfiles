@@ -11,6 +11,7 @@ New machine (Linux Mint / Ubuntu):
     ansible-playbook setup.yaml                      # Sway
     ansible-playbook setup.yaml -e build_sway=true   # Sway, plus self-built Sway 1.11 + Waybar (NVIDIA)
     ansible-playbook setup.yaml -e desktop=openbox   # Openbox + tint2
+    ansible-playbook setup.yaml -e apps=false        # skip the desktop apps (GIMP, Spotify, VS Code, ...)
 
 This installs the apt packages, Nix and the Home Manager config for this
 machine (`<user>@<hostname>` in `flake.nix`, or `-e hm_config=<name>`).

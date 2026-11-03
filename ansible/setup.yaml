@@ -8,6 +8,7 @@
 #   ansible-playbook setup.yaml                        # Sway machine
 #   ansible-playbook setup.yaml -e build_sway=true     # ...plus Sway 1.11 + Waybar (NVIDIA)
 #   ansible-playbook setup.yaml -e desktop=openbox     # Openbox + tint2 machine
+#   ansible-playbook setup.yaml -e apps=false          # skip the desktop apps
 #
 # It asks for the sudo password once. Safe to re-run.
 #
@@ -18,6 +19,7 @@
   vars:
     desktop: sway          # sway | openbox
     build_sway: false      # build Sway 1.11 + Waybar into ~/.local/opt (needed on NVIDIA)
+    apps: true             # GIMP, Spotify, VS Code, Discord, etc. (see below)
     hm_config: "{{ ansible_user_id }}@{{ ansible_hostname }}"
     dotfiles: "{{ ansible_env.HOME }}/.dotfiles"
     dotfiles_repo: https://github.com/BlaiseRideout/dotfiles.git
@@ -77,10 +79,31 @@
       - copyq
       - gsimplecal
       - kitty
-      - keepassxc
       - python3-i3ipc     # sway/autotiling.py, center_single.py
       - xdg-desktop-portal-wlr
       - xdg-desktop-portal-gtk
+
+    # Desktop apps (apps=true). Spotify comes from its own repo, Dropbox from
+    # Mint's "import" repo; VS Code and Discord are .debs (VS Code's adds its
+    # own apt repo for updates); FSearch and OpenRGB aren't packaged for 24.04,
+    # so they come from Flathub.
+    app_packages:
+      - gimp
+      - audacity
+      - keepassxc
+      - dropbox
+      - spotify-client
+    app_debs:
+      - { name: code,    url: "https://update.code.visualstudio.com/latest/linux-deb-x64/stable" }
+      - { name: discord, url: "https://discord.com/api/download?platform=linux&format=deb" }
+    app_flatpaks:
+      - io.github.cboxdoerfer.FSearch
+      - org.openrgb.OpenRGB
+    # Spotify rotates its signing key about yearly; get the new id from
+    # https://www.spotify.com/download/linux/ when apt reports NO_PUBKEY
+    spotify_key: https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.gpg
+    # Only its udev rules are used (the .deb's dependencies aren't in 24.04)
+    openrgb_deb: https://codeberg.org/OpenRGB/OpenRGB/releases/download/release_1.1/openrgb_1.1_amd64_bookworm_8e16de2.deb
 
     openbox_packages:
       - openbox
@@ -152,6 +175,106 @@
              + (sway_packages if desktop == 'sway' else openbox_packages)
              + (build_packages if build_sway | bool else []) }}
 
+    # --- Desktop apps (apps=true) -----------------------------------------------
+
+    - name: Install desktop apps
+      when: apps | bool
+      become: true
+      block:
+        - name: Ensure /etc/apt/keyrings exists
+          ansible.builtin.file:
+            path: /etc/apt/keyrings
+            state: directory
+            mode: "0755"
+
+        - name: Add the Spotify signing key
+          ansible.builtin.get_url:
+            url: "{{ spotify_key }}"
+            dest: /etc/apt/keyrings/spotify.gpg
+            mode: "0644"
+
+        # The old one-line list (from Spotify's instructions) would clash with the
+        # Signed-By below
+        - name: Remove the old Spotify list
+          ansible.builtin.file:
+            path: /etc/apt/sources.list.d/spotify.list
+            state: absent
+
+        - name: Add the Spotify repository
+          ansible.builtin.deb822_repository:
+            name: spotify
+            uris: https://repository.spotify.com
+            suites: stable
+            components: non-free
+            signed_by: /etc/apt/keyrings/spotify.gpg
+
+        - name: Install apps from apt
+          ansible.builtin.apt:
+            update_cache: true
+            name: "{{ app_packages + ['flatpak'] }}"
+
+        - name: Check installed packages
+          ansible.builtin.package_facts:
+
+        - name: Download VS Code and Discord
+          ansible.builtin.get_url:
+            url: "{{ item.url }}"
+            dest: "/tmp/{{ item.name }}.deb"
+            mode: "0644"
+          loop: "{{ app_debs }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when: item.name not in ansible_facts.packages
+
+        - name: Install VS Code and Discord
+          ansible.builtin.apt:
+            deb: "/tmp/{{ item.name }}.deb"
+          loop: "{{ app_debs }}"
+          loop_control:
+            label: "{{ item.name }}"
+          when: item.name not in ansible_facts.packages
+
+        - name: Add Flathub
+          ansible.builtin.command: >-
+            flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          changed_when: false
+
+        - name: Install apps from Flathub
+          ansible.builtin.command: flatpak install --noninteractive --system flathub {{ item }}
+          args:
+            creates: "/var/lib/flatpak/app/{{ item }}"
+          loop: "{{ app_flatpaks }}"
+
+        # OpenRGB needs udev rules to reach the RGB devices without root, and
+        # i2c-dev for motherboard and RAM lighting
+        - name: Download OpenRGB's .deb for its udev rules
+          ansible.builtin.get_url:
+            url: "{{ openrgb_deb }}"
+            dest: /tmp/openrgb.deb
+            mode: "0644"
+          register: openrgb_download
+
+        - name: Install OpenRGB's udev rules
+          ansible.builtin.shell: |
+            set -e
+            dir=$(mktemp -d)
+            dpkg-deb -x /tmp/openrgb.deb "$dir"
+            install -m 0644 "$dir/usr/lib/udev/rules.d/60-openrgb.rules" /etc/udev/rules.d/60-openrgb.rules
+            rm -rf "$dir"
+            udevadm control --reload-rules
+            udevadm trigger
+          when: openrgb_download.changed
+
+        - name: Load i2c-dev at boot
+          ansible.builtin.copy:
+            dest: /etc/modules-load.d/i2c-dev.conf
+            content: "i2c-dev\n"
+            mode: "0644"
+
+        - name: Load i2c-dev now
+          ansible.builtin.command: modprobe i2c-dev
+          changed_when: false
+
     - name: Use zsh as the login shell
       become: true
       ansible.builtin.user:
@@ -160,8 +283,9 @@
 
     - name: Install Nix (multi-user)
       become: true
-      ansible.builtin.shell: curl -fsSL https://nixos.org/nix/install | sh -s -- --daemon --yes
+      ansible.builtin.shell: set -o pipefail; curl -fsSL https://nixos.org/nix/install | sh -s -- --daemon --yes
       args:
+        executable: /bin/bash
         creates: "{{ nix }}"
 
     - name: Enable flakes
