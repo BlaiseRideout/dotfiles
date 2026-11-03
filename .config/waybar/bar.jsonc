@@ -80,7 +80,8 @@
             "discord_status_icon_1": "/home/blaise/.config/waybar/icons/discord.svg",
             // The id includes the process number, so it needs a wildcard (Waybar > 0.15.0
             // with the glob patch); Dropbox's sync-state icon gets frozen too
-            "dropbox-client-*": "/home/blaise/.config/waybar/icons/dropbox.svg"
+            "dropbox-client-*": "/home/blaise/.config/waybar/icons/dropbox.svg",
+            "t3code": "/home/blaise/.config/waybar/icons/t3code.png"
         },
         "spacing": 10
     },

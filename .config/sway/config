@@ -40,6 +40,9 @@ exec_always "killall kanshi; kanshi"
 # The TV stays "connected" when off, so follow its network state instead
 exec ~/.config/sway/tv-autotoggle.sh
 
+# Tray icon for T3 Code (no tray of its own); only where T3 Code is installed
+exec sh -c '[ -x ~/.local/bin/t3code ] && exec ~/.config/sway/t3code-tray.py'
+
 ### Idle configuration
 #
 # Example configuration:
