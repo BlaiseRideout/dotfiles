@@ -1,0 +1,93 @@
+/* FSearch ($mod+u) styled like fuzzel: the window colours from sway/config's
+ * client.* lines (see fuzzel/fuzzel.ini), rounded search box and rows, no
+ * frames. GTK reads this from FSearch's Flatpak config dir only, so other GTK
+ * apps keep Mint-Y; home/hyprland.nix links it there. Takes effect when FSearch
+ * restarts (flatpak kill io.github.cboxdoerfer.FSearch). The menu bar and
+ * status bar are hidden in FSearch's own preferences (Ctrl+P opens them; F10
+ * the menu). */
+
+@define-color theme_bg_color #222222;
+@define-color theme_base_color #222222;
+@define-color theme_fg_color #f7f6ec;
+@define-color theme_text_color #f7f6ec;
+@define-color theme_selected_bg_color #4e262f;
+@define-color theme_selected_fg_color #ffffff;
+@define-color selected_bg_color #4e262f;
+@define-color selected_fg_color #ffffff;
+@define-color borders #333333;
+
+window, .view, treeview, scrolledwindow, viewport {
+    background-color: #222222;
+    color: #f7f6ec;
+}
+
+/* Room around the contents, like fuzzel's padding */
+window > box {
+    padding: 14px 18px;
+}
+
+/* Search box and filter menu */
+entry, button.combo, combobox button {
+    min-height: 34px;
+    padding: 2px 12px;
+    border: 2px solid #333333;
+    border-radius: 8px;
+    background-color: #1d1d1d;
+    background-image: none;
+    color: #f7f6ec;
+    box-shadow: none;
+}
+entry {
+    font-size: 12pt;
+}
+entry:focus, button.combo:hover, combobox button:hover {
+    border-color: #d18ea6;
+}
+entry image {
+    color: #d18ea6;
+}
+/* Undo FSearch's square inner corners where the entry meets the filter menu */
+.search_entry_has_neighbours:dir(ltr), .filter_combobox box.linked button:dir(ltr) {
+    border-radius: 8px;
+    border-left-width: 2px;
+}
+.filter_combobox {
+    margin-left: 8px;
+}
+
+/* Results: no frame, quiet column headers, rounded pink selection */
+.results_frame, scrolledwindow, frame > border {
+    border: none;
+    box-shadow: none;
+    margin-top: 10px;
+}
+treeview header button, .results_frame treeview button {
+    background: #222222;
+    border: none;
+    box-shadow: none;
+    color: #888888;
+    padding: 4px 8px;
+}
+.view:selected, .view:selected:focus, row:selected {
+    background-color: #4e262f;
+    color: #ffffff;
+    border-radius: 6px;
+}
+.view:hover {
+    background-color: #2a2a2a;
+}
+
+scrollbar, scrollbar trough {
+    background: transparent;
+    border: none;
+}
+scrollbar slider {
+    background-color: #5f676a;
+    border-radius: 6px;
+    min-width: 6px;
+}
+
+/* Status bar (if turned back on) */
+.fsearch-statusbar-button {
+    color: #888888;
+}

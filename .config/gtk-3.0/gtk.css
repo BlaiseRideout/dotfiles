@@ -1,0 +1,12 @@
+/* GTK 3 tweaks for every GTK 3 app (linked by home/hyprland.nix).
+ *
+ * No shadows around client-side-decorated windows (dialogs with a header bar,
+ * like the portal's "Open With…"). GTK draws a smaller shadow while a window
+ * isn't focused, and its first frame is drawn that way: Hyprland then kept
+ * the window's size from it, and a strip along the right and bottom edges
+ * stayed see-through until the window was refocused. The compositor draws
+ * borders anyway (Hyprland and Sway both). */
+decoration,
+decoration:backdrop {
+    box-shadow: none;
+}

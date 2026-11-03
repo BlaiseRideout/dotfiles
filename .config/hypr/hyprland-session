@@ -1,0 +1,27 @@
+#!/bin/sh
+# Start Hyprland (from Nix) on NVIDIA. GDM runs this for the "Hyprland (NVIDIA)"
+# session (/usr/share/wayland-sessions/hyprland-nvidia.desktop, written by
+# system-setup.sh).
+# The log is overwritten on each start; Hyprland's own log is in
+# $XDG_RUNTIME_DIR/hypr/*/hyprland.log.
+# GDM doesn't run sessions through a login shell, so read ~/.profile for its
+# PATH entries (~/.local/bin, ~/bin, Cargo's), like a terminal gets: $mod+r
+# lists the commands on Hyprland's PATH
+[ -f "$HOME/.profile" ] && . "$HOME/.profile"
+export PATH="$HOME/.nix-profile/bin:$PATH"
+export XDG_CURRENT_DESKTOP=Hyprland XDG_SESSION_DESKTOP=Hyprland XDG_SESSION_TYPE=wayland
+# GDM passes on the systemd user environment, which keeps the last Sway
+# session's socket (hyprland.lua drops it from systemd's copy too)
+unset SWAYSOCK I3SOCK
+# Where cursor themes are. Nix's libXcursor (Hyprland's, and the other Nix
+# apps') only looks in ~/.icons, ~/.local/share/icons and its own store path,
+# not /usr/share/icons where the GTK cursor theme is, and Hyprland falls back to
+# its built-in cursor. It reads this once, so it has to be set before Hyprland
+# starts (hyprland.lua is too late).
+export XCURSOR_PATH="$HOME/.local/share/icons:$HOME/.icons:/usr/share/icons:/usr/share/pixmaps"
+# Same NVIDIA settings as Sway's launcher
+export GBM_BACKEND=nvidia-drm
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export LIBVA_DRIVER_NAME=nvidia
+# Drivers come from /run/opengl-driver (non-nixos-gpu-setup), not nixGL
+exec "$HOME/.nix-profile/bin/start-hyprland" --no-nixgl > "$HOME/hyprland-session.log" 2>&1

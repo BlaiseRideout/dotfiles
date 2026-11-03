@@ -9,6 +9,7 @@
 #   ansible-playbook setup.yaml -e build_sway=true     # ...plus Sway 1.11 + Waybar (NVIDIA)
 #   ansible-playbook setup.yaml -e desktop=openbox     # Openbox + tint2 machine
 #   ansible-playbook setup.yaml -e apps=false          # skip the desktop apps
+#   ansible-playbook setup.yaml -e hyprland=true       # ...plus the Hyprland session (from Nix)
 #
 # It asks for the sudo password once. Safe to re-run.
 #
@@ -19,6 +20,7 @@
   vars:
     desktop: sway          # sway | openbox
     build_sway: false      # build Sway 1.11 + Waybar into ~/.local/opt (needed on NVIDIA)
+    hyprland: false        # add the Hyprland login session (needs home/hyprland.nix in the HM config)
     apps: true             # GIMP, Spotify, VS Code, Discord, etc. (see below)
     hm_config: "{{ ansible_user_id }}@{{ ansible_hostname }}"
     dotfiles: "{{ ansible_env.HOME }}/.dotfiles"
@@ -335,6 +337,18 @@
         PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
       register: hm
       changed_when: "'Activating' in hm.stdout"
+
+    # --- Hyprland session (hyprland=true) ------------------------------------------
+    # Hyprland and its apps come from Nix (home/hyprland.nix). The script links the
+    # GPU drivers for Nix programs and adds the login session and hyprlock's PAM
+    # setup; rerun it after an NVIDIA update.
+    - name: Set up the Hyprland session
+      when: hyprland | bool
+      become: true
+      ansible.builtin.command: "{{ dotfiles }}/.config/hypr/system-setup.sh"
+      environment:
+        SUDO_USER: "{{ ansible_user_id }}"
+      changed_when: true
 
     - name: Install sway_auto_floating (floating rules)
       ansible.builtin.command: pipx install git+https://github.com/artemave/sway_auto_floating
