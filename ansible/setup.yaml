@@ -416,3 +416,11 @@
           environment:
             SRC: "{{ waybar_src }}"
           when: waybar_git.changed or sway_git.changed or not built.results[1].stat.exists
+
+        # The system package is gone, so `waybar` in a terminal runs this one
+        # (launch.sh uses the full path)
+        - name: Link Waybar into ~/.local/bin
+          ansible.builtin.file:
+            src: "{{ ansible_env.HOME }}/.local/opt/waybar/bin/waybar"
+            dest: "{{ ansible_env.HOME }}/.local/bin/waybar"
+            state: link
