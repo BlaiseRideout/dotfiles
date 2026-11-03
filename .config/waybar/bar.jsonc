@@ -80,8 +80,7 @@
             "discord_status_icon_1": "/home/blaise/.config/waybar/icons/discord.svg",
             // The id includes the process number, so it needs a wildcard (Waybar > 0.15.0
             // with the glob patch); Dropbox's sync-state icon gets frozen too
-            "dropbox-client-*": "/home/blaise/.config/waybar/icons/dropbox.svg",
-            "t3code": "/home/blaise/.config/waybar/icons/t3code.png"
+            "dropbox-client-*": "/home/blaise/.config/waybar/icons/dropbox.svg"
         },
         // Same gap as between the other modules: the bar's 5px spacing + 5px padding each side
         "spacing": 15
@@ -91,6 +90,18 @@
         "interval": 2,
         "return-type": "json",
         "exec": "$HOME/.config/waybar/gpu.sh usage"
+    },
+    // Show or hide FSearch and T3 Code (see sway/scratchpad-app.sh). "label" prints
+    // nothing where the app isn't installed, which hides the button
+    "custom/fsearch": {
+        "exec": "$HOME/.config/sway/scratchpad-app.sh fsearch label",
+        "tooltip-format": "Search files",
+        "on-click": "$HOME/.config/sway/scratchpad-app.sh fsearch toggle"
+    },
+    "custom/t3code": {
+        "exec": "$HOME/.config/sway/scratchpad-app.sh t3code label",
+        "tooltip-format": "T3 Code",
+        "on-click": "$HOME/.config/sway/scratchpad-app.sh t3code toggle"
     },
     // llama.cpp tokens/s; continuous script (no interval), hidden while no model is loaded
     "custom/llama": {

@@ -356,15 +356,27 @@ label:focus {
    The bell-slash is also ~2px wider than the bell; the fixed width stops toggling
    do-not-disturb from shifting the modules next to it */
 #custom-makomode,
-#idle_inhibitor {
+#idle_inhibitor,
+#custom-fsearch,
+#custom-t3code {
     min-width: 15px;
     padding: 0 5px;
 }
 
-/* The eye-slash isn't drawn centered: shift it 1px left so the visible gaps match
-   (same total width) */
+/* T3 Code's button is its logo, the letters "T3". Being text, it's left out of the
+   icon-only modules' upward nudge below */
+#custom-t3code {
+    font-weight: bold;
+}
+
+/* Their glyphs aren't drawn centered: shift the eye-slash 1px left and the
+   magnifying glass 1px right so the visible gaps match (same total width) */
 #idle_inhibitor {
     padding: 0 6px 0 4px;
+}
+
+#custom-fsearch {
+    padding: 0 4px 0 6px;
 }
 
 /* The label sits at the left of its box, and the bell-slash is ~2px wider than the
@@ -379,6 +391,7 @@ label:focus {
    labels that also contain text; nudge the icon-only modules up to match */
 #custom-makomode,
 #idle_inhibitor,
+#custom-fsearch,
 #custom-media.empty {
     padding-bottom: 2px;
 }

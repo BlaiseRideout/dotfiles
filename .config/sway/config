@@ -40,8 +40,13 @@ exec_always "killall kanshi; kanshi"
 # The TV stays "connected" when off, so follow its network state instead
 exec ~/.config/sway/tv-autotoggle.sh
 
-# Tray icon for T3 Code (no tray of its own); only where T3 Code is installed
-exec sh -c '[ -x ~/.local/bin/t3code ] && exec ~/.config/sway/t3code-tray.py'
+# Make T3 Code's minimize button hide it to the scratchpad (Waybar's T3 button brings it
+# back); only where T3 Code is installed
+exec sh -c '[ -x ~/.local/bin/t3code ] && exec ~/.config/sway/t3code-minimize-hook.py'
+
+# FSearch, started hidden in the scratchpad; $mod+s or Waybar's magnifying glass brings it
+# up. scratchpad-app.sh does nothing where an app isn't installed
+exec ~/.config/sway/scratchpad-app.sh fsearch start
 
 ### Idle configuration
 #
@@ -115,6 +120,9 @@ input type:keyboard {
 
     # Start your launcher
     bindsym $mod+d exec wofi --show drun
+
+    # Search files: show or hide FSearch
+    bindsym $mod+s exec ~/.config/sway/scratchpad-app.sh fsearch toggle
 
     # Smaller than kitty.conf's 165c default so it fits the vertical monitor
     bindsym $mod+r exec $term --class=launcher -o initial_window_width=100c -o initial_window_height=30c bash -c 'compgen -c | grep -v fzf | sort -u | fzf --layout=reverse | xargs swaymsg exec --'
