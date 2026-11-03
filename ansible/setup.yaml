@@ -6,10 +6,10 @@
 #   git clone --recursive https://github.com/BlaiseRideout/dotfiles.git ~/.dotfiles
 #   cd ~/.dotfiles/ansible
 #   ansible-playbook setup.yaml                        # Sway machine
-#   ansible-playbook setup.yaml -e build_sway=true     # ...plus Sway 1.11 + Waybar (NVIDIA)
+#   ansible-playbook setup.yaml -e build_sway=true     # ...plus Sway 1.11 + Waybar (NVIDIA; default on nhuto-Mint)
 #   ansible-playbook setup.yaml -e desktop=openbox     # Openbox + tint2 machine
 #   ansible-playbook setup.yaml -e apps=false          # skip the desktop apps
-#   ansible-playbook setup.yaml -e hyprland=true       # ...plus the Hyprland session (from Nix)
+#   ansible-playbook setup.yaml -e hyprland=true       # ...plus Hyprland from Nix (default on nhuto-Mint)
 #
 # It asks for the sudo password once. Safe to re-run.
 #
@@ -19,8 +19,9 @@
 - hosts: computers
   vars:
     desktop: sway          # sway | openbox
-    build_sway: false      # build Sway 1.11 + Waybar into ~/.local/opt (needed on NVIDIA)
-    hyprland: false        # add the Hyprland login session (needs home/hyprland.nix in the HM config)
+    # Ubuntu workarounds, on by default only for nhuto-Mint (the desktop on Mint)
+    build_sway: "{{ ansible_hostname == 'nhuto-Mint' }}"  # build Sway 1.11 + Waybar into ~/.local/opt (NVIDIA needs newer than Ubuntu's)
+    hyprland: "{{ ansible_hostname == 'nhuto-Mint' }}"    # Hyprland from Nix: driver links, login session, PAM (home/hosts/nhuto-Mint.nix)
     apps: true             # GIMP, Spotify, VS Code, Discord, etc. (see below)
     hm_config: "{{ ansible_user_id }}@{{ ansible_hostname }}"
     dotfiles: "{{ ansible_env.HOME }}/.dotfiles"
@@ -339,13 +340,13 @@
       changed_when: "'Activating' in hm.stdout"
 
     # --- Hyprland session (hyprland=true) ------------------------------------------
-    # Hyprland and its apps come from Nix (home/hyprland.nix). The script links the
+    # Hyprland and its apps come from Nix (home/hosts/nhuto-Mint.nix). The script links the
     # GPU drivers for Nix programs and adds the login session and hyprlock's PAM
     # setup; rerun it after an NVIDIA update.
     - name: Set up the Hyprland session
       when: hyprland | bool
       become: true
-      ansible.builtin.command: "{{ dotfiles }}/.config/hypr/system-setup.sh"
+      ansible.builtin.command: "{{ dotfiles }}/build/hyprland/system-setup.sh"
       environment:
         SUDO_USER: "{{ ansible_user_id }}"
       changed_when: true

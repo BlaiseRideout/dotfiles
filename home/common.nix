@@ -1,5 +1,5 @@
 # Shared by every machine: shell, editors, tmux, powerline, ssh, scripts.
-{ lib, pkgs, username, dotfilesLink, ... }:
+{ lib, username, dotfilesLink, ... }:
 {
   imports = [ ./lib.nix ];
 
@@ -9,14 +9,11 @@
 
   # targets.genericLinux is left off: it adds an environment.d file changing
   # XDG_DATA_DIRS and locale paths for the whole session, plus a GPU-driver shim,
-  # which only matter for graphical programs from Nix; those come from apt here.
+  # which only matter for graphical programs from Nix; those come from the
+  # distro (except on nhuto-Mint, see home/hosts/nhuto-Mint.nix).
 
   programs.home-manager.enable = true;
   programs.man.enable = false;   # keep the system man, not a Nix copy in front of it
-
-  # A current fzf (Ubuntu 24.04's is 0.44): the shells' key bindings come from
-  # `fzf --zsh` / `fzf --bash`, and hypr/clipboard.sh's vim keys need 0.59+
-  home.packages = [ pkgs.fzf ];
 
   dotfiles.homeFiles = [
     ".profile"

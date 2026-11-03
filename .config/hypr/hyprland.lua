@@ -1,8 +1,8 @@
--- Hyprland config, ported from ~/.config/sway/config. Sway stays the default
--- session; this one is "Hyprland (NVIDIA)" in GDM (see hyprland-session).
+-- Hyprland config, ported from ~/.config/sway/config. On nhuto-Mint, Hyprland
+-- comes from Nix and is "Hyprland (NVIDIA)" in GDM (build/hyprland/).
 --
--- Hyprland 0.57 (from Nix, see home/hyprland.nix). Reference: the stubs in
--- ~/.nix-profile/share/hypr/stubs/hl.meta.lua and https://wiki.hypr.land.
+-- Hyprland 0.57. Reference: the stubs in share/hypr/stubs/hl.meta.lua of the
+-- Hyprland install (~/.nix-profile or /usr) and https://wiki.hypr.land.
 -- Check this file without a running session:
 --   Hyprland --verify-config -c ~/.config/hypr/hyprland.lua
 -- Hyprland reloads it on save. `hyprctl eval '<lua>'` runs code in this file's
@@ -325,8 +325,10 @@ hl.on("hyprland.start", function()
     exec([[gsettings set org.gnome.desktop.interface gtk-theme "$GTK_THEME"; gsettings set org.gnome.desktop.interface color-scheme prefer-dark]])
     exec("hyprpaper")
     exec("hypridle")
-    -- Admin password prompts (pkexec, the .deb installer)
-    exec(home .. "/.local/libexec/hyprpolkitagent")
+    -- Admin password prompts (pkexec, package installers): the distro's agent,
+    -- or Nix's (linked by home/hosts/nhuto-Mint.nix)
+    exec("for a in " .. home .. "/.local/libexec/hyprpolkitagent /usr/lib/hyprpolkitagent/hyprpolkitagent"
+         .. " /usr/libexec/hyprpolkitagent; do [ -x \"$a\" ] && exec \"$a\"; done")
     -- Clipboard history for $mod+v (clipboard.sh). CopyQ stays Sway's: its
     -- autostart entry has NotShowIn=Hyprland
     exec("wl-paste --type text --watch cliphist store")
@@ -336,7 +338,7 @@ hl.on("hyprland.start", function()
 
     exec("dex --autostart --environment Hyprland")
     exec("nm-applet")
-    exec("mintupdate-launcher")
+    exec("command -v mintupdate-launcher >/dev/null && exec mintupdate-launcher")   -- Mint's updates
     exec("udiskie --no-tray")
     exec(swaydir .. "/selection-to-clipboard.sh")
     if apps.fsearch.installed() then exec(apps.fsearch.launch) end
@@ -350,7 +352,8 @@ end)
 -- The cursor GTK apps use (gsettings' cursor-theme and cursor-size), for
 -- Hyprland's own cursor and the apps started from here (XWayland, Qt). Without
 -- XCURSOR_THEME Hyprland falls back to its built-in cursor (also without
--- hyprland-session's XCURSOR_PATH, which finds the system's themes). Re-read on every
+-- the right XCURSOR_PATH: build/hyprland/hyprland-session sets it for Nix's
+-- Hyprland). Re-read on every
 -- reload ($mod+Shift+r, or saving this file), so after changing the cursor in
 -- the GTK settings a reload applies it; apps already open keep the old one.
 local function gsetting(key)

@@ -353,7 +353,7 @@ exec --no-startup-id nm-applet
 
 # Linux Mint Update Manager tray icon/notifications (auto-update timers run
 # via systemd regardless). Needs the waybar tray.
-exec --no-startup-id mintupdate-launcher
+exec --no-startup-id sh -c 'command -v mintupdate-launcher >/dev/null && exec mintupdate-launcher'
 
 # Password prompts for apps that need admin rights (pkexec, the .deb installer).
 # Prefers the MATE agent: polkit-gnome segfaults after a failed or cancelled

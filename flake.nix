@@ -27,10 +27,17 @@
         };
     in {
       homeConfigurations = {
-        # Desktop: Linux Mint 22, Sway on NVIDIA (and Hyprland to try)
+        # Desktop on Linux Mint 22: Sway and Hyprland on NVIDIA, with the
+        # Ubuntu workarounds (home/hosts/nhuto-Mint.nix)
         "blaise@nhuto-Mint" = mkHome {
           username = "blaise";
           modules = [ ./home/sway.nix ./home/hyprland.nix ./home/hosts/nhuto-Mint.nix ];
+        };
+
+        # The same desktop on CachyOS: the programs come from its packages
+        "blaise@nhuto" = mkHome {
+          username = "blaise";
+          modules = [ ./home/sway.nix ./home/hyprland.nix ./home/hosts/nhuto.nix ];
         };
 
         # Laptop: Sway. Rename to "<user>@<hostname>" so a bare

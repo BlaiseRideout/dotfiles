@@ -174,8 +174,8 @@ fi
 # Not in ~/.profile: it would reach the whole graphical session, Nix apps included
 export LD_LIBRARY_PATH="/usr/local/lib"
 
-# fzf's key bindings, from fzf itself (0.48+; home/common.nix installs a
-# current one), else from Ubuntu's package
+# fzf's key bindings, from fzf itself (0.48+), else from Ubuntu's package
+# (0.44; nhuto-Mint gets a current fzf from Nix)
 if fzf --bash >/dev/null 2>&1; then
   eval "$(fzf --bash)"
 elif [ -f /usr/share/doc/fzf/examples/key-bindings.bash ]; then

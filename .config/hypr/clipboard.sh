@@ -5,8 +5,8 @@
 # size (kitty's image protocol).
 #
 # Vim-style keys, Dvorak's like .vimrc and the window keys (t n for j k), with
-# search as a mode of its own (like clipse; needs fzf 0.59+, from
-# home/common.nix):
+# search as a mode of its own (like clipse; needs fzf 0.59+, from Nix on
+# nhuto-Mint):
 #   t n              down, up          g G         first, last entry
 #   T N              half a page       Enter       copy it back, close
 #   d, Shift+Delete  delete the entry  Esc q       close

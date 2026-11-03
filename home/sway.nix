@@ -1,7 +1,8 @@
 # Machines running the Sway desktop (desktop and laptop).
-# Sway itself, Waybar and the other graphical programs come from apt or the
-# self-built prefixes in ~/.local/opt (see ansible/setup.yaml): Nix-built GUI
-# programs can't find the NVIDIA/Mesa drivers on a non-NixOS system.
+# Sway itself, Waybar and the other graphical programs come from the distro
+# (or, on nhuto-Mint, the self-built prefixes in ~/.local/opt; see
+# ansible/setup.yaml): Nix-built GUI programs can't find the NVIDIA/Mesa
+# drivers on a non-NixOS system.
 { pkgs, dotfilesLink, ... }:
 {
   dotfiles.configDirs = [

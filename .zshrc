@@ -77,8 +77,8 @@ fi
 # Not in ~/.profile: it would reach the whole graphical session, Nix apps included
 export LD_LIBRARY_PATH="/usr/local/lib"
 
-# fzf's key bindings and completion, from fzf itself (0.48+; home/common.nix
-# installs a current one), else from Ubuntu's package
+# fzf's key bindings and completion, from fzf itself (0.48+), else from
+# Ubuntu's package (0.44; nhuto-Mint gets a current fzf from Nix)
 if [[ -t 0 && -t 1 ]]; then
   if fzf --zsh >/dev/null 2>&1; then
     source <(fzf --zsh)

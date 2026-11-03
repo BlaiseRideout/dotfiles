@@ -1,7 +1,7 @@
-# ~/.profile: environment shared by login shells, the Hyprland session
-# (hypr/hyprland-session reads it, as GDM doesn't) and the terminals. .zshrc and
-# .bashrc read it as well when nothing before them did (a Sway login, ssh into
-# zsh), so PATH is the same everywhere. Additions are skipped if PATH already
+# ~/.profile: environment shared by login shells, the Hyprland session (on
+# nhuto-Mint, build/hyprland/hyprland-session reads it, as GDM doesn't) and the
+# terminals. .zshrc and .bashrc read it as well when nothing before them did (a
+# Sway login, ssh into zsh), so PATH is the same everywhere. Additions are skipped if PATH already
 # has them, so reading it twice is harmless.
 
 # Read already: .zshrc and .bashrc skip it. Exported, so terminals and anything

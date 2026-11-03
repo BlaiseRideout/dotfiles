@@ -64,10 +64,16 @@ outputs() {
   fi
 }
 
-# Hyprland: hyprlock (~/.config/hypr/hyprlock.conf), once system-setup.sh has
-# given it a PAM service it can authenticate with; swaylock below until then
-if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]] && command -v hyprlock >/dev/null &&
-   [[ -e /etc/pam.d/hyprlock && -x /run/wrappers/bin/unix_chkpwd ]]; then
+# Hyprland: hyprlock (~/.config/hypr/hyprlock.conf). Nix's hyprlock (nhuto-Mint)
+# can only authenticate once build/hyprland/system-setup.sh has given it a PAM
+# service; swaylock below until then. A distro's hyprlock brings its own.
+hyprlock_ready() {
+  local bin
+  bin=$(command -v hyprlock) || return 1
+  [[ $(readlink -f "$bin") == /nix/store/* ]] || return 0
+  [[ -e /etc/pam.d/hyprlock && -x /run/wrappers/bin/unix_chkpwd ]]
+}
+if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]] && hyprlock_ready; then
   pidof hyprlock >/dev/null || exec hyprlock
   exit 0
 fi

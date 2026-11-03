@@ -1,7 +1,7 @@
 #!/bin/sh
-# Start Hyprland (from Nix) on NVIDIA. GDM runs this for the "Hyprland (NVIDIA)"
-# session (/usr/share/wayland-sessions/hyprland-nvidia.desktop, written by
-# system-setup.sh).
+# Start Hyprland (from Nix) on NVIDIA, on nhuto-Mint. GDM runs this for the
+# "Hyprland (NVIDIA)" session (/usr/share/wayland-sessions/hyprland-nvidia.desktop,
+# written by system-setup.sh). A distro's own Hyprland brings its own session.
 # The log is overwritten on each start; Hyprland's own log is in
 # $XDG_RUNTIME_DIR/hypr/*/hyprland.log.
 # GDM doesn't run sessions through a login shell, so read ~/.profile for its
