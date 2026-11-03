@@ -164,25 +164,15 @@ shopt -s globstar
 #if [[ ! -z $SSH_AGENT_PID ]]; then ssh-add -L > /dev/null || ssh-add; fi
 
 
-export GOROOT=/usr/local/go
-export GOPATH=$HOME/prog/go
-export PATH="$PATH:$GOROOT/bin:$GOPATH/bin"
-
-export JAVA_HOME=/opt/jdk
-export PATH="$JAVA_HOME/bin:$PATH:"
-
-export ANDROID_HOME=$HOME/Android/Sdk
-export ANDROID_NDK_HOME=$HOME/Android/Ndk
-export PATH="$PATH:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin/:$ANDROID_HOME/platform-tools:$ANDROID_NDK_HOME:$ANDROID_HOME/build-tools/26.0.1"
-
-export LD_LIBRARY_PATH="/usr/local/lib"
-export PATH="$PATH:/usr/local/lib"
-
-export PATH="$PATH:$HOME/.local/bin"
-if [ -f "$HOME/.cargo/env" ]; then
-  . "$HOME/.cargo/env"
-  export RUSTFLAGS="-C target-cpu=native"
+# PATH and the Go/Java/Android/Rust variables live in ~/.profile, shared with
+# the graphical sessions; read it here if the session didn't (a login bash has:
+# ~/.profile reads this file)
+if [ -z "$DOTFILES_PROFILE" ] && [ -f ~/.profile ]; then
+  . ~/.profile
 fi
+
+# Not in ~/.profile: it would reach the whole graphical session, Nix apps included
+export LD_LIBRARY_PATH="/usr/local/lib"
 
 source /usr/share/doc/fzf/examples/key-bindings.bash
 

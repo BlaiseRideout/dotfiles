@@ -68,25 +68,14 @@ if [[ -t 0 && -t 1 ]]; then
   stty -ixon
 fi
 
-export GOROOT=/usr/local/go
-export GOPATH=$HOME/prog/go
-export PATH="$PATH:$GOROOT/bin:$GOPATH/bin"
-
-export JAVA_HOME=/opt/jdk
-export PATH="$JAVA_HOME/bin:$PATH:"
-
-export ANDROID_HOME=$HOME/Android/Sdk
-export ANDROID_NDK_HOME=$HOME/Android/Ndk
-export PATH="$PATH:$ANDROID_HOME/tools:$ANDROID_HOME/tools/bin/:$ANDROID_HOME/platform-tools:$ANDROID_NDK_HOME:$ANDROID_HOME/build-tools/26.0.1"
-
-export LD_LIBRARY_PATH="/usr/local/lib"
-export PATH="$PATH:/usr/local/lib"
-
-export PATH="$PATH:$HOME/.local/bin"
-if [ -f "$HOME/.cargo/env" ]; then
-  . "$HOME/.cargo/env"
-  export RUSTFLAGS="-C target-cpu=native"
+# PATH and the Go/Java/Android/Rust variables live in ~/.profile, shared with
+# the graphical sessions; read it here if the session didn't
+if [[ -z $DOTFILES_PROFILE && -f ~/.profile ]]; then
+  emulate sh -c '. ~/.profile'
 fi
+
+# Not in ~/.profile: it would reach the whole graphical session, Nix apps included
+export LD_LIBRARY_PATH="/usr/local/lib"
 
 if [[ -t 0 && -t 1 ]]; then
   source /usr/share/doc/fzf/examples/completion.zsh

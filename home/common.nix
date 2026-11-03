@@ -15,6 +15,7 @@
   programs.man.enable = false;   # keep the system man, not a Nix copy in front of it
 
   dotfiles.homeFiles = [
+    ".profile"
     ".bashrc"
     ".zshrc"
     ".tmux.conf"
