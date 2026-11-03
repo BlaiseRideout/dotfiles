@@ -83,7 +83,8 @@
             "dropbox-client-*": "/home/blaise/.config/waybar/icons/dropbox.svg",
             "t3code": "/home/blaise/.config/waybar/icons/t3code.png"
         },
-        "spacing": 10
+        // Same gap as between the other modules: the bar's 5px spacing + 5px padding each side
+        "spacing": 15
     },
     "custom/gpu": {
         "format": "{}",
@@ -230,7 +231,7 @@
         "format": "{}",
         "interval": 5,
         "signal": 8,
-        "return-type": "text",
+        "return-type": "json",
         "max-length": 40,
         "escape": true,
         "exec": "$HOME/scripts/dndctl.sh",

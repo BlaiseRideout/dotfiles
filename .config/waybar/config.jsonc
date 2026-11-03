@@ -10,8 +10,6 @@
         "include": ["~/.config/waybar/bar.jsonc"],
         "modules-right": [
             "custom/media",
-            "custom/makomode",
-            "idle_inhibitor",
             "pulseaudio",
             // "network",
             // "power-profiles-daemon",
@@ -28,6 +26,8 @@
             "battery",
             //"custom/clockworkaround",
             "clock",
+            "custom/makomode",
+            "idle_inhibitor",
             "tray"
         ]
     },

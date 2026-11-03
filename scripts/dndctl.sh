@@ -1,6 +1,6 @@
 #!/bin/sh
 # Do-not-disturb for mako, shown in waybar's custom/makomode module.
-#   dndctl.sh          print the status icon for waybar
+#   dndctl.sh          print the status icon for waybar (JSON, with class "dnd" while on)
 #   dndctl.sh toggle   turn do-not-disturb on or off
 #   dndctl.sh on|off   set it explicitly
 # The [mode=dnd] section in ~/.config/mako/config hides notifications while the
@@ -33,7 +33,11 @@ case "$1" in
     # Print nothing if mako isn't running so the module hides
     makoctl mode >/dev/null 2>&1 || exit 0
     # Font Awesome bell-slash (U+F1F6) while on, bell (U+F0F3) while off
-    if is_dnd; then printf '\357\207\266\n'; else printf '\357\203\263\n'; fi
+    if is_dnd; then
+      printf '{"text": "\357\207\266", "class": "dnd"}\n'
+    else
+      printf '{"text": "\357\203\263", "class": "normal"}\n'
+    fi
     ;;
   *)
     echo "usage: $0 [toggle|on|off]" >&2
