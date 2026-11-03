@@ -1,17 +1,21 @@
 ---
-# Set up a new Linux Mint / Ubuntu install: apt packages, Nix, the dotfiles via
-# Home Manager, and optionally the self-built Sway 1.11 and Waybar.
+# Set up a new install: packages, Nix, the dotfiles via Home Manager, and the
+# desktop. Works on Linux Mint / Ubuntu (apt) and CachyOS / Arch (pacman),
+# picked by the package manager Ansible finds.
 #
-#   sudo apt install ansible git
+#   sudo apt install ansible git       # Mint / Ubuntu
+#   sudo pacman -S ansible git         # CachyOS / Arch
 #   git clone --recursive https://github.com/BlaiseRideout/dotfiles.git ~/.dotfiles
 #   cd ~/.dotfiles/ansible
 #   ansible-playbook setup.yaml                        # Sway machine
-#   ansible-playbook setup.yaml -e build_sway=true     # ...plus Sway 1.11 + Waybar (NVIDIA; default on nhuto-Mint)
 #   ansible-playbook setup.yaml -e desktop=openbox     # Openbox + tint2 machine
 #   ansible-playbook setup.yaml -e apps=false          # skip the desktop apps
-#   ansible-playbook setup.yaml -e hyprland=true       # ...plus Hyprland from Nix (default on nhuto-Mint)
+#   ansible-playbook setup.yaml -e hyprland=true       # ...plus Hyprland (default on nhuto, nhuto-Mint)
+#   ansible-playbook setup.yaml -e build_sway=true     # apt: self-built Sway 1.11 + Waybar (default on nhuto-Mint)
 #
-# It asks for the sudo password once. Safe to re-run.
+# It asks for the sudo password once. Safe to re-run; on pacman each run also
+# upgrades the system (installing after a bare `pacman -Sy` risks a partial
+# upgrade).
 #
 # Home Manager uses the flake config named "<user>@<hostname>", or the one in
 # -e hm_config=<name> (e.g. laptop). See flake.nix.
@@ -19,14 +23,18 @@
 - hosts: computers
   vars:
     desktop: sway          # sway | openbox
-    # Ubuntu workarounds, on by default only for nhuto-Mint (the desktop on Mint)
-    build_sway: "{{ ansible_hostname == 'nhuto-Mint' }}"  # build Sway 1.11 + Waybar into ~/.local/opt (NVIDIA needs newer than Ubuntu's)
-    hyprland: "{{ ansible_hostname == 'nhuto-Mint' }}"    # Hyprland from Nix: driver links, login session, PAM (home/hosts/nhuto-Mint.nix)
+    # Hyprland next to Sway. apt: from Nix, with build/hyprland/system-setup.sh
+    # (home/hosts/nhuto-Mint.nix); pacman: the distro's packages.
+    hyprland: "{{ ansible_hostname in ['nhuto', 'nhuto-Mint'] }}"
+    # apt only: build Sway 1.11 + Waybar into ~/.local/opt, as NVIDIA needs
+    # newer than Ubuntu's. A workaround for nhuto-Mint (the desktop on Mint).
+    build_sway: "{{ ansible_hostname == 'nhuto-Mint' }}"
     apps: true             # GIMP, Spotify, VS Code, Discord, etc. (see below)
     hm_config: "{{ ansible_user_id }}@{{ ansible_hostname }}"
     dotfiles: "{{ ansible_env.HOME }}/.dotfiles"
     dotfiles_repo: https://github.com/BlaiseRideout/dotfiles.git
     nix: /nix/var/nix/profiles/default/bin/nix
+    pkg_mgr: "{{ ansible_pkg_mgr }}"   # apt | pacman
 
     # Pinned sources for the self-built Sway (see build/sway/build.sh)
     sway_src: "{{ ansible_env.HOME }}/.local/src/sway-1.11"
@@ -40,65 +48,154 @@
     waybar_src: "{{ ansible_env.HOME }}/.local/src/waybar"
     waybar_version: 7121ff779c89da1cb0a81aa4b1ae0f1b9e098716
 
+    # Package lists per package manager, same order in both
     base_packages:
-      - git
-      - curl
-      - xz-utils          # for the Nix installer
-      - build-essential
-      - zsh
-      - tmux
-      - fzf
-      - htop
-      - jq
-      - ripgrep
-      - powerline         # zsh, bash and tmux prompts (~/.config/powerline)
-      - python3-powerline
-      - fonts-powerline
-      - pipx
-      - lm-sensors
-      - x11-xserver-utils # xrdb, xmodmap
-      - feh
+      apt:
+        - git
+        - curl
+        - xz-utils          # for the Nix installer
+        - build-essential
+        - zsh
+        - tmux
+        - fzf
+        - htop
+        - jq
+        - ripgrep
+        - powerline         # zsh, bash and tmux prompts (~/.config/powerline)
+        - python3-powerline
+        - fonts-powerline
+        - pipx
+        - lm-sensors
+        - x11-xserver-utils # xrdb, xmodmap
+        - feh
+      pacman:
+        - git
+        - curl
+        - xz
+        - base-devel
+        - zsh
+        - tmux
+        - fzf
+        - htop
+        - jq
+        - ripgrep
+        - powerline         # includes the Python module
+        - powerline-fonts
+        - python-pipx
+        - lm_sensors
+        - xorg-xrdb
+        - xorg-xmodmap
+        - feh
 
     sway_packages:
-      - sway              # Ubuntu's 1.9: fallback session, plus swaybg
-      - xwayland
-      - kanshi
-      - mako-notifier
-      - wofi
-      - swayidle
-      - swaylock
-      - grim
-      - slurp
-      - grimshot
-      - wl-clipboard
-      - udiskie
-      - mate-polkit       # polkit-gnome's agent crashes after a cancelled prompt
-      - playerctl
-      - brightnessctl
-      - pulseaudio-utils  # pactl
-      - dex
-      - network-manager-gnome
-      - blueman
-      - copyq
-      - gsimplecal
-      - kitty
-      - python3-i3ipc     # sway/autotiling.py, center_single.py
-      - xdg-desktop-portal-wlr
-      - xdg-desktop-portal-gtk
+      apt:
+        - sway              # Ubuntu's 1.9: fallback session, plus swaybg
+        - xwayland
+        - kanshi
+        - mako-notifier
+        - wofi
+        - swayidle
+        - swaylock
+        - grim
+        - slurp
+        - grimshot
+        - wl-clipboard
+        - udiskie
+        - mate-polkit       # polkit-gnome's agent crashes after a cancelled prompt
+        - playerctl
+        - brightnessctl
+        - pulseaudio-utils  # pactl
+        - dex
+        - network-manager-gnome
+        - blueman
+        - copyq
+        - gsimplecal
+        - kitty
+        - python3-i3ipc     # sway/autotiling.py, center_single.py
+        - xdg-desktop-portal-wlr
+        - xdg-desktop-portal-gtk
+      pacman:
+        - sway
+        - waybar            # self-built on Mint
+        - xorg-xwayland
+        - kanshi
+        - mako
+        - wofi
+        - swayidle
+        - swaylock
+        - grim
+        - slurp
+        - sway-contrib      # grimshot
+        - wl-clipboard
+        - udiskie
+        - mate-polkit
+        - playerctl
+        - brightnessctl
+        - libpulse          # pactl
+        - dex
+        - network-manager-applet
+        - blueman
+        - copyq
+        - gsimplecal
+        - kitty
+        - python-i3ipc
+        - xdg-desktop-portal-wlr
+        - xdg-desktop-portal-gtk
+        - ttf-ubuntu-font-family   # the font in the hypr, fuzzel and GTK settings (Mint has it)
 
-    # Desktop apps (apps=true). Spotify comes from its own repo, Dropbox from
-    # Mint's "import" repo; VS Code and Discord are .debs (VS Code's adds its
-    # own apt repo for updates); FSearch and OpenRGB aren't packaged for 24.04,
-    # so they come from Flathub.
+    # pacman only (apt gets Hyprland from Nix)
+    hyprland_packages:
+      - hyprland
+      - hyprland-guiutils
+      - hyprpaper
+      - hypridle
+      - hyprlock
+      - hyprpolkitagent
+      - xdg-desktop-portal-hyprland
+      - grimblast-git       # CachyOS's repo (AUR elsewhere)
+      - fuzzel
+      - cliphist
+
+    openbox_packages:
+      apt:
+        - openbox
+        - tint2
+        - copyq
+        - network-manager-gnome
+      pacman:
+        - openbox
+        - tint2
+        - copyq
+        - network-manager-applet
+
+    # Desktop apps (apps=true). FSearch and OpenRGB come from Flathub on both
+    # (hyprland.lua and the FSearch stylesheet expect the Flatpak).
+    # apt: Spotify from its own repo, Dropbox from Mint's "import" repo; VS Code
+    # and Discord are .debs (VS Code's adds its own apt repo for updates).
+    # pacman: the rest from the repos, Dropbox and Microsoft's VS Code from the
+    # AUR (with paru, from CachyOS's repo).
     app_packages:
-      - gimp
-      - audacity
-      - keepassxc
-      - dropbox
-      - spotify-client
+      apt:
+        - gimp
+        - audacity
+        - keepassxc
+        - dropbox
+        - spotify-client
+        - flatpak
+      pacman:
+        - gimp
+        - audacity
+        - keepassxc
+        - spotify-launcher
+        - discord
+        - flatpak
+        - paru
     app_debs:
       - { name: code,    url: "https://update.code.visualstudio.com/latest/linux-deb-x64/stable" }
       - { name: discord, url: "https://discord.com/api/download?platform=linux&format=deb" }
+    app_aur:
+      - dropbox
+      - visual-studio-code-bin
     app_flatpaks:
       - io.github.cboxdoerfer.FSearch
       - org.openrgb.OpenRGB
@@ -106,13 +203,7 @@
     # https://www.spotify.com/download/linux/ when apt reports NO_PUBKEY
     spotify_key: https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.gpg
 
-    openbox_packages:
-      - openbox
-      - tint2
-      - copyq
-      - network-manager-gnome
-
-    # For build/sway/build.sh and build/waybar/build.sh
+    # apt only: for build/sway/build.sh and build/waybar/build.sh
     build_packages:
       - meson
       - ninja-build
@@ -159,27 +250,44 @@
       - libpulse-dev
       - libxkbregistry-dev
 
+    packages: >-
+      {{ base_packages[pkg_mgr]
+         + (sway_packages[pkg_mgr] if desktop == 'sway' else openbox_packages[pkg_mgr])
+         + (hyprland_packages if hyprland | bool and pkg_mgr == 'pacman' else [])
+         + (build_packages if build_sway | bool and pkg_mgr == 'apt' else []) }}
+
   tasks:
-    - name: Check the desktop variable
+    - name: Check the variables
       ansible.builtin.assert:
-        that: desktop in ['sway', 'openbox']
-        fail_msg: "desktop must be sway or openbox, not {{ desktop }}"
+        that:
+          - desktop in ['sway', 'openbox']
+          - pkg_mgr in ['apt', 'pacman']
+          - not (build_sway | bool and pkg_mgr != 'apt')
+        fail_msg: >-
+          desktop must be sway or openbox (not {{ desktop }}), the package
+          manager apt or pacman (not {{ pkg_mgr }}), and build_sway is for apt only
 
     # --- System (root) ---------------------------------------------------------
 
-    - name: Install packages
+    - name: Install packages (apt)
+      when: pkg_mgr == 'apt'
       become: true
       ansible.builtin.apt:
         update_cache: true
-        name: >-
-          {{ base_packages
-             + (sway_packages if desktop == 'sway' else openbox_packages)
-             + (build_packages if build_sway | bool else []) }}
+        name: "{{ packages }}"
+
+    - name: Upgrade the system and install packages (pacman)
+      when: pkg_mgr == 'pacman'
+      become: true
+      community.general.pacman:
+        update_cache: true
+        upgrade: true
+        name: "{{ packages }}"
 
     # --- Desktop apps (apps=true) -----------------------------------------------
 
-    - name: Install desktop apps
-      when: apps | bool
+    - name: Install desktop apps (apt)
+      when: apps | bool and pkg_mgr == 'apt'
       become: true
       block:
         - name: Ensure /etc/apt/keyrings exists
@@ -212,7 +320,7 @@
         - name: Install apps from apt
           ansible.builtin.apt:
             update_cache: true
-            name: "{{ app_packages + ['flatpak'] }}"
+            name: "{{ app_packages.apt }}"
 
         - name: Check installed packages
           ansible.builtin.package_facts:
@@ -235,6 +343,40 @@
             label: "{{ item.name }}"
           when: item.name not in ansible_facts.packages
 
+    - name: Install desktop apps (pacman)
+      when: apps | bool and pkg_mgr == 'pacman'
+      block:
+        - name: Install apps from the repos
+          become: true
+          community.general.pacman:
+            name: "{{ app_packages.pacman }}"
+
+        # paru builds as the user and runs pacman through sudo, which can't ask
+        # for the password here: let it run pacman without one, just for this
+        - name: Let paru run pacman without a password
+          become: true
+          ansible.builtin.copy:
+            dest: /etc/sudoers.d/ansible-paru
+            content: "{{ ansible_user_id }} ALL=(root) NOPASSWD: /usr/bin/pacman\n"
+            mode: "0440"
+            validate: visudo -cf %s
+
+        - name: Install apps from the AUR
+          ansible.builtin.command: paru -S --needed --noconfirm --skipreview {{ app_aur | join(' ') }}
+          register: aur
+          changed_when: "'there is nothing to do' not in aur.stdout"
+
+      always:
+        - name: Take paru's pacman permission back
+          become: true
+          ansible.builtin.file:
+            path: /etc/sudoers.d/ansible-paru
+            state: absent
+
+    - name: Install apps from Flathub, and OpenRGB's device access
+      when: apps | bool
+      become: true
+      block:
         - name: Add Flathub
           ansible.builtin.command: >-
             flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -339,12 +481,13 @@
       register: hm
       changed_when: "'Activating' in hm.stdout"
 
-    # --- Hyprland session (hyprland=true) ------------------------------------------
+    # --- Hyprland from Nix (apt, hyprland=true) -----------------------------------
     # Hyprland and its apps come from Nix (home/hosts/nhuto-Mint.nix). The script links the
     # GPU drivers for Nix programs and adds the login session and hyprlock's PAM
-    # setup; rerun it after an NVIDIA update.
+    # setup; rerun it after an NVIDIA update. On pacman the packages above bring
+    # all of that.
     - name: Set up the Hyprland session
-      when: hyprland | bool
+      when: hyprland | bool and pkg_mgr == 'apt'
       become: true
       ansible.builtin.command: "{{ dotfiles }}/build/hyprland/system-setup.sh"
       environment:
@@ -357,7 +500,7 @@
         creates: "{{ ansible_env.HOME }}/.local/bin/sway_auto_floating"
       when: desktop == 'sway'
 
-    # --- Self-built Sway 1.11 and Waybar (build_sway=true) ------------------------
+    # --- Self-built Sway 1.11 and Waybar (apt, build_sway=true) -------------------
 
     - name: Build Sway 1.11 and Waybar
       when: build_sway | bool
