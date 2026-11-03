@@ -77,9 +77,15 @@ fi
 # Not in ~/.profile: it would reach the whole graphical session, Nix apps included
 export LD_LIBRARY_PATH="/usr/local/lib"
 
+# fzf's key bindings and completion, from fzf itself (0.48+; home/common.nix
+# installs a current one), else from Ubuntu's package
 if [[ -t 0 && -t 1 ]]; then
-  source /usr/share/doc/fzf/examples/completion.zsh
-  source /usr/share/doc/fzf/examples/key-bindings.zsh
+  if fzf --zsh >/dev/null 2>&1; then
+    source <(fzf --zsh)
+  else
+    source /usr/share/doc/fzf/examples/completion.zsh
+    source /usr/share/doc/fzf/examples/key-bindings.zsh
+  fi
   bindkey '^Y' fzf-file-widget
 fi
 

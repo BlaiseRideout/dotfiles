@@ -1,5 +1,5 @@
 # Shared by every machine: shell, editors, tmux, powerline, ssh, scripts.
-{ lib, username, dotfilesLink, ... }:
+{ lib, pkgs, username, dotfilesLink, ... }:
 {
   imports = [ ./lib.nix ];
 
@@ -13,6 +13,10 @@
 
   programs.home-manager.enable = true;
   programs.man.enable = false;   # keep the system man, not a Nix copy in front of it
+
+  # A current fzf (Ubuntu 24.04's is 0.44): the shells' key bindings come from
+  # `fzf --zsh` / `fzf --bash`, and hypr/clipboard.sh's vim keys need 0.59+
+  home.packages = [ pkgs.fzf ];
 
   dotfiles.homeFiles = [
     ".profile"
