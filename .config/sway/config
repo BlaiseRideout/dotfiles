@@ -122,7 +122,7 @@ input type:keyboard {
     bindsym $mod+d exec wofi --show drun
 
     # Search files: show or hide FSearch
-    bindsym $mod+s exec ~/.config/sway/scratchpad-app.sh fsearch toggle
+    bindsym $mod+u exec ~/.config/sway/scratchpad-app.sh fsearch toggle
 
     # Smaller than kitty.conf's 165c default so it fits the vertical monitor
     bindsym $mod+r exec $term --class=launcher -o initial_window_width=100c -o initial_window_height=30c bash -c 'compgen -c | grep -v fzf | sort -u | fzf --layout=reverse | xargs swaymsg exec --'
