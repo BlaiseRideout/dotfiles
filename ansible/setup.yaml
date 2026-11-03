@@ -102,8 +102,6 @@
     # Spotify rotates its signing key about yearly; get the new id from
     # https://www.spotify.com/download/linux/ when apt reports NO_PUBKEY
     spotify_key: https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.gpg
-    # Only its udev rules are used (the .deb's dependencies aren't in 24.04)
-    openrgb_deb: https://codeberg.org/OpenRGB/OpenRGB/releases/download/release_1.1/openrgb_1.1_amd64_bookworm_8e16de2.deb
 
     openbox_packages:
       - openbox
@@ -245,25 +243,24 @@
             creates: "/var/lib/flatpak/app/{{ item }}"
           loop: "{{ app_flatpaks }}"
 
-        # OpenRGB needs udev rules to reach the RGB devices without root, and
-        # i2c-dev for motherboard and RAM lighting
-        - name: Download OpenRGB's .deb for its udev rules
-          ansible.builtin.get_url:
-            url: "{{ openrgb_deb }}"
-            dest: /tmp/openrgb.deb
-            mode: "0644"
-          register: openrgb_download
+        # OpenRGB needs udev rules to reach the RGB devices without root (the
+        # Flatpak can't install them itself), and i2c-dev for motherboard and RAM
+        # lighting. The rules come from the installed OpenRGB, so they match it.
+        - name: Get OpenRGB's udev rules
+          ansible.builtin.command: flatpak run org.openrgb.OpenRGB --print-udev-rules
+          register: openrgb_rules
+          changed_when: false
 
         - name: Install OpenRGB's udev rules
-          ansible.builtin.shell: |
-            set -e
-            dir=$(mktemp -d)
-            dpkg-deb -x /tmp/openrgb.deb "$dir"
-            install -m 0644 "$dir/usr/lib/udev/rules.d/60-openrgb.rules" /etc/udev/rules.d/60-openrgb.rules
-            rm -rf "$dir"
-            udevadm control --reload-rules
-            udevadm trigger
-          when: openrgb_download.changed
+          ansible.builtin.copy:
+            dest: /etc/udev/rules.d/60-openrgb.rules
+            content: "{{ openrgb_rules.stdout }}\n"
+            mode: "0644"
+          register: openrgb_rules_file
+
+        - name: Apply the udev rules
+          ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger
+          when: openrgb_rules_file.changed
 
         - name: Load i2c-dev at boot
           ansible.builtin.copy:
