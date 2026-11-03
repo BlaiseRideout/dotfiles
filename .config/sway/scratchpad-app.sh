@@ -41,6 +41,13 @@ if [[ $action == label ]]; then
     exit 0
 fi
 
+# Under Hyprland the config does the work (scratch_toggle in hypr/hyprland.lua) and starts
+# FSearch itself
+if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]]; then
+    [[ $action == toggle ]] && hyprctl -q eval "scratch_toggle('$app')"
+    exit 0
+fi
+
 # The window as "id focused workspace" (the workspace is __i3_scratch while it's hidden)
 window() {
     swaymsg -t get_tree | jq -r --arg app "$APP_ID" --arg title "$TITLE" '

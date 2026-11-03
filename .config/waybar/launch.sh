@@ -12,6 +12,19 @@
 exec 9>"${XDG_RUNTIME_DIR:-/tmp}/waybar-launch.lock"
 flock -n 9 || exit 0
 
+# Whether the compositor this was started from is still running. The systemd user session
+# outlives a login, so without this a launcher left from a Sway session would keep the lock and
+# start Waybar on the next session (Hyprland, say) with the old session's environment.
+# Hyprland is checked first: SWAYSOCK can linger in its environment.
+session_alive() {
+    if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]]; then
+        local lock=$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/hyprland.lock
+        [[ -f $lock ]] && kill -0 "$(head -n1 "$lock")" 2>/dev/null
+    else
+        [[ -z $SWAYSOCK || -S $SWAYSOCK ]]
+    fi
+}
+
 PRIMARY_OUTPUT=${WAYBAR_PRIMARY_CMD:-~/.config/kanshi/primary_output.sh}   # the override is for testing
 POLL=3   # seconds between checks of the primary output
 
@@ -24,7 +37,7 @@ fi
 pid=
 trap '[[ -n $pid ]] && kill "$pid" 2>/dev/null; exit 0' TERM INT HUP
 
-while :; do
+while session_alive; do
     export WAYBAR_PRIMARY
     WAYBAR_PRIMARY=$("$PRIMARY_OUTPUT")
     "$waybar" 9>&- &
@@ -32,6 +45,7 @@ while :; do
     # Wait for Waybar to exit, or for another output to become the primary
     while kill -0 "$pid" 2>/dev/null; do
         sleep "$POLL"
+        session_alive || { kill "$pid" 2>/dev/null; break; }
         [[ $("$PRIMARY_OUTPUT") == "$WAYBAR_PRIMARY" ]] && continue
         sleep 2   # outputs change in several steps; let them settle before restarting
         [[ $("$PRIMARY_OUTPUT") == "$WAYBAR_PRIMARY" ]] || { kill "$pid" 2>/dev/null; break; }

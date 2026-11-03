@@ -55,11 +55,28 @@ fi
 
 OPERATION=$((RANDOM % $NUM_OPS))
 
+# Active outputs, under Sway or Hyprland
+outputs() {
+  if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]]; then
+    hyprctl monitors -j | jq -r '.[].name'
+  else
+    swaymsg -t get_outputs | jq -r '.[] | select(.active == true) | .name'
+  fi
+}
+
+# Hyprland: hyprlock (~/.config/hypr/hyprlock.conf), once system-setup.sh has
+# given it a PAM service it can authenticate with; swaylock below until then
+if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]] && command -v hyprlock >/dev/null &&
+   [[ -e /etc/pam.d/hyprlock && -x /run/wrappers/bin/unix_chkpwd ]]; then
+  pidof hyprlock >/dev/null || exec hyprlock
+  exit 0
+fi
+
 if [[ "$XDG_SESSION_TYPE" == "wayland" ]]; then
   IMAGE=/tmp/i3lock.png
   LOCKARGS="-f"
 
-  for OUTPUT in `swaymsg -t get_outputs | jq -r '.[] | select(.active == true) | .name'`
+  for OUTPUT in $(outputs)
   do
     IMAGE=/tmp/$OUTPUT-lock.png
     grim -o $OUTPUT $IMAGE

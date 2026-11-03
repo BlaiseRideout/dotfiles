@@ -5,9 +5,14 @@
 #
 #   primary_output.sh            read the outputs from sway
 #   primary_output.sh --stdin    read `swaymsg -t get_outputs -r` JSON from stdin (for testing)
+#
+# Also works under Hyprland, whose monitor list is converted to the fields used here.
 
 if [[ $1 == --stdin ]]; then
   outputs=$(cat)
+elif [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]]; then
+  outputs=$(hyprctl monitors all -j | jq '[.[] | {name, model, active: (.disabled | not),
+    current_mode: {width, height}}]')
 else
   outputs=$(swaymsg -t get_outputs -r)
 fi

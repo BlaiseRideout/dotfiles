@@ -75,9 +75,16 @@ def inject(pid):
         return False
 
 
+def sway_running():
+    """False once the Sway that started this has exited. The systemd user session outlives
+    the login, so this would otherwise keep running into the next session (Hyprland, say)."""
+    sock = os.environ.get("SWAYSOCK")
+    return not sock or os.path.exists(sock)
+
+
 def main():
     hooked = None
-    while True:
+    while sway_running():
         pid = main_pid()
         if pid and pid != hooked and inject(pid):
             hooked = pid

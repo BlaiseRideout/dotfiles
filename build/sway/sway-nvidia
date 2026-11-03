@@ -2,6 +2,9 @@
 # Start the self-built Sway 1.11 (explicit sync) with the same NVIDIA settings
 # as /usr/local/bin/sway-nvidia, which still starts the system Sway 1.9.
 # Installed to ~/.local/opt/sway/bin by ansible/setup.yaml (build_sway=true).
+# GDM passes on the systemd user environment, which keeps the last Hyprland
+# session's socket; the scripts would take it to mean they're under Hyprland
+unset HYPRLAND_INSTANCE_SIGNATURE
 export GBM_BACKEND=nvidia-drm
 export __GLX_VENDOR_LIBRARY_NAME=nvidia
 export WLR_NO_HARDWARE_CURSORS=1

@@ -8,13 +8,18 @@
     // "width": 1280, // Waybar width
     "spacing": 5, // Gaps between modules (5px)
     // Choose the order of the modules
+    // Sway's and Hyprland's modules both: Waybar skips the ones for the
+    // compositor that isn't running
     "modules-left": [
         "sway/workspaces",
         "sway/mode",
-        "sway/scratchpad"
+        "sway/scratchpad",
+        "hyprland/workspaces",
+        "hyprland/submap"
     ],
     "modules-center": [
-        "sway/window"
+        "sway/window",
+        "hyprland/window"
     ],
     "sway/language": {
         "format": "  {}",
@@ -48,6 +53,27 @@
             "9": [],
             "10": [], // On every bar like the others; move_workspaces.sh decides where it opens (laptop, TV or secondary)
         }
+    },
+    // Same as sway/workspaces
+    "hyprland/workspaces": {
+        "all-outputs": false,
+        "format": "{icon}  {name}",
+        "format-icons": {
+            "1": "",
+            "2": "",
+            "3": "",
+            "9": "",
+            "10": "",
+            "urgent": "",
+            "default": ""
+        },
+        "persistent-workspaces": {
+            "1": [], "2": [], "3": [], "4": [], "5": [],
+            "6": [], "7": [], "8": [], "9": [], "10": []
+        }
+    },
+    "hyprland/submap": {
+        "format": "<span style=\"italic\">{}</span>"
     },
     "sway/mode": {
         "format": "<span style=\"italic\">{}</span>"

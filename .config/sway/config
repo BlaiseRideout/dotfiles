@@ -325,6 +325,8 @@ include ~/.config/sway/config.d/*
 # name; portals (screen sharing, file pickers) read it to choose backends.
 # The system config.d above only imports DISPLAY, WAYLAND_DISPLAY and SWAYSOCK.
 exec systemctl --user import-environment XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+# and drop a Hyprland session's socket, which scripts would take to mean Hyprland
+exec systemctl --user unset-environment HYPRLAND_INSTANCE_SIGNATURE
 exec dbus-update-activation-environment --systemd XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
 
 
