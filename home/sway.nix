@@ -14,6 +14,10 @@
     "udiskie"
   ];
 
+  # CopyQ's theme in the window colours. Only the theme is linked: the rest of
+  # ~/.config/copyq is CopyQ's own settings and clipboard history
+  xdg.configFile."copyq/themes/wm.ini".source = dotfilesLink ".config/copyq/themes/wm.ini";
+
   # Tray and app icons (blueman, T3 Code)
   xdg.dataFile."icons/hicolor".source = dotfilesLink ".local/share/icons/hicolor";
 
