@@ -122,7 +122,7 @@ command! Wq :execute ':silent w !sudo tee % > /dev/null' | :edit! | :q
 nnoremap Q <nop>
 map D <nop>
 
-set viminfo='20,\"100,:20,%,n~/.viminfo'
+set viminfo='20,\"100,:20,%,n~/.viminfo
 set history=50
 
 set noerrorbells visualbell t_vb=

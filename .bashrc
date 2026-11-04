@@ -135,7 +135,10 @@ function cs {
 alias incognito="set +o history;clear"
 alias uncognito="set -o history;clear"
 
-export EDITOR="vim"
+alias vi="nvim"
+alias vim="nvim"
+export EDITOR="nvim"
+export VISUAL="nvim"
 
 stty -ixon
 

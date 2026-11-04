@@ -25,7 +25,11 @@ if [ -f "$HOME/.cargo/env" ]; then
     export RUSTFLAGS="-C target-cpu=native"
 fi
 
-export GOROOT=/usr/local/go
+if [ -d /usr/local/go ]; then
+    export GOROOT=/usr/local/go
+elif [ -d /usr/lib/go ]; then
+    export GOROOT=/usr/lib/go   # pacman's go
+fi
 export GOPATH="$HOME/prog/go"
 path_append "$GOROOT/bin"
 path_append "$GOPATH/bin"
