@@ -33,7 +33,7 @@
         "warp-on-scroll": false,
         "format": "{icon}  {name}",
         "format-icons": {
-            "1": "",
+            "1": "",
             "2": "",
             "3": "",
             "9": "",
@@ -57,9 +57,15 @@
     // Same as sway/workspaces
     "hyprland/workspaces": {
         "all-outputs": false,
-        "format": "{icon}  {name}",
+        "format": "{icon}  {id}",
         "format-icons": {
-            "1": "",
+            // Hyprland names are icons for Noctalia; keep Waybar's icons too.
+            "": "",
+            "": "",
+            "": "",
+            "": "",
+            "": "",
+            "1": "",
             "2": "",
             "3": "",
             "9": "",

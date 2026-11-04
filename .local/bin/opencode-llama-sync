@@ -1,0 +1,79 @@
+#!/bin/bash
+# Sync the models served by the local llama.cpp router into opencode's (v2) config as the `llamacpp` provider.
+# Only .providers.llamacpp is replaced; everything else in the file is kept. Re-run after downloading a model.
+#   opencode-llama-sync [--port N] [--dry-run]
+set -euo pipefail
+
+CONFIG=${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}
+PORT=${LLAMA_PORT:-9931}
+DRY=0
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --port) PORT=$2; shift 2 ;;
+    --dry-run) DRY=1; shift ;;
+    -h|--help) sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+for c in curl jq; do command -v "$c" >/dev/null || { echo "missing: $c" >&2; exit 1; }; done
+
+models=$(curl -fsS -m 10 "http://127.0.0.1:$PORT/models") || { echo "llama.cpp router not answering on :$PORT" >&2; exit 1; }
+
+# Friendly keys/names for the models we know; anything else gets an automatic slug.
+read -r -d '' KNOWN <<'EOF' || true
+{
+ "DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q4_K_M": ["qwen3.5-9b-defiant", "Qwen3.5 9B Defiant"],
+ "HauhauCS/Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-MTP:Q4_K_M": ["gemma4-26b-a4b-hauhau", "Gemma4 26B-A4B Hauhau (uncensored)"],
+ "Qwen/Qwen2.5-Coder-14B-Instruct-GGUF:Q4_K_M": ["qwen2.5-coder-14b", "Qwen2.5-Coder 14B"],
+ "Qwen/Qwen3-14B-GGUF:Q4_K_M": ["qwen3-14b", "Qwen3 14B"],
+ "ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF:Q4_0": ["nemotron-3.5-lightning-30b", "Nemotron 3.5 Lightning 30B-A3B"],
+ "google/gemma-4-12B-it-qat-q4_0-gguf:Q4_0": ["gemma4-12b", "Gemma 4 12B QAT"],
+ "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF:Q4_0": ["gemma4-26b-a4b", "Gemma 4 26B-A4B QAT"],
+ "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF:Q4_K_M": ["devstral-small-2-24b", "Devstral Small 2 24B"],
+ "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M": ["qwen3-coder-30b-a3b", "Qwen3-Coder 30B-A3B"],
+ "unsloth/Qwen3.8-27B-GGUF:IQ3_S": ["qwen3.8-27b", "Qwen3.8 27B"]
+}
+EOF
+
+# The router sizes each model's context to the VRAM free at load (--fit, never below --fit-ctx 32768), so
+# the true value moves around. 32768 is always safe (the [*] fit-ctx in models.ini); models that routinely get far more are raised
+# to 131072, and Qwen3-Coder is pinned to a guaranteed 65536 by its own fit-ctx section in models.ini.
+read -r -d '' CTX <<'EOF' || true
+{ "qwen3.5-9b-defiant": 131072, "gemma4-12b": 131072, "qwen3-coder-30b-a3b": 65536 }
+EOF
+
+provider=$(jq -n --argjson m "$models" --argjson known "$KNOWN" --argjson ctx "$CTX" --arg port "$PORT" '
+  def slug: split("/") | last | sub(":.*$"; "") | ascii_downcase | sub("-gguf$"; "");
+  def quant: split(":") | if length > 1 then last else "" end;
+  {
+    name: "llama.cpp (local)",
+    package: "@opencode/ai/providers/openai-compatible",
+    settings: { baseURL: "http://127.0.0.1:\($port)/v1" },
+    models: (
+      [ $m.data[] | . as $e
+        | ($known[$e.id] // [($e.id | slug), ($e.id | slug)]) as $k
+        | { key: $k[0],
+            value: {
+              name: "\($k[1]) (\($e.id | quant)) - local",
+              modelID: $e.id,
+              compatibility: { reasoningField: "reasoning_content" },
+              capabilities: {
+                tools: true,
+                input: ([($e.architecture.input_modalities // ["text"])[] | select(. == "text" or . == "image" or . == "audio" or . == "video")]),
+                output: ["text"]
+              },
+              limit: { context: ($ctx[$k[0]] // 32768), output: 8192 }
+            } } ]
+      | sort_by(.key) | from_entries
+    )
+  }')
+
+n=$(jq '.models | length' <<<"$provider")
+new=$(jq --argjson p "$provider" '.providers.llamacpp = $p' "$CONFIG" 2>/dev/null || jq -n --argjson p "$provider" '{"$schema": "https://opencode.ai/config.json", providers: {llamacpp: $p}}')
+
+if ((DRY)); then jq . <<<"$new"; exit 0; fi
+if [[ -f $CONFIG && ! -e $CONFIG.bak ]]; then cp -p "$CONFIG" "$CONFIG.bak"; echo "backed up the previous config to $CONFIG.bak"; fi
+mkdir -p "$(dirname "$CONFIG")"
+printf '%s\n' "$new" | jq . >"$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+echo "wrote $n models to $CONFIG:"
+jq -r '.providers.llamacpp.models | to_entries[] | "  llamacpp/\(.key)\t\(.value.limit.context) ctx\t\(.value.capabilities.input | join("+"))"' "$CONFIG" | column -t -s$'\t'

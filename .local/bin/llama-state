@@ -1,0 +1,39 @@
+#!/bin/bash
+# Remember which llama.cpp model was resident when llama-serve.service stops, and load it again on start.
+#   llama-state save [MAINPID]   (ExecStop)       record the loaded model, else the sleeping one
+#   llama-state restore          (ExecStartPost)  wait for the router, then load the recorded model
+# If nothing is resident at stop, the previous record is kept (so an idle reboot still restores).
+SERVICE=llama-serve.service
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/llama-serve/last-model
+
+find_port() {
+    [[ -n ${LLAMA_PORT:-} ]] && { echo "$LLAMA_PORT"; return; }
+    local pid=${1:-} p=""
+    [[ -n $pid && $pid != 0 ]] || pid=$(systemctl --user show -p MainPID --value "$SERVICE" 2>/dev/null)
+    [[ -n $pid && $pid != 0 ]] && p=$(ss -ltnpH 2>/dev/null |
+        awk -v pat="pid=$pid," '$0 ~ pat {n=split($4,a,":"); print a[n]; exit}')
+    echo "${p:-9931}"
+}
+
+case ${1:-} in
+save)
+    models=$(curl -fsS -m 3 "http://127.0.0.1:$(find_port "${2:-}")/models") || exit 0   # already gone: keep the old record
+    id=$(jq -r '([.data[] | select(.status.value == "loaded")] + [.data[] | select(.status.value == "sleeping")])[0].id // empty' <<<"$models")
+    [[ -n $id ]] || exit 0
+    mkdir -p "$(dirname "$STATE")" && printf '%s\n' "$id" >"$STATE"
+    ;;
+restore)
+    [[ -s $STATE ]] || exit 0
+    id=$(<"$STATE")
+    for _ in $(seq 1 60); do
+        base=http://127.0.0.1:$(find_port)
+        models=$(curl -fsS -m 2 "$base/models" 2>/dev/null) && break
+        sleep 1
+    done
+    [[ -n ${models:-} ]] || exit 0
+    jq -e --arg m "$id" '.data[] | select(.id == $m)' <<<"$models" >/dev/null || exit 0   # model was removed since
+    curl -fsS -m 10 -X POST "$base/models/load" -H 'Content-Type: application/json' \
+        -d "$(jq -nc --arg m "$id" '{model: $m}')" >/dev/null
+    ;;
+*)  echo "usage: llama-state save [MAINPID] | restore" >&2; exit 2 ;;
+esac

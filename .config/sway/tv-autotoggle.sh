@@ -22,6 +22,13 @@ session_alive() {
   fi
 }
 
+# Hyprland writes its lock file a moment after it runs the autostart, so give it a few seconds
+# before deciding the session is gone (else this never starts at login)
+for _ in $(seq 20); do
+  session_alive && break
+  sleep 0.5
+done
+
 TV_URL=http://192.168.0.114:8001/api/v2/
 INTERVAL=3
 
@@ -29,7 +36,9 @@ INTERVAL=3
 # Prints "<name> <active>", or nothing if the TV isn't connected.
 tv_output() {
   if [ -n "$HYPRLAND_INSTANCE_SIGNATURE" ]; then
-    hyprctl monitors all -j | jq -r '.[] | select(.model == "SAMSUNG") | "\(.name) \(.disabled | not)"' | head -1
+    # A TV that was off at login has no EDID, so no model: an HDMI port without one (see tv_set)
+    hyprctl monitors all -j | jq -r '.[] | select(.model == "SAMSUNG" or (.model == "" and (.name | startswith("HDMI-A-"))))
+      | "\(.name) \(.disabled | not)"' | head -1
   else
     swaymsg -t get_outputs -r | jq -r '.[] | select(.model == "SAMSUNG") | "\(.name) \(.active)"' | head -1
   fi

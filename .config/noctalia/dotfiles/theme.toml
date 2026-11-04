@@ -1,0 +1,10 @@
+# Colours: the Waybar palette (palettes/Waybar.json, kitty's Japanesque) instead
+# of colours taken from the wallpaper. The bar's background is the palette's
+# surface.
+[theme]
+source = "custom"
+custom_palette = "Waybar"
+
+# Apps Noctalia recolours. Not kitty (it keeps Japanesque) or GTK 3/4 (Orchis).
+[theme.templates]
+builtin_ids = [ "btop", "kcolorscheme", "qt", "alacritty" ]

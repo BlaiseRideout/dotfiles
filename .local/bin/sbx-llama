@@ -1,0 +1,631 @@
+#!/usr/bin/env bash
+# sbx-llama — run a coding-agent container for the current directory, wired to
+# the host's llama.cpp systemd service, with a choice of harness and network.
+#
+#   sbx-llama [--model ID] [--harness pi|opencode|shell] [--net open|balanced|locked]
+#             [--download OWNER/REPO[:QUANT]] [--remote] [--rebuild] [-- COMMAND...]
+#
+# Network modes:
+#   open      docker --network host. Full passthrough of the host's network: LAN,
+#             loopback services, real nmap results (nmap has CAP_NET_RAW, so -sS/-O work).
+#   balanced  isolated network; the only way out is an allow-list proxy (apt npm pip
+#             cargo go gems github + basic search/docs) plus the llama.cpp port.
+#   locked    isolated network; the only reachable thing is the llama.cpp port.
+#
+# --remote  also serve the session to your phone over Tailscale (and only Tailscale), password-protected:
+#             opencode -> its web UI (the local TUI attaches to the same server, so sessions are shared)
+#             pi/shell -> a ttyd web terminal on the same tmux session as your local terminal
+#             SBX_LLAMA_REMOTE=1 makes it the default.
+#
+# The current directory is bind-mounted at the same path inside the container.
+# Anything after `--` runs instead of the harness (handy for testing a mode).
+
+set -euo pipefail
+
+SERVICE=llama-serve.service
+FALLBACK_PORT=9931
+
+# --- balanced allow-list (fnmatch patterns on hostname; ports 80/443 only) ----
+BALANCED_ALLOW=(
+  # apt (Ubuntu + Debian) and NodeSource
+  archive.ubuntu.com security.ubuntu.com ports.ubuntu.com '*.archive.ubuntu.com'
+  deb.debian.org security.debian.org deb.nodesource.com
+  # npm / yarn
+  registry.npmjs.org '*.npmjs.org' registry.yarnpkg.com
+  # pip
+  pypi.org files.pythonhosted.org
+  # cargo, go, rubygems
+  crates.io index.crates.io static.crates.io
+  proxy.golang.org sum.golang.org rubygems.org index.rubygems.org
+  # git hosting
+  github.com api.github.com codeload.github.com '*.githubusercontent.com' gitlab.com
+  # basic search + reference docs
+  duckduckgo.com html.duckduckgo.com lite.duckduckgo.com links.duckduckgo.com
+  '*.wikipedia.org' stackoverflow.com '*.stackexchange.com'
+  developer.mozilla.org docs.python.org
+)
+
+die()  { echo "sbx-llama: $*" >&2; exit 1; }
+info() { echo "==> $*" >&2; }
+
+# --- args --------------------------------------------------------------------
+if [[ -n ${SBX_LLAMA_ARGS:-} ]]; then   # re-exec under `sg docker` (see below)
+  mapfile -d '' -t _a < <(base64 -d <<<"$SBX_LLAMA_ARGS"); set -- "${_a[@]}"; unset SBX_LLAMA_ARGS
+fi
+ORIG_ARGS=("$@")
+MODEL="" HARNESS="" NET="" DOWNLOAD="" REBUILD=0 REMOTE=${SBX_LLAMA_REMOTE:-0} CMD=()
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --model|-m) MODEL=$2; shift 2 ;;
+    --harness|-H) HARNESS=$2; shift 2 ;;
+    --net|-n) NET=$2; shift 2 ;;
+    --download) DOWNLOAD=$2; shift 2 ;;
+    --remote) REMOTE=1; shift ;;
+    --rebuild) REBUILD=1; shift ;;
+    --) shift; CMD=("$@"); break ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+for c in docker curl jq python3; do command -v "$c" >/dev/null || die "missing dependency: $c"; done
+
+# Group membership only applies to new login sessions; fall back to sg if needed.
+if ! docker info >/dev/null 2>&1; then
+  if [[ -z ${SBX_LLAMA_SG:-} ]] && id -nG "$(id -un)" | grep -qw docker; then
+    export SBX_LLAMA_SG=1
+    if ((${#ORIG_ARGS[@]})); then SBX_LLAMA_ARGS=$(printf '%s\0' "${ORIG_ARGS[@]}" | base64 -w0); export SBX_LLAMA_ARGS; fi
+    exec sg docker -c "$(printf '%q' "$0")"
+  fi
+  die "cannot talk to the docker daemon (is your user in the docker group? re-login)"
+fi
+
+# choose PROMPT ITEM...  → prints the chosen line
+choose() {
+  local prompt=$1; shift
+  [[ -r /dev/tty ]] || die "interactive choice '$prompt' needs a tty; pass flags"
+  if command -v fzf >/dev/null; then
+    # fzf reads the list from the pipe and draws on /dev/tty by itself
+    printf '%s\n' "$@" | fzf --prompt="$prompt > " --height=~40% --reverse --no-multi \
+      --delimiter=$'\t' --tabstop=4
+  else
+    local PS3="$prompt # " item
+    select item in "$@"; do [[ -n ${item:-} ]] && { echo "$item"; break; }; done </dev/tty
+  fi
+}
+
+# --- llama.cpp service -------------------------------------------------------
+if ! systemctl --user is-active --quiet "$SERVICE"; then
+  read -rp "$SERVICE is not running. Start it? [Y/n] " a </dev/tty
+  [[ ${a:-y} =~ ^[Yy] ]] || die "llama.cpp service required"
+  systemctl --user start "$SERVICE"; sleep 2
+fi
+
+detect_port() {
+  [[ -n ${LLAMA_PORT:-} ]] && { echo "$LLAMA_PORT"; return; }
+  local pid p
+  pid=$(systemctl --user show -p MainPID --value "$SERVICE")
+  p=$(ss -ltnpH 2>/dev/null | awk -v pat="pid=$pid," '$0 ~ pat {n=split($4,a,":"); print a[n]; exit}')
+  echo "${p:-$FALLBACK_PORT}"
+}
+PORT=$(detect_port)
+BASE="http://127.0.0.1:$PORT"
+DOWNLOAD_ROW=$'+ Download a model from Hugging Face…\t\t'
+
+# Refresh models_json / MODEL_ROWS / IDS_JSON from the router (any arg = rescan the cache).
+# Row: id <TAB> state <TAB> ctx (ctx-size from the router preset, else the model's max).
+# Already-resident models sort first so the top (default) entry avoids a model reload.
+load_models() {
+  models_json=$(curl -fsS -m 15 "$BASE/models${1:+?reload=1}") || die "llama.cpp not answering on $BASE"
+  mapfile -t MODEL_ROWS < <(jq -r '.data | sort_by({loaded: 0, sleeping: 1}[.status.value // ""] // 2) | .[] |
+    (.status.args // []) as $a |
+    [.id, (.status.value // "?"),
+     (( [range(0; $a|length) | select($a[.]=="--ctx-size") | $a[.+1]] | first) // .context_length // 8192 | tostring)] | @tsv' <<<"$models_json")
+  ((${#MODEL_ROWS[@]})) || die "llama.cpp reports no models"
+  IDS_JSON=$(jq -c '[.data[].id]' <<<"$models_json")
+}
+load_models
+
+# --- Hugging Face download (same flow as Pi's /llama: search → repo → quant → router pulls it)
+hf_get() {   # API path under https://huggingface.co/api/
+  local auth=() t=${HF_TOKEN:-} f
+  if [[ -z $t ]]; then
+    for f in "${HF_TOKEN_PATH:-}" "${HF_HOME:+$HF_HOME/token}" "${XDG_CACHE_HOME:-$HOME/.cache}/huggingface/token"; do
+      [[ -n $f && -r $f ]] && { t=$(<"$f"); break; }
+    done
+  fi
+  [[ -n $t ]] && auth=(-H "Authorization: Bearer $t")
+  curl -fsS -m 15 "${auth[@]}" "https://huggingface.co/api/$1"
+}
+
+HF_QUANTS_JQ='
+  [.siblings[]? | select(.rfilename | test("\\.gguf$"; "i"))
+   | (.rfilename | split("/") | last) as $f | select($f | test("^mmproj"; "i") | not)
+   | ($f[:-5] | sub("-\\d{5}-of-\\d{5}$"; "")
+      | capture("(?:^|[-_.])(?<q>(?:UD-)?(?:IQ\\d(?:_[A-Z0-9]+)+|Q\\d(?:_[A-Z0-9]+)+|BF16|F16|F32|MXFP\\d(?:_[A-Z0-9]+)*))$"; "i")
+      | .q | ascii_upcase) as $q
+   | {q: $q, size: .size}]
+  | group_by(.q)
+  | map({q: .[0].q, size: (map(.size // 0) | add), complete: all(.size != null)})
+  | sort_by([(.q != "Q4_K_M"), .size]) | .[]
+  | [.q, (if .complete then ((.size / 1073741824 * 10 | round / 10 | tostring) + " GiB") else "?" end)] | @tsv'
+
+watch_download() {   # MODEL_ID → 0 when the router finished, 1 on failure
+  local m=$1 ev evs sp seen=0 start=$SECONDS prog status msg break_code=1
+  ev=$(mktemp)
+  curl -sN "$BASE/models/sse" >"$ev" 2>/dev/null & sp=$!
+  trap 'kill "$sp" 2>/dev/null; rm -f "$ev"; echo; exit 130' INT
+  sleep 0.3
+  if ! curl -fsS -m 15 -X POST "$BASE/models" -H 'Content-Type: application/json' \
+         -d "$(jq -nc --arg m "$m" '{model: $m}')" >/dev/null; then
+    kill "$sp" 2>/dev/null; rm -f "$ev"; trap - INT; echo "sbx-llama: router rejected the download request" >&2; return 1
+  fi
+  info "downloading $m  (Ctrl-C stops watching; the router keeps downloading)"
+  while :; do
+    evs=$(sed -n 's/^data: *//p' "$ev" | jq -cR --arg m "$m" 'fromjson? | select(.model == $m)')
+    if grep -q '"download_failed"' <<<"$evs"; then
+      msg=$(jq -rs 'map(select(.event == "download_failed")) | last | .data.error.message? // .data.error? // "download failed"' <<<"$evs")
+      printf '\n' >&2; echo "sbx-llama: download failed: $msg" >&2; break_code=1; break
+    fi
+    grep -q '"download_finished"' <<<"$evs" && { break_code=0; break; }
+    prog=$(jq -rs 'map(select(.event == "download_progress")) | last // empty | (.data.progress // .data)
+        | [to_entries[] | .value | select(type == "object" and (.done | type) == "number")]
+        | select(length > 0) | {d: (map(.done) | add), t: (map(.total) | add)}
+        | select(.t > 0) | "\((.d * 100 / .t) | floor)%  \((.d / 1048576) | floor) / \((.t / 1048576) | floor) MiB"' <<<"$evs" 2>/dev/null || true)
+    [[ -n $prog ]] && { seen=1; printf '\r\033[K    %s' "$prog" >&2; }
+    status=$(curl -fsS -m 5 "$BASE/models" | jq -r --arg m "$m" '.data[] | select(.id == $m) | .status.value' 2>/dev/null || true)
+    [[ $status == downloading ]] && seen=1
+    if [[ -n $status && $status != downloading && $seen == 1 ]]; then break_code=0; break; fi
+    if ((SECONDS - start > 120 && !seen)) && [[ -z $status ]]; then
+      printf '\n' >&2; echo "sbx-llama: no progress from the router after 120s (bad repo name, or a gated repo needing HF_TOKEN in the llama service?)" >&2
+      break_code=1; break
+    fi
+    sleep 0.5
+  done
+  kill "$sp" 2>/dev/null; rm -f "$ev"; trap - INT; printf '\n' >&2
+  return "$break_code"
+}
+
+download_model() {   # [QUERY] → sets DL_ID; returns 1 if the user backs out or it fails
+  local q=${1:-} repo quant="" res rows details gated a
+  if [[ -z $q ]]; then
+    read -rp "Hugging Face search, or owner/repo[:quant] (empty = back): " q </dev/tty
+    [[ -n $q ]] || return 1
+  fi
+  if [[ $q =~ ^[^/[:space:]]+/[^/:[:space:]]+(:[^[:space:]]+)?$ ]]; then
+    repo=${q%%:*}; [[ $q == *:* ]] && quant=${q#*:}
+  else
+    res=$(hf_get "models?$(jq -rn --arg q "$q" '"search=\($q | @uri)&filter=gguf&sort=downloads&direction=-1&limit=20"')") \
+      || { echo "sbx-llama: Hugging Face search failed" >&2; return 1; }
+    mapfile -t rows < <(jq -r '.[] | [.id, "\(.downloads // 0) downloads"] | @tsv' <<<"$res")
+    ((${#rows[@]})) || { echo "sbx-llama: no GGUF repositories match '$q'" >&2; return 1; }
+    repo=$(choose "repository" "${rows[@]}"); repo=${repo%%$'\t'*}
+  fi
+  if [[ -z $quant ]]; then   # explicit owner/repo:quant needs no lookup; the router reports bad repos itself
+    details=$(hf_get "models/$repo?blobs=true") || { echo "sbx-llama: cannot read $repo on Hugging Face" >&2; return 1; }
+    gated=$(jq -r '.gated // false' <<<"$details")
+    if [[ $gated != false ]]; then
+      echo "sbx-llama: $repo is gated ($gated approval): accept its terms at https://huggingface.co/$repo," >&2
+      echo "           and the llama service itself needs HF_TOKEN set to download it." >&2
+      read -rp "Try anyway? [y/N] " a </dev/tty; [[ ${a:-n} =~ ^[Yy] ]] || return 1
+    fi
+    mapfile -t rows < <(jq -r "$HF_QUANTS_JQ" <<<"$details")
+    if ((${#rows[@]})); then quant=$(choose "quantization" "${rows[@]}"); quant=${quant%%$'\t'*}
+    else info "no recognisable quantizations in $repo; letting the router pick its default"; fi
+  fi
+  DL_ID="$repo${quant:+:$quant}"
+  watch_download "$DL_ID"
+}
+
+if [[ -n $DOWNLOAD ]]; then
+  download_model "$DOWNLOAD" || die "download failed"
+  load_models reload; MODEL=$DL_ID
+fi
+
+if [[ -z $MODEL ]]; then
+  while :; do
+    pick=$(choose "model" "${MODEL_ROWS[@]}" "$DOWNLOAD_ROW")
+    if [[ $pick == "+ Download"* ]]; then
+      if download_model; then load_models reload; MODEL=$DL_ID; break; fi
+    else
+      MODEL=${pick%%$'\t'*}; break
+    fi
+  done
+fi
+
+CTX=""
+for r in "${MODEL_ROWS[@]}"; do [[ ${r%%$'\t'*} == "$MODEL" ]] && CTX=${r##*$'\t'}; done
+if [[ -z $CTX && ${DL_ID:-} == "$MODEL" ]]; then   # router may have stored it under its default quant
+  for r in "${MODEL_ROWS[@]}"; do [[ ${r%%$'\t'*} == "${MODEL%%:*}"* ]] && { MODEL=${r%%$'\t'*}; CTX=${r##*$'\t'}; break; }; done
+fi
+[[ -n $CTX ]] || die "model not served by llama.cpp: $MODEL"
+
+# The service runs with --fit, which sizes each model's context to the VRAM free when it loads,
+# so the real value only exists once the model is resident: load it now and read it back.
+state=$(jq -r --arg m "$MODEL" '.data[] | select(.id == $m) | .status.value' <<<"$models_json")
+if [[ $state != loaded && $state != sleeping ]]; then
+  info "loading $MODEL (llama.cpp fits its context to the free VRAM)"
+  # With --models-max 1 the router answers 500 "model limit reached, try again later" while another swap is in flight
+  for attempt in $(seq 1 30); do
+    curl -fsS -m 15 -X POST "$BASE/models/load" -H 'Content-Type: application/json' \
+      -d "$(jq -nc --arg m "$MODEL" '{model: $m}')" >/dev/null 2>&1 && break
+    ((attempt == 30)) && die "router refused to load $MODEL (another client may be mid-swap)"
+    sleep 2
+  done
+  for _ in $(seq 1 900); do
+    st=$(curl -fsS -m 5 "$BASE/models" | jq -r --arg m "$MODEL" '.data[] | select(.id == $m) | "\(.status.value) \(.status.failed // false)"')
+    [[ $st == loaded* ]] && break
+    [[ $st == *true ]] && die "$MODEL failed to load (see: journalctl --user -u $SERVICE)"
+    sleep 1
+  done
+  [[ $st == loaded* ]] || die "timed out loading $MODEL"
+fi
+real_ctx=$(curl -fsS -m 5 "$BASE/props?model=$(jq -rn --arg m "$MODEL" '$m | @uri')&autoload=false" 2>/dev/null |
+           jq -r '.default_generation_settings.n_ctx // empty') || true
+[[ $real_ctx =~ ^[0-9]+$ ]] && CTX=$real_ctx
+MAXTOK=$(( CTX / 4 > 16384 ? 16384 : CTX / 4 ))
+
+[[ -z $HARNESS ]] && HARNESS=$(choose "harness" pi opencode shell)
+case $HARNESS in pi|opencode|shell) ;; *) die "unknown harness: $HARNESS" ;; esac
+
+if [[ -z $NET ]]; then
+  NET=$(choose "network" \
+    $'open\thost network passthrough (LAN, nmap works)' \
+    $'balanced\tllama.cpp + apt/npm/pip/cargo/go/gems/github + search & docs' \
+    $'locked\tllama.cpp port only')
+  NET=${NET%%$'\t'*}
+fi
+case $NET in open|balanced|locked) ;; *) die "unknown network mode: $NET" ;; esac
+
+# --- image -------------------------------------------------------------------
+build_image() {
+  local ctx; ctx=$(mktemp -d)
+  cat >"$ctx/allowproxy.py" <<'PY'
+#!/usr/bin/env python3
+"""Tiny allow-list HTTP/CONNECT proxy. ALLOW=comma-separated fnmatch host patterns."""
+import fnmatch, ipaddress, os, select, socket, sys, threading
+from urllib.parse import urlsplit
+ALLOW = [p.strip().lower() for p in os.environ.get("ALLOW", "").split(",") if p.strip()]
+
+def allowed(host):
+    host = host.lower().rstrip(".")
+    return any(fnmatch.fnmatch(host, p) for p in ALLOW)
+
+def dial(host, port):
+    if port not in (80, 443) or not allowed(host):
+        raise PermissionError(f"{host}:{port}")
+    for fam, typ, proto, _, addr in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+        ip = ipaddress.ip_address(addr[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            continue                       # allow-listed name resolving to a LAN address: refuse
+        s = socket.socket(fam, typ, proto); s.settimeout(15)
+        try: s.connect(addr); s.settimeout(None); return s
+        except OSError: s.close()
+    raise ConnectionError(host)
+
+def relay(a, b):
+    socks = [a, b]
+    try:
+        while True:
+            r, _, _ = select.select(socks, [], [], 300)
+            if not r: return
+            for s in r:
+                d = s.recv(65536)
+                if not d: return
+                (b if s is a else a).sendall(d)
+    except OSError: pass
+    finally:
+        for s in socks:
+            try: s.close()
+            except OSError: pass
+
+def handle(c):
+    try:
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            d = c.recv(65536)
+            if not d: return c.close()
+            buf += d
+        head, _, rest = buf.partition(b"\r\n\r\n")
+        line, _, hdrs = head.partition(b"\r\n")
+        method, target, ver = line.decode("latin1").split(" ", 2)
+        try:
+            if method == "CONNECT":
+                host, _, port = target.rpartition(":")
+                u = dial(host.strip("[]"), int(port))
+                c.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                if rest: u.sendall(rest)
+            else:
+                p = urlsplit(target)
+                u = dial(p.hostname, p.port or 80)
+                path = (p.path or "/") + ("?" + p.query if p.query else "")
+                keep = [h for h in hdrs.split(b"\r\n") if h and not h.lower().startswith((b"proxy-", b"connection:"))]
+                u.sendall(f"{method} {path} {ver}\r\n".encode() + b"\r\n".join(keep) + b"\r\nConnection: close\r\n\r\n" + rest)
+        except PermissionError as e:
+            sys.stderr.write(f"DENY {e}\n"); sys.stderr.flush()
+            c.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"); return c.close()
+        except (OSError, ValueError):
+            c.sendall(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"); return c.close()
+        relay(c, u)
+    except Exception:
+        try: c.close()
+        except OSError: pass
+
+srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("0.0.0.0", 3128)); srv.listen(128)
+while True:
+    conn, _ = srv.accept()
+    threading.Thread(target=handle, args=(conn,), daemon=True).start()
+PY
+  cat >"$ctx/entry.sh" <<'SH'
+#!/bin/sh
+# Point apt at the allow-list proxy when one is configured.
+if [ -n "$HTTP_PROXY" ]; then
+  printf 'Acquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' "$HTTP_PROXY" "$HTTP_PROXY" > /home/agent/.apt-proxy.conf
+else
+  : > /home/agent/.apt-proxy.conf
+fi
+exec "$@"
+SH
+  cat >"$ctx/tmux.conf" <<'TM'
+set -g mouse on
+set -g status off
+set -g history-limit 50000
+set -sg escape-time 10
+set -g extended-keys on
+setw -g window-size latest
+set -g default-terminal "tmux-256color"
+set -ga terminal-overrides ",*:Tc"
+TM
+  cat >"$ctx/remote-init.sh" <<'SH'
+#!/bin/sh
+# PID 1 of a --remote container: the harness runs in tmux session "main" (so the local terminal and the
+# phone share it) behind a front-end for the phone. The container ends when the session does.
+#   env: REMOTE_KIND=ttyd|opencode  REMOTE_PORT  REMOTE_BIND  REMOTE_IFACE  REMOTE_USER  REMOTE_PASS
+set -e
+PORT=${REMOTE_PORT:-7681}
+case "$REMOTE_KIND" in
+  opencode)   # OPENCODE_SERVER_USERNAME/PASSWORD are set by the launcher and read by server and `attach`
+    opencode web --hostname "${REMOTE_BIND:-0.0.0.0}" --port "$PORT" >/tmp/opencode-web.log 2>&1 &
+    i=0
+    until curl -s -o /dev/null -u "$REMOTE_USER:$REMOTE_PASS" "http://${REMOTE_BIND:-127.0.0.1}:$PORT/"; do
+      i=$((i + 1)); [ "$i" -gt 90 ] && { cat /tmp/opencode-web.log >&2; exit 1; }; sleep 1
+    done ;;
+  ttyd)
+    ttyd -W -p "$PORT" ${REMOTE_IFACE:+-i "$REMOTE_IFACE"} -c "$REMOTE_USER:$REMOTE_PASS" \
+      -t fontSize=15 -t titleFixed=sbx-llama tmux attach -t main >/tmp/ttyd.log 2>&1 & ;;
+esac
+tmux new-session -d -s main "$@"
+while tmux has-session -t main 2>/dev/null; do sleep 1; done
+kill $(jobs -p) 2>/dev/null || true
+SH
+  cat >"$ctx/Dockerfile" <<'DF'
+FROM node:22-bookworm
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git curl ca-certificates ripgrep jq less sudo procps openssh-client \
+      python3 python3-pip python3-venv build-essential \
+      nmap libcap2-bin iputils-ping dnsutils netcat-openbsd \
+      tmux qrencode \
+ && rm -rf /var/lib/apt/lists/* \
+ && (userdel -r node 2>/dev/null || true) \
+ && groupadd -g "$HOST_GID" agent 2>/dev/null || true \
+ && useradd -m -d /home/agent -u "$HOST_UID" -g "$HOST_GID" -s /bin/bash agent \
+ && echo 'agent ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/agent \
+ && setcap cap_net_raw+eip "$(command -v nmap)" \
+ && mkdir -p /home/agent/.pi /home/agent/.local/share/opencode /home/agent/.config \
+ && touch /home/agent/.apt-proxy.conf \
+ && ln -sf /home/agent/.apt-proxy.conf /etc/apt/apt.conf.d/99proxy \
+ && chown -R agent:"$HOST_GID" /home/agent
+# ttyd is not packaged for bookworm: pinned upstream static binary, checksum-verified
+RUN curl -fsSL -o /usr/local/bin/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64 \
+ && echo "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55  /usr/local/bin/ttyd" | sha256sum -c - \
+ && chmod 755 /usr/local/bin/ttyd
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent \
+ && npm install -g opencode-ai
+COPY allowproxy.py /opt/allowproxy.py
+COPY entry.sh /usr/local/bin/entry
+COPY remote-init.sh /usr/local/bin/remote-init
+COPY tmux.conf /etc/tmux.conf
+RUN chmod 755 /opt/allowproxy.py /usr/local/bin/entry /usr/local/bin/remote-init
+ENV HOME=/home/agent NMAP_PRIVILEGED=1 COLORTERM=truecolor
+USER agent
+ENTRYPOINT ["/usr/local/bin/entry"]
+CMD ["bash", "-l"]
+DF
+  IMG="sbx-llama:$(cat "$ctx"/* | sha1sum | cut -c1-10)-u$(id -u)"
+  if ((REBUILD)) || ! docker image inspect "$IMG" >/dev/null 2>&1; then
+    info "building $IMG (first run only; a few minutes)"
+    docker build -q -t "$IMG" --build-arg HOST_UID="$(id -u)" --build-arg HOST_GID="$(id -g)" "$ctx" >/dev/null
+  fi
+  rm -rf "$ctx"
+}
+build_image
+
+# --- per-workspace state (harness history/config survives the --rm container) -
+WS=$PWD
+slug=$(basename "$WS" | tr -c 'A-Za-z0-9\n' '-' | sed 's/^-*//; s/-*$//' | cut -c1-24)
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/sbx-llama/${slug:-root}-$(printf %s "$WS" | sha1sum | cut -c1-6)"
+mkdir -p "$STATE/pi/agent" "$STATE/opencode"
+
+# --- network plumbing --------------------------------------------------------
+RUN_ID="$$"
+NETNAME="" PROXY_NAME="" RUN_NAME="" FWD_PY="" FWD_PIDS=()
+cleanup() {
+  ((${#FWD_PIDS[@]})) && kill "${FWD_PIDS[@]}" 2>/dev/null || true
+  [[ -n $FWD_PY ]] && rm -f "$FWD_PY"
+  [[ -n $RUN_NAME ]] && docker rm -f "$RUN_NAME" >/dev/null 2>&1 || true
+  [[ -n $PROXY_NAME ]] && docker rm -f "$PROXY_NAME" >/dev/null 2>&1 || true
+  [[ -n $NETNAME ]] && docker network rm "$NETNAME" >/dev/null 2>&1 || true
+}
+forward() {   # BIND_IP BIND_PORT TARGET_HOST TARGET_PORT — relay TCP until this script exits
+  if [[ -z $FWD_PY ]]; then
+    FWD_PY=$(mktemp --suffix=.py)
+    cat >"$FWD_PY" <<'PY'
+import socket, sys, threading
+bind, bport, thost, tport = sys.argv[1], int(sys.argv[2]), sys.argv[3], int(sys.argv[4])
+srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind((bind, bport)); srv.listen(64)
+def pipe(a, b):
+    try:
+        while d := a.recv(65536): b.sendall(d)
+    except OSError: pass
+    for s in (a, b):
+        try: s.shutdown(socket.SHUT_RDWR)
+        except OSError: pass
+while True:
+    c, _ = srv.accept()
+    try: u = socket.create_connection((thost, tport))
+    except OSError: c.close(); continue
+    threading.Thread(target=pipe, args=(c, u), daemon=True).start()
+    threading.Thread(target=pipe, args=(u, c), daemon=True).start()
+PY
+  fi
+  python3 "$FWD_PY" "$@" & FWD_PIDS+=($!)
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
+
+NETARGS=() ENVARGS=()
+case $NET in
+  open)
+    LLAMA_HOST=127.0.0.1
+    NETARGS=(--network host --cap-add NET_RAW)
+    ;;
+  locked|balanced)
+    NETNAME="sbx-llama-net-$RUN_ID"
+    docker network create --internal "$NETNAME" >/dev/null
+    GW=$(docker network inspect "$NETNAME" -f '{{(index .IPAM.Config 0).Gateway}}')
+    LLAMA_HOST=$GW
+    # llama.cpp listens on host loopback only; relay it to the gateway IP of this
+    # isolated network (reachable from the container, and from nothing else).
+    forward "$GW" "$PORT" 127.0.0.1 "$PORT"
+    NETARGS=(--network "$NETNAME")
+    if [[ $NET == balanced ]]; then
+      PROXY_NAME="sbx-llama-proxy-$RUN_ID"
+      docker create --name "$PROXY_NAME" --network "$NETNAME" --network-alias proxy \
+        --user nobody --cap-drop ALL --read-only \
+        -e "ALLOW=$(IFS=,; echo "${BALANCED_ALLOW[*]}")" \
+        --entrypoint python3 "$IMG" -u /opt/allowproxy.py >/dev/null
+      docker network connect bridge "$PROXY_NAME"      # the proxy is the only container with a route out
+      docker start "$PROXY_NAME" >/dev/null
+      P=http://proxy:3128
+      ENVARGS+=(-e "HTTP_PROXY=$P" -e "HTTPS_PROXY=$P" -e "http_proxy=$P" -e "https_proxy=$P"
+                -e "NO_PROXY=$GW,localhost,127.0.0.1" -e "no_proxy=$GW,localhost,127.0.0.1"
+                -e NODE_USE_ENV_PROXY=1)
+    fi
+    ;;
+esac
+LLAMA_URL="http://$LLAMA_HOST:$PORT/v1"
+
+# --- harness config + command ------------------------------------------------
+case $HARNESS in
+  pi)
+    jq -n --arg url "$LLAMA_URL" --argjson ctx "$CTX" --argjson max "$MAXTOK" --argjson ids "$IDS_JSON" '{
+      providers: {llamacpp: {baseUrl: $url, api: "openai-completions", apiKey: "sk-local",
+        models: [$ids[] | {id: ., name: ., reasoning: false, input: ["text"],
+                           contextWindow: $ctx, maxTokens: $max}]}}}' >"$STATE/pi/agent/models.json"
+    jq -n --arg m "$MODEL" '{defaultProvider: "llamacpp", defaultModel: $m}' >"$STATE/pi/agent/settings.json"
+    MOUNTS=(-v "$STATE/pi:/home/agent/.pi")
+    DEFAULT_CMD=(pi)
+    ;;
+  opencode)
+    cfg=$(jq -nc --arg url "$LLAMA_URL" --arg m "llamacpp/$MODEL" --argjson ctx "$CTX" --argjson max "$MAXTOK" \
+          --argjson ids "$IDS_JSON" '{
+      "$schema": "https://opencode.ai/config.json", model: $m, small_model: $m, autoupdate: false,
+      provider: {llamacpp: {npm: "@ai-sdk/openai-compatible", name: "llama.cpp (host)",
+        options: {baseURL: $url, apiKey: "sk-local"},
+        models: ($ids | map({key: ., value: {name: ., limit: {context: $ctx, output: $max}}}) | from_entries)}}}')
+    ENVARGS+=(-e "OPENCODE_CONFIG_CONTENT=$cfg")
+    MOUNTS=(-v "$STATE/opencode:/home/agent/.local/share/opencode")
+    DEFAULT_CMD=(opencode)
+    ;;
+  shell)
+    ENVARGS+=(-e "OPENAI_BASE_URL=$LLAMA_URL" -e OPENAI_API_KEY=sk-local -e "LLAMA_MODEL=$MODEL")
+    MOUNTS=()
+    DEFAULT_CMD=(bash -l)
+    ;;
+esac
+USER_CMD=${#CMD[@]}
+((${#CMD[@]})) || CMD=("${DEFAULT_CMD[@]}")
+
+if ((REMOTE)); then
+  # ---- phone access: Tailscale address only, basic auth, same tmux session as the local terminal
+  command -v tailscale >/dev/null || die "--remote needs tailscale"
+  TS_IP=$(tailscale ip -4 2>/dev/null | head -1)
+  [[ -n $TS_IP ]] || die "tailscale is not connected (tailscale up)"
+  TS_IF=$(ip -4 -o addr show to "$TS_IP" | awk '{print $2; exit}')
+  REMOTE_USER=agent
+  PASSFILE="${XDG_STATE_HOME:-$HOME/.local/state}/sbx-llama/remote-password"
+  if [[ ! -s $PASSFILE ]]; then
+    mkdir -p "$(dirname "$PASSFILE")"
+    (umask 077; head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | cut -c1-24 >"$PASSFILE")
+  fi
+  REMOTE_PASS=$(<"$PASSFILE")
+  RPORT=$(python3 -c 'import socket, sys; s = socket.socket(); s.bind((sys.argv[1], 0)); print(s.getsockname()[1])' "$TS_IP")
+  kind=ttyd; CPORT=7681; [[ $HARNESS == opencode ]] && { kind=opencode; CPORT=4096; }
+  if [[ $NET == open ]]; then          # shares the host network: bind to the Tailscale interface only
+    REMOTE_ENV=(-e "REMOTE_PORT=$RPORT" -e "REMOTE_BIND=$TS_IP" -e "REMOTE_IFACE=$TS_IF"); LOCAL_ADDR=$TS_IP; CPORT=$RPORT
+  else                                  # isolated network: a host relay on the Tailscale address reaches it
+    REMOTE_ENV=(-e "REMOTE_PORT=$CPORT"); LOCAL_ADDR=127.0.0.1
+  fi
+  ((USER_CMD)) || { [[ $HARNESS == opencode ]] && CMD=(opencode attach "http://$LOCAL_ADDR:$CPORT"); }
+  RUN_NAME="sbx-llama-$HARNESS-$RUN_ID"
+  info "$HARNESS · $MODEL · net=$NET · $LLAMA_URL · remote on"
+  docker run -d --rm --name "$RUN_NAME" \
+    --user "$(id -u):$(id -g)" \
+    "${NETARGS[@]}" "${ENVARGS[@]}" "${MOUNTS[@]}" "${REMOTE_ENV[@]}" \
+    -e "REMOTE_KIND=$kind" -e "REMOTE_USER=$REMOTE_USER" -e "REMOTE_PASS=$REMOTE_PASS" \
+    -e "OPENCODE_SERVER_USERNAME=$REMOTE_USER" -e "OPENCODE_SERVER_PASSWORD=$REMOTE_PASS" \
+    -e "TERM=${TERM:-xterm-256color}" -e "LLAMA_URL=$LLAMA_URL" \
+    -v "$WS:$WS" -w "$WS" \
+    "$IMG" remote-init "${CMD[@]}" >/dev/null
+  for _ in $(seq 1 120); do
+    docker exec "$RUN_NAME" tmux has-session -t main 2>/dev/null && break
+    docker inspect -f '{{.State.Running}}' "$RUN_NAME" 2>/dev/null | grep -q true || { docker logs "$RUN_NAME" 2>&1 | tail -5 >&2; die "container exited during startup"; }
+    sleep 1
+  done
+  docker exec "$RUN_NAME" tmux has-session -t main 2>/dev/null || die "remote session did not start"
+  if [[ $NET != open ]]; then
+    CIP=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$NETNAME\").IPAddress}}" "$RUN_NAME")
+    forward "$TS_IP" "$RPORT" "$CIP" "$CPORT"
+  fi
+  URL="http://$TS_IP:$RPORT/"
+  {
+    echo
+    echo "  Remote access (Tailscale only)"
+    echo "    URL       $URL"
+    echo "    user      $REMOTE_USER"
+    echo "    password  $REMOTE_PASS   (saved in $PASSFILE)"
+    docker run --rm --network none --entrypoint qrencode "$IMG" -t ANSIUTF8 -m 1 "$URL" 2>/dev/null | sed 's/^/    /'
+    if [[ -n ${TMUX:-} ]]; then   # nested: the keys below reach the *inner* (container) tmux, not yours
+      echo "    You're inside tmux, so this is a nested session. Plain Ctrl-b d would detach YOUR tmux."
+      echo "    Detach just the agent session with Ctrl-b Ctrl-b d (or your Ctrl-b b toggle, then Ctrl-b d)."
+      echo "    Either way the session keeps running for the phone."
+    else
+      echo "    Ctrl-b d detaches this terminal and leaves the session running for the phone."
+    fi
+    echo
+  } >&2
+  if [[ -t 0 && -t 1 ]]; then
+    while :; do
+      docker exec -it -e "TERM=${TERM:-xterm-256color}" "$RUN_NAME" tmux attach -t main || true
+      docker inspect -f '{{.State.Running}}' "$RUN_NAME" 2>/dev/null | grep -q true || break
+      read -rp "Detached; still reachable from your phone at $URL  [r]eattach / [s]top: " a </dev/tty
+      [[ ${a:-r} =~ ^[Ss] ]] && break
+    done
+  else
+    docker wait "$RUN_NAME" >/dev/null & wait $!   # `wait` lets TERM/HUP traps run immediately
+  fi
+  exit 0   # the EXIT trap stops the container, relays and network
+fi
+
+TTY=(-i); [[ -t 0 && -t 1 ]] && TTY=(-it)
+info "$HARNESS · $MODEL · net=$NET · $LLAMA_URL"
+docker run --rm "${TTY[@]}" --name "sbx-llama-$HARNESS-$RUN_ID" \
+  --user "$(id -u):$(id -g)" \
+  "${NETARGS[@]}" "${ENVARGS[@]}" "${MOUNTS[@]}" \
+  -e "TERM=${TERM:-xterm-256color}" -e "LLAMA_URL=$LLAMA_URL" \
+  -v "$WS:$WS" -w "$WS" \
+  "$IMG" "${CMD[@]}"

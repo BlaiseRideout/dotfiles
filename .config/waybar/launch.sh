@@ -25,19 +25,26 @@ session_alive() {
     fi
 }
 
+# Hyprland writes its lock file a moment after it runs the autostart, so give it a few seconds
+# before deciding the session is gone (else Waybar never starts at login)
+for _ in {1..20}; do
+    session_alive && break
+    sleep 0.5
+done
+
 PRIMARY_OUTPUT=${WAYBAR_PRIMARY_CMD:-~/.config/kanshi/primary_output.sh}   # the override is for testing
 POLL=3   # seconds between checks of the primary output
-
-if [[ -x ~/.local/opt/waybar/bin/waybar ]]; then
-    waybar=~/.local/opt/waybar/bin/waybar
-else
-    waybar=$(command -v waybar) || exit 1
-fi
 
 pid=
 trap '[[ -n $pid ]] && kill "$pid" 2>/dev/null; exit 0' TERM INT HUP
 
 while session_alive; do
+    # Picked on every start, so a fresh build is used after the next restart
+    if [[ -x ~/.local/opt/waybar/bin/waybar ]]; then
+        waybar=~/.local/opt/waybar/bin/waybar
+    else
+        waybar=$(command -v waybar) || exit 1
+    fi
     export WAYBAR_PRIMARY
     WAYBAR_PRIMARY=$("$PRIMARY_OUTPUT")
     "$waybar" 9>&- &

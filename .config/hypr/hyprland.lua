@@ -6,15 +6,16 @@
 -- Check this file without a running session:
 --   Hyprland --verify-config -c ~/.config/hypr/hyprland.lua
 -- Hyprland reloads it on save. `hyprctl eval '<lua>'` runs code in this file's
--- Lua state, which is how the scripts and Waybar call the functions below.
+-- Lua state, which is how the scripts and bars call the functions below.
 --
 -- Hypr apps rather than the Sway ones: hyprpaper (wallpapers), hypridle and
 -- hyprlock (idle and lock; lock.sh), hyprpolkitagent (admin prompts),
 -- xdg-desktop-portal-hyprland (screen sharing) and grimblast (screenshots).
 -- Their configs are next to this file. fuzzel (.config/fuzzel) is the launcher
 -- for apps, commands and windows, replacing wofi and Sway's kitty + fzf
--- launcher; the clipboard history (cliphist, replacing CopyQ) is fzf in kitty. Waybar, mako, kitty and the
--- rest stay as on Sway.
+-- launcher; the clipboard history (cliphist, replacing CopyQ) is fzf in kitty.
+-- Noctalia replaces Waybar, hyprpaper, mako and the polkit agent where it's
+-- installed (see AUTOSTART); kitty and the rest stay as on Sway.
 --
 -- Tiling is left to Hyprland's own layouts (dwindle, or master/scrolling per
 -- workspace with $mod+m) rather than Sway's manual splits, so splith/splitv/
@@ -63,10 +64,33 @@ local tv_on = false
 for _, m in ipairs(hl.get_monitors() or {}) do
     if is_tv(m) then tv_on = true end
 end
-hl.monitor({ output = TV, mode = "1920x1080@60", position = "6200x0", scale = 1, disabled = not tv_on })
+local function tv_rule(output, on)
+    hl.monitor({ output = output, mode = "1920x1080@60", position = "6200x0", scale = 1, disabled = not on })
+end
+tv_rule(TV, tv_on)
+
+-- A TV that's off at login sends no EDID: it shows up as an HDMI port with no
+-- description, lit at 1024x768 but never drawing a frame, which hangs anything
+-- waiting on every output (grim). Keep that port off too, by name, until
+-- tv-autotoggle.sh sees the TV on the network.
+local tv_port = nil
+local tv_wanted = tv_on   -- last tv_set(); a port it turned on stays on
+local function catch_blind_tv()
+    if tv_wanted then return end
+    for _, m in ipairs(hl.get_monitors() or {}) do
+        if (m.name or ""):find("^HDMI%-A%-") and (m.description or "") == "" then
+            tv_port = m.name
+            tv_rule(tv_port, false)
+        end
+    end
+end
+catch_blind_tv()
+hl.on("monitor.added", catch_blind_tv)
 
 function tv_set(on)
-    hl.monitor({ output = TV, disabled = not on })
+    tv_wanted = on
+    tv_rule(TV, on)
+    if tv_port then tv_rule(tv_port, on) end
 end
 
 
@@ -85,6 +109,9 @@ end
 local function focus_ws(id)
     hl.dispatch(hl.dsp.focus({ workspace = id }))
 end
+
+-- Noctalia uses workspace names for its icon labels; numeric IDs and binds stay the same.
+local workspace_icons = { "", "", "", "", "", "", "", "", "", "" }
 
 function place_workspaces(keep_view)
     local mons = hl.get_monitors() or {}
@@ -124,8 +151,17 @@ function place_workspaces(keep_view)
 
     for i = 1, 10 do
         -- Repeating a rule for the same workspace replaces its monitor
-        hl.workspace_rule({ workspace = tostring(i), monitor = target[i].name })
+        -- A lone tiled window is at most 2:1 and centered, on ultrawides only
+        local t = target[i]
+        local ultrawide = t.width >= 2 * t.height
+        hl.workspace_rule({
+            workspace = tostring(i), monitor = t.name, default_name = workspace_icons[i],
+            layout_opts = { single_window_aspect_ratio = ultrawide and "2 1" or "0 0" },
+        })
         local ws = hl.get_workspace(i)
+        if ws then
+            hl.dispatch(hl.dsp.workspace.rename({ workspace = i, name = workspace_icons[i] }))
+        end
         if ws and ws.monitor and ws.monitor.name ~= target[i].name then
             hl.dispatch(hl.dsp.workspace.move({ workspace = i, monitor = target[i].name }))
         end
@@ -319,16 +355,23 @@ hl.on("hyprland.start", function()
 
     place_workspaces(false)
 
-    -- Waybar (launch.sh picks the Hyprland config and restarts it when the primary changes)
-    exec(home .. "/.config/waybar/launch.sh")
-    -- Follow GTK_THEME from ~/.config/environment.d (zz-local.conf overrides it per machine)
-    exec([[gsettings set org.gnome.desktop.interface gtk-theme "$GTK_THEME"; gsettings set org.gnome.desktop.interface color-scheme prefer-dark]])
-    exec("hyprpaper")
+    -- XWayland's resource database starts empty; nvim's xresources theme reads
+    -- its colors from it
+    exec("xrdb -merge " .. home .. "/.Xresources")
+
+    -- Noctalia (CachyOS's shell, .config/noctalia) is the bar, and also draws
+    -- the wallpapers (wallpaper.toml), shows notifications and asks for admin
+    -- passwords. Without it (nhuto-Mint): hyprpaper, the Hypr polkit agent
+    -- (the distro's, or Nix's linked by home/hosts/nhuto-Mint.nix), and mako,
+    -- which D-Bus starts on the first notification. No bar there.
+    if succeeds("command -v noctalia") then
+        exec("noctalia")
+    else
+        exec("hyprpaper")
+        exec("for a in " .. home .. "/.local/libexec/hyprpolkitagent /usr/lib/hyprpolkitagent/hyprpolkitagent"
+             .. " /usr/libexec/hyprpolkitagent; do [ -x \"$a\" ] && exec \"$a\"; done")
+    end
     exec("hypridle")
-    -- Admin password prompts (pkexec, package installers): the distro's agent,
-    -- or Nix's (linked by home/hosts/nhuto-Mint.nix)
-    exec("for a in " .. home .. "/.local/libexec/hyprpolkitagent /usr/lib/hyprpolkitagent/hyprpolkitagent"
-         .. " /usr/libexec/hyprpolkitagent; do [ -x \"$a\" ] && exec \"$a\"; done")
     -- Clipboard history for $mod+v (clipboard.sh). CopyQ stays Sway's: its
     -- autostart entry has NotShowIn=Hyprland
     exec("wl-paste --type text --watch cliphist store")
@@ -337,7 +380,6 @@ hl.on("hyprland.start", function()
     exec(swaydir .. "/tv-autotoggle.sh")
 
     exec("dex --autostart --environment Hyprland")
-    exec("nm-applet")
     exec("command -v mintupdate-launcher >/dev/null && exec mintupdate-launcher")   -- Mint's updates
     exec("udiskie --no-tray")
     exec(swaydir .. "/selection-to-clipboard.sh")
@@ -406,8 +448,8 @@ hl.config({
     -- Splits follow the window's shape (wider than tall: side by side), and are
     -- worked out again when windows come and go
     dwindle = { preserve_split = false },
-    -- A lone tiled window is at most 2:1 and centered (center_single.py on Sway)
-    layout = { single_window_aspect_ratio = { 2, 1 } },
+    -- The 2:1 cap on a lone tiled window is per workspace, for ultrawide
+    -- monitors only (see place_workspaces); everything else fills the screen
     render = {
         -- Don't tell the monitor a fullscreen window's content type (game,
         -- video...): changing it takes a modeset, and the screens went blank
@@ -519,7 +561,8 @@ local function run(cmd) return hl.dsp.exec_cmd(cmd) end
 -- Basics
 bind("Return", run(term))
 hl.bind("CTRL + SHIFT + Escape", run(term .. " htop"))   -- task manager, like Windows
-bind("w", run("x-www-browser"))
+-- x-www-browser is Debian's; elsewhere the default browser's .desktop entry
+bind("w", run([[command -v x-www-browser >/dev/null && exec x-www-browser; exec gtk-launch "$(xdg-settings get default-web-browser)"]]))
 bind("e", run("xdg-open ~"))   -- default folder handler (Nemo)
 bind("k", run("keepassxc"))
 bind("q", hl.dsp.window.close())
@@ -531,8 +574,9 @@ bind("u", function() scratch_toggle("fsearch") end)   -- search files: show or h
 bind("r", fuzzel(hyprdir .. "/run-launcher.sh"))
 -- Clipboard history: fzf in a kitty window, for its preview (the script toggles it)
 bind("v", run(hyprdir .. "/clipboard.sh"))
-bind("BackSpace", run("makoctl dismiss"))
-bind("SHIFT + BackSpace", run("makoctl dismiss -a"))
+-- Noctalia can only dismiss them all
+bind("BackSpace", run("makoctl dismiss || noctalia msg notification-clear-active"))
+bind("SHIFT + BackSpace", run("makoctl dismiss -a || noctalia msg notification-clear-active"))
 bind("l", run("~/scripts/lock.sh"))
 bind("SHIFT + r", hl.dsp.reload_config())
 bind("SHIFT + q", run([[swaynag -t warning -m 'You pressed the exit shortcut. Do you really want to exit Hyprland? This will end your Wayland session.' -B 'Yes, exit Hyprland' 'hyprctl dispatch "hl.dsp.exit()"']]))

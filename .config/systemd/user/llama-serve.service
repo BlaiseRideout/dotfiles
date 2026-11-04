@@ -1,8 +1,7 @@
 [Unit]
 Description=LLaMA Serve Router Server
 After=network.target
-# Models live on the NTFS partition (~/.cache/huggingface/hub is a symlink into it): don't start with the cache missing
-ConditionPathIsMountPoint=/mnt/files
+# Models live in ~/.local/share/huggingface (~/.cache/huggingface is a symlink to it)
 
 [Service]
 Type=simple

@@ -105,7 +105,8 @@ input type:keyboard {
     bindsym Ctrl+Shift+Escape exec $term htop
 
     # Start browser
-    bindsym $mod+w exec x-www-browser
+    # x-www-browser is Debian's; elsewhere the default browser's .desktop entry
+    bindsym $mod+w exec 'command -v x-www-browser >/dev/null && exec x-www-browser; exec gtk-launch "$(xdg-settings get default-web-browser)"'
 
     # Start file manager
     # Default folder handler (xdg-mime query default inode/directory)
@@ -337,11 +338,6 @@ exec dbus-update-activation-environment --systemd XDG_CURRENT_DESKTOP XDG_SESSIO
 # the primary one, and restarts it when that changes. A reload kills Waybar; the running
 # launcher starts it again, so the second launcher exits straight away
 exec_always 'killall waybar; exec ~/.config/waybar/launch.sh'
-exec {
-  # Follow GTK_THEME from ~/.config/environment.d (zz-local.conf overrides it per machine)
-  gsettings set org.gnome.desktop.interface gtk-theme "$GTK_THEME"
-  gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
-}
 
 # Start XDG autostart .desktop files using dex. See also
 # https://wiki.archlinux.org/index.php/XDG_Autostart

@@ -1,0 +1,47 @@
+# The stats in the bar (bar.toml places them): small gauges with an icon and
+# no numbers, which are in the tooltips. The llama.cpp and ZMK battery meters
+# are plugins in ~/.local/share/noctalia/plugins, linked from the dotfiles.
+
+[plugins]
+enabled = [ "blaise/llama-meter", "blaise/zmk-battery" ]
+
+[widget.sysmon_2]
+type = "sysmon"
+stat = "gpu_temp"
+glyph = "temperature"
+visualization = "gauge"
+show_value = false
+
+[widget.sysmon_gpu]
+type = "sysmon"
+stat = "gpu_usage"
+glyph = "gpu-usage"
+visualization = "gauge"
+show_value = false
+
+[widget.sysmon_cpu_temp]
+type = "sysmon"
+stat = "cpu_temp"
+glyph = "temperature"
+visualization = "gauge"
+show_value = false
+
+[widget.sysmon_cpu]
+type = "sysmon"
+stat = "cpu_usage"
+glyph = "cpu"
+visualization = "gauge"
+show_value = false
+
+[widget.sysmon_3]
+type = "sysmon"
+stat = "ram_used"
+glyph = "database"
+visualization = "gauge"
+show_value = false
+
+[widget.llama]
+type = "blaise/llama-meter:meter"
+
+[widget.zmk]
+type = "blaise/zmk-battery:meter"

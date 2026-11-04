@@ -1,13 +1,14 @@
 #!/bin/sh
 # Build Waybar into a private prefix, checked out at an unreleased master commit
-# (pinned in ansible/setup.yaml) because the tray's ignore-list isn't in 0.15.0 yet. Ubuntu
-# 24.04 ships 0.9.24, which lacks it too. fmt, spdlog and gtk-layer-shell are
-# newer than Ubuntu's, so meson downloads and builds them as subprojects.
-# Wayland comes from the private prefix built for Sway (build/sway/build.sh
-# in the dotfiles); the system has no libwayland-dev.
+# (pinned in ansible/setup.yaml) because the tray's ignore-list and icon
+# wildcards aren't in 0.15.0 yet (Arch's version; Ubuntu 24.04 ships 0.9.24).
 #
-# Needs: sudo apt install libgtkmm-3.0-dev libjsoncpp-dev libsigc++-2.0-dev \
-#   libdbusmenu-gtk3-dev libpulse-dev libxkbregistry-dev
+# Ubuntu: fmt, spdlog and gtk-layer-shell are newer than Ubuntu's, so meson
+# downloads and builds them as subprojects. Wayland comes from the private
+# prefix built for Sway (build/sway/build.sh in the dotfiles); the system has
+# no libwayland-dev. Needs: sudo apt install libgtkmm-3.0-dev libjsoncpp-dev \
+#   libsigc++-2.0-dev libdbusmenu-gtk3-dev libpulse-dev libxkbregistry-dev
+# Arch: the waybar package's dependencies, plus meson and ninja. No Sway prefix.
 #
 # Optional features are off apart from the ones the config uses (tray,
 # pulseaudio, backlight via udev). Re-run to rebuild.
@@ -17,8 +18,10 @@ SRC=${SRC:-$HOME/.local/src/waybar}   # the Waybar checkout
 PREFIX=${PREFIX:-$HOME/.local/opt/waybar}
 SWAY=${SWAY:-$HOME/.local/opt/sway}
 
-export PKG_CONFIG_PATH="$SWAY/lib/pkgconfig:$SWAY/share/pkgconfig"
-export LDFLAGS="-Wl,-rpath,$SWAY/lib"
+if [ -d "$SWAY/lib" ]; then
+  export PKG_CONFIG_PATH="$SWAY/lib/pkgconfig:$SWAY/share/pkgconfig"
+  export LDFLAGS="-Wl,-rpath,$SWAY/lib"
+fi
 
 # Waybar master also enumerates the "leds" subsystem for keyboard backlights, with
 # no filter, so on a desktop the backlight module latches onto Caps Lock and

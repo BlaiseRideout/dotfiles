@@ -1,0 +1,29 @@
+# Noctalia's wallpapers: the same picks as hypr/hyprpaper.conf and
+# sway/home_wallpapers.json. Each monitor gets a random image from its own
+# folder, changed every 15 minutes. Merged over CachyOS's config.toml.
+#
+# A monitor's `match` is its connector name or one whole word of its
+# description/make/model/serial (`hyprctl monitors`). Anything unmatched
+# (laptop panel, TV, other desks) uses the global `directory`.
+#
+# A wallpaper picked in the panel is saved to state/noctalia/settings.toml,
+# which loads last and wins over this file until the next rotation.
+
+[wallpaper]
+fill_mode = "crop"
+directory = "/home/blaise/images/wallpapers/holo/wide"
+per_monitor_directories = true
+
+[wallpaper.automation]
+enabled = true
+interval_seconds = 900
+order = "random"
+recursive = false
+
+[wallpaper.monitor.ultrawide]
+match = "G95C" # Samsung Odyssey G95C
+directory = "/home/blaise/images/wallpapers/holo/dualwide"
+
+[wallpaper.monitor.vertical]
+match = "24G15N" # AOC 24G15N
+directory = "/home/blaise/images/wallpapers/holo/vertical"

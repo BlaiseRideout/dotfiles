@@ -1,5 +1,5 @@
 # Shared by every machine: shell, editors, tmux, powerline, ssh, scripts.
-{ lib, username, dotfilesLink, ... }:
+{ config, lib, username, dotfilesLink, ... }:
 {
   imports = [ ./lib.nix ];
 
@@ -41,8 +41,21 @@
     "gsimplecal"
   ];
 
+  # GTK's theme, icons and font: the files in the repo, so nwg-look (which writes
+  # through the links) edits them in place. ansible/setup.yaml installs the
+  # Orchis-Pink-Dark theme and Flatery-Pink-Dark icons these name.
+  xdg.configFile."gtk-3.0/settings.ini".source = dotfilesLink ".config/gtk-3.0/settings.ini";
+  xdg.configFile."gtk-4.0/settings.ini".source = dotfilesLink ".config/gtk-4.0/settings.ini";
+  # libadwaita apps (Nautilus) read gtk-4.0/gtk.css: it imports Orchis-Pink-Dark and adds tweaks.
+  # The dark file and images are the theme's own, as Orchis's `install.sh -l` links them.
+  xdg.configFile."gtk-4.0/gtk.css".source = dotfilesLink ".config/gtk-4.0/gtk.css";
+  xdg.configFile."gtk-4.0/gtk-dark.css".source =
+    config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/.themes/Orchis-Pink-Dark/gtk-4.0/gtk-dark.css";
+  xdg.configFile."gtk-4.0/assets".source =
+    config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/.themes/Orchis-Pink-Dark/gtk-4.0/assets";
+
   # environment.d is linked per file so a machine can add its own
-  # (e.g. a gitignored zz-local.conf, linked from hosts/<host>.nix)
+  # (e.g. a gitignored file linked from hosts/<host>.nix)
   xdg.configFile."environment.d/ssh-agent.conf".source =
     dotfilesLink ".config/environment.d/ssh-agent.conf";
 

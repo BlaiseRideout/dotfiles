@@ -22,9 +22,6 @@
   # Tray and app icons (blueman, T3 Code)
   xdg.dataFile."icons/hicolor".source = dotfilesLink ".local/share/icons/hicolor";
 
-  xdg.configFile."environment.d/gtk.conf".source =
-    dotfilesLink ".config/environment.d/gtk.conf";
-
   # Waybar icons and the backlight glyphs
   fonts.fontconfig.enable = true;
   home.packages = with pkgs; [

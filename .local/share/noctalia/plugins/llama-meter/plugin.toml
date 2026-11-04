@@ -1,0 +1,59 @@
+# llama.cpp token rate as a small meter, for the llama-serve router (llama-serve.service).
+# Port of ~/.config/waybar/llama.sh: the service polls the router once a second and
+# publishes a snapshot; each bar's widget only draws it, so a bar per monitor doesn't
+# multiply the polling.
+#
+#   generating  live tokens/s while a request runs (n_decoded from /slots, sampled each second)
+#   last        rate of the most recent request (/metrics counters), held for hold_seconds
+#   idle        lifetime average generation rate
+# Hidden unless a model is loaded. Needs the router to run with --metrics.
+
+id = "blaise/llama-meter"
+name = "llama.cpp Meter"
+version = "1.0.0"
+plugin_api = 43
+author = "blaise"
+license = "MIT"
+icon = "robot"
+description = "Token rate of a local llama.cpp router as a small meter."
+tags = ["bar", "ai", "indicator"]
+
+[[setting]]
+key = "base_url"
+type = "string"
+label_key = "settings.base_url.label"
+description_key = "settings.base_url.description"
+default = "http://127.0.0.1:9931"
+
+[[setting]]
+key = "max_rate"
+type = "int"
+label_key = "settings.max_rate.label"
+description_key = "settings.max_rate.description"
+default = 100
+min = 10
+max = 1000
+
+[[setting]]
+key = "hold_seconds"
+type = "int"
+label_key = "settings.hold_seconds.label"
+description_key = "settings.hold_seconds.description"
+default = 15
+min = 0
+max = 300
+
+[[setting]]
+key = "show_value"
+type = "bool"
+label_key = "settings.show_value.label"
+description_key = "settings.show_value.description"
+default = false
+
+[[widget]]
+id = "meter"
+entry = "widget.luau"
+
+[[service]]
+id = "poller"
+entry = "service.luau"

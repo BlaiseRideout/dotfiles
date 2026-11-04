@@ -1,0 +1,65 @@
+# The bar, styled like Waybar: the palette's background at 50%, white text,
+# rounded bottom corners (CachyOS's config.toml sets those) and 13px text.
+# The stats widgets in `end` are defined in meters.toml.
+
+[bar.default]
+background_opacity = 0.5
+thickness = 30
+scale = 1.0
+font_scale = 0.9285714
+font_weight = 400
+padding = 10
+widget_spacing = 12
+radius = 12
+shadow = false
+border_width = 0
+capsule = false
+# Every widget's colour, unless it sets its own
+color = "#ffffff"
+icon_color = "#ffffff"
+# CachyOS's widgets, without the launcher, the spacers or the stats capsule
+start = [ "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "llama", "zmk" ]
+end = [ "media", "tray", "volume", "network", "caffeine", "notifications", "clock", "session" ]
+
+[widget.workspaces]
+font_scale = 1.1
+pill_scale = 0.9
+capsule = false
+capsule_radius = 12
+style = "focus_hint"
+show_labels = true
+show_icons = false
+label_source = "name"
+max_label_chars = 2
+focused_color = "#ffffff"
+occupied_color = "#ffffff"
+empty_color = "#ffffff"
+urgent_color = "#ffffff"
+
+[widget.active_window]
+display = "text_only"
+max_length = 520
+
+[widget.tray]
+capsule = false
+
+# CachyOS gives the widgets below their own colour (secondary, or error for
+# session), so the bar's white is repeated on each
+
+[widget.clock]
+color = "#ffffff"
+format = "{:%a, %b %d %R}"
+
+[widget.network]
+color = "#ffffff"
+show_label = false
+
+[widget.notifications]
+color = "#ffffff"
+
+[widget.volume]
+color = "#ffffff"
+show_label = false
+
+[widget.session]
+color = "#ffffff"

@@ -1,0 +1,30 @@
+{
+  "settings": {
+    "base_url": {
+      "label": "Router URL",
+      "description": "Address of the llama.cpp router (llama serve), without a trailing path"
+    },
+    "max_rate": {
+      "label": "Full meter at (t/s)",
+      "description": "Token rate that fills the meter"
+    },
+    "hold_seconds": {
+      "label": "Hold last rate (s)",
+      "description": "How long the last request's rate stays up before the lifetime average returns"
+    },
+    "show_value": {
+      "label": "Show value",
+      "description": "Print the token rate next to the meter"
+    }
+  },
+  "tooltip": {
+    "models": "llama.cpp",
+    "now": "Now",
+    "prefill": "reading the prompt",
+    "idle": "idle",
+    "last": "Last request",
+    "average": "Average generation",
+    "prompt": "Average prompt processing",
+    "busy": "Busy slots"
+  }
+}

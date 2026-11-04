@@ -1,0 +1,14 @@
+# The dotfiles' Noctalia config, one file per concern in dotfiles/:
+#   theme.toml      palette (palettes/Waybar.json) and which apps it recolours
+#   bar.toml        the bar's layout and look, Waybar style
+#   meters.toml     the stats: sysmon gauges, llama.cpp and ZMK battery plugins
+#   wallpaper.toml  per-monitor wallpaper rotation
+#
+# Noctalia merges every *.toml in this folder in name order, so this file loads
+# after CachyOS's own config.toml and overrides it; the included files don't
+# overlap. A list (like bar.default.end) is replaced whole, not merged.
+# Settings changed in the GUI go to ~/.local/state/noctalia/settings.toml,
+# which loads last and wins over all of these.
+
+[include]
+files = [ "dotfiles/" ]

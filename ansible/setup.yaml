@@ -11,7 +11,8 @@
 #   ansible-playbook setup.yaml -e desktop=openbox     # Openbox + tint2 machine
 #   ansible-playbook setup.yaml -e apps=false          # skip the desktop apps
 #   ansible-playbook setup.yaml -e hyprland=true       # ...plus Hyprland (default on nhuto, nhuto-Mint)
-#   ansible-playbook setup.yaml -e build_sway=true     # apt: self-built Sway 1.11 + Waybar (default on nhuto-Mint)
+#   ansible-playbook setup.yaml -e build_sway=true     # apt: self-built Sway 1.11 + Waybar (default on nhuto-Mint; Waybar is built on pacman too)
+#   ansible-playbook setup.yaml -e llama_update=true   # update llama.cpp (installed by default on nhuto, nhuto-Mint)
 #
 # It asks for the sudo password once. Safe to re-run; on pacman each run also
 # upgrades the system (installing after a bare `pacman -Sy` risks a partial
@@ -29,7 +30,16 @@
     # apt only: build Sway 1.11 + Waybar into ~/.local/opt, as NVIDIA needs
     # newer than Ubuntu's. A workaround for nhuto-Mint (the desktop on Mint).
     build_sway: "{{ ansible_hostname == 'nhuto-Mint' }}"
+    # Build Waybar from waybar_version: everywhere on pacman (Arch's 0.15.0 lacks the
+    # tray features bar.jsonc uses); on apt it needs build_sway's Wayland
+    build_waybar: "{{ build_sway | bool or pkg_mgr == 'pacman' }}"
     apps: true             # GIMP, Spotify, VS Code, Discord, etc. (see below)
+    # llama.cpp from llama.app's prebuilt binaries (CUDA here), for llama-serve.service
+    # (home/hosts/nhuto.nix). Installed once; -e llama_update=true fetches the latest,
+    # or -e llama_version=b12019 a given build.
+    llama: "{{ ansible_hostname in ['nhuto', 'nhuto-Mint'] }}"
+    llama_update: false
+    llama_version: ""
     hm_config: "{{ ansible_user_id }}@{{ ansible_hostname }}"
     dotfiles: "{{ ansible_env.HOME }}/.dotfiles"
     dotfiles_repo: https://github.com/BlaiseRideout/dotfiles.git
@@ -44,9 +54,17 @@
       - { name: pixman,   repo: "https://gitlab.freedesktop.org/pixman/pixman.git",    version: "pixman-0.46.4" }
       - { name: wlroots,  repo: "https://gitlab.freedesktop.org/wlroots/wlroots.git",  version: "0.19.3" }
       - { name: sway,     repo: "https://github.com/swaywm/sway.git",                  version: "1.11" }
-    # Unreleased master, for the tray ignore-list (see build/waybar/build.sh)
+    # Unreleased master plus the tray icon wildcard patch (the fork's tray-icons-glob
+    # branch), for the tray ignore-list and custom icons (see build/waybar/build.sh)
+    waybar_repo: https://github.com/BlaiseRideout/Waybar.git
     waybar_src: "{{ ansible_env.HOME }}/.local/src/waybar"
     waybar_version: 7121ff779c89da1cb0a81aa4b1ae0f1b9e098716
+
+    # The GTK theme and icons in .config/gtk-{3,4}.0/settings.ini, built from their repos
+    orchis_repo: https://github.com/vinceliuice/Orchis-theme.git
+    orchis_src: "{{ ansible_env.HOME }}/.local/src/orchis-theme"
+    flatery_repo: https://github.com/cbrnix/Flatery.git
+    flatery_src: "{{ ansible_env.HOME }}/.local/src/flatery"
 
     # Package lists per package manager, same order in both
     base_packages:
@@ -68,11 +86,13 @@
         - lm-sensors
         - x11-xserver-utils # xrdb, xmodmap
         - feh
+        - sassc             # builds the Orchis GTK theme
       pacman:
         - git
         - curl
         - xz
         - base-devel
+        - tree-sitter-cli   # nvim-treesitter needs the CLI, not just libtree-sitter
         - zsh
         - tmux
         - fzf
@@ -86,6 +106,7 @@
         - xorg-xrdb
         - xorg-xmodmap
         - feh
+        - sassc             # builds the Orchis GTK theme
 
     sway_packages:
       apt:
@@ -204,6 +225,12 @@
     spotify_key: https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.gpg
 
     # apt only: for build/sway/build.sh and build/waybar/build.sh
+    # pacman: for build/waybar/build.sh; the waybar package brings its libraries
+    waybar_build_packages:
+      - meson
+      - ninja
+      - glib2-devel      # gdbus-codegen
+
     build_packages:
       - meson
       - ninja-build
@@ -254,7 +281,8 @@
       {{ base_packages[pkg_mgr]
          + (sway_packages[pkg_mgr] if desktop == 'sway' else openbox_packages[pkg_mgr])
          + (hyprland_packages if hyprland | bool and pkg_mgr == 'pacman' else [])
-         + (build_packages if build_sway | bool and pkg_mgr == 'apt' else []) }}
+         + (build_packages if build_sway | bool and pkg_mgr == 'apt' else [])
+         + (waybar_build_packages if build_waybar | bool and pkg_mgr == 'pacman' else []) }}
 
   tasks:
     - name: Check the variables
@@ -263,9 +291,11 @@
           - desktop in ['sway', 'openbox']
           - pkg_mgr in ['apt', 'pacman']
           - not (build_sway | bool and pkg_mgr != 'apt')
+          - not (build_waybar | bool and pkg_mgr == 'apt' and not build_sway | bool)
         fail_msg: >-
           desktop must be sway or openbox (not {{ desktop }}), the package
-          manager apt or pacman (not {{ pkg_mgr }}), and build_sway is for apt only
+          manager apt or pacman (not {{ pkg_mgr }}), build_sway is for apt only, and on
+          apt build_waybar needs build_sway
 
     # --- System (root) ---------------------------------------------------------
 
@@ -276,13 +306,23 @@
         update_cache: true
         name: "{{ packages }}"
 
-    - name: Upgrade the system and install packages (pacman)
+    - name: Upgrade the system (pacman)
       when: pkg_mgr == 'pacman'
       become: true
       community.general.pacman:
         update_cache: true
         upgrade: true
+
+    - name: Install packages (pacman)
+      when: pkg_mgr == 'pacman'
+      become: true
+      community.general.pacman:
+        update_cache: true
         name: "{{ packages }}"
+
+    - name: Install Neovim's Python provider
+      community.general.pipx:
+        name: pynvim
 
     # --- Desktop apps (apps=true) -----------------------------------------------
 
@@ -481,6 +521,48 @@
       register: hm
       changed_when: "'Activating' in hm.stdout"
 
+    # --- llama.cpp (llama=true) -----------------------------------------------------
+    # The installer replaces ~/.llama-app (what the service runs) and copies the
+    # binary to ~/.local/bin/llama. It downloads ~560 MB, so only when missing or asked.
+    - name: Set up llama.cpp
+      when: llama | bool
+      block:
+        - name: Check for llama.cpp
+          ansible.builtin.stat:
+            path: "{{ ansible_env.HOME }}/.llama-app/llama"
+          register: llama_bin
+
+        - name: Install llama.cpp
+          ansible.builtin.shell: set -o pipefail; curl -fsSL https://llama.app/install.sh | sh
+          args:
+            executable: /bin/bash
+          environment:
+            LLAMA_VERSION: "{{ llama_version }}"   # empty: the latest
+          when: llama_update | bool or not llama_bin.stat.exists
+          register: llama_install
+
+        # Models live on a native Linux filesystem: the NTFS files disk can't hold the
+        # symlinks Hugging Face's cache needs (ntfs3 shows them as unreadable stubs).
+        - name: Create the model cache
+          ansible.builtin.file:
+            path: "{{ ansible_env.HOME }}/.local/share/huggingface"
+            state: directory
+            mode: "0755"
+
+        - name: Link ~/.cache/huggingface to the model cache
+          ansible.builtin.file:
+            src: "{{ ansible_env.HOME }}/.local/share/huggingface"
+            dest: "{{ ansible_env.HOME }}/.cache/huggingface"
+            state: link
+
+        # Home Manager links the unit and enables it (default.target.wants)
+        - name: Start llama-serve, restarting it onto a new binary
+          ansible.builtin.systemd:
+            name: llama-serve.service
+            scope: user
+            daemon_reload: true
+            state: "{{ 'restarted' if llama_install.changed else 'started' }}"
+
     # --- Hyprland from Nix (apt, hyprland=true) -----------------------------------
     # Hyprland and its apps come from Nix (home/hosts/nhuto-Mint.nix). The script links the
     # GPU drivers for Nix programs and adds the login session and hyprlock's PAM
@@ -494,15 +576,45 @@
         SUDO_USER: "{{ ansible_user_id }}"
       changed_when: true
 
+    # --- GTK theme and icons ----------------------------------------------------------
+    # Orchis-Pink-Dark into ~/.themes and Flatery-Pink-Dark into ~/.local/share/icons. The settings
+    # files that select them, and the gtk-4.0 links for libadwaita apps, come from
+    # Home Manager; nwg-look changes the settings.
+
+    - name: Fetch the GTK theme and icon sources
+      ansible.builtin.git:
+        repo: "{{ item.repo }}"
+        dest: "{{ item.dest }}"
+        depth: 1
+        update: false
+      loop:
+        - { repo: "{{ orchis_repo }}", dest: "{{ orchis_src }}" }
+        - { repo: "{{ flatery_repo }}", dest: "{{ flatery_src }}" }
+      loop_control:
+        label: "{{ item.dest }}"
+
+    - name: Install the Orchis-Pink-Dark GTK theme
+      ansible.builtin.command: ./install.sh -d "{{ ansible_env.HOME }}/.themes" -t pink -c dark -s standard
+      args:
+        chdir: "{{ orchis_src }}"
+        creates: "{{ ansible_env.HOME }}/.themes/Orchis-Pink-Dark"
+
+    # install.sh lists its own folder, so it runs from there
+    - name: Install the Flatery-Pink-Dark icons
+      ansible.builtin.command: ./install.sh -v "Pink-Dark"
+      args:
+        chdir: "{{ flatery_src }}"
+        creates: "{{ ansible_env.HOME }}/.local/share/icons/Flatery-Pink-Dark"
+
     - name: Install sway_auto_floating (floating rules)
       ansible.builtin.command: pipx install git+https://github.com/artemave/sway_auto_floating
       args:
         creates: "{{ ansible_env.HOME }}/.local/bin/sway_auto_floating"
       when: desktop == 'sway'
 
-    # --- Self-built Sway 1.11 and Waybar (apt, build_sway=true) -------------------
+    # --- Self-built Sway 1.11 (apt, build_sway=true) -------------------------------
 
-    - name: Build Sway 1.11 and Waybar
+    - name: Build Sway 1.11
       when: build_sway | bool
       block:
         - name: Fetch Sway sources
@@ -515,17 +627,16 @@
             label: "{{ item.name }} {{ item.version }}"
           register: sway_git
 
-        - name: Check for built Sway and Waybar
+        - name: Check for built Sway
           ansible.builtin.stat:
-            path: "{{ ansible_env.HOME }}/.local/opt/{{ item }}/bin/{{ item }}"
-          loop: [sway, waybar]
-          register: built
+            path: "{{ ansible_env.HOME }}/.local/opt/sway/bin/sway"
+          register: sway_built
 
         - name: Build Sway (takes a few minutes)
           ansible.builtin.command: "{{ dotfiles }}/build/sway/build.sh"
           environment:
             SRC: "{{ sway_src }}"
-          when: sway_git.changed or not built.results[0].stat.exists
+          when: sway_git.changed or not sway_built.stat.exists
 
         - name: Install the Sway NVIDIA launcher
           ansible.builtin.copy:
@@ -546,23 +657,34 @@
               Type=Application
               DesktopNames=sway
 
+    # --- Self-built Waybar (build_waybar=true) --------------------------------------
+    # launch.sh prefers it over the system one
+
+    - name: Build Waybar
+      when: build_waybar | bool
+      block:
         # force: build.sh patches a source file, which git would otherwise refuse to overwrite
         - name: Fetch Waybar source
           ansible.builtin.git:
-            repo: https://github.com/Alexays/Waybar
+            repo: "{{ waybar_repo }}"
             dest: "{{ waybar_src }}"
             version: "{{ waybar_version }}"
             force: true
           register: waybar_git
 
+        - name: Check for built Waybar
+          ansible.builtin.stat:
+            path: "{{ ansible_env.HOME }}/.local/opt/waybar/bin/waybar"
+          register: waybar_built
+
+        # Rebuilt after a Sway rebuild too on apt: it links the Sway prefix's Wayland
         - name: Build Waybar
           ansible.builtin.command: "{{ dotfiles }}/build/waybar/build.sh"
           environment:
             SRC: "{{ waybar_src }}"
-          when: waybar_git.changed or sway_git.changed or not built.results[1].stat.exists
+          when: waybar_git.changed or (sway_git.changed | default(false)) or not waybar_built.stat.exists
 
-        # The system package is gone, so `waybar` in a terminal runs this one
-        # (launch.sh uses the full path)
+        # So `waybar` in a terminal runs this one (launch.sh uses the full path)
         - name: Link Waybar into ~/.local/bin
           ansible.builtin.file:
             src: "{{ ansible_env.HOME }}/.local/opt/waybar/bin/waybar"
