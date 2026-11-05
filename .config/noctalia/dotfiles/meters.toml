@@ -6,11 +6,9 @@
 [plugins]
 enabled = [ "blaise/bar-button", "blaise/llama-meter", "blaise/media", "blaise/zmk-battery" ]
 
-# Widget scale multiplies bar scale: 0.8 * 1.25 = 1.0.
-# This gives every gauge a 4x12 track beside a 16px glyph, with a
-# whole-pixel 2px centering offset instead of rounding 2.5px.
+# Keep all meters at widget scale 1.0 (effective 1.25 with the bar scale).
 [widget.sysmon_2]
-scale = 0.8
+scale = 1.0
 type = "sysmon"
 stat = "gpu_temp"
 glyph = "temperature"
@@ -18,7 +16,7 @@ visualization = "gauge"
 show_value = false
 
 [widget.sysmon_gpu]
-scale = 0.8
+scale = 1.0
 type = "sysmon"
 stat = "gpu_usage"
 glyph = "gpu-usage"
@@ -26,7 +24,7 @@ visualization = "gauge"
 show_value = false
 
 [widget.sysmon_cpu_temp]
-scale = 0.8
+scale = 1.0
 type = "sysmon"
 stat = "cpu_temp"
 glyph = "temperature"
@@ -34,7 +32,7 @@ visualization = "gauge"
 show_value = false
 
 [widget.sysmon_cpu]
-scale = 0.8
+scale = 1.0
 type = "sysmon"
 stat = "cpu_usage"
 glyph = "cpu"
@@ -42,7 +40,7 @@ visualization = "gauge"
 show_value = false
 
 [widget.sysmon_3]
-scale = 0.8
+scale = 1.0
 type = "sysmon"
 stat = "ram_used"
 glyph = "database"
@@ -50,11 +48,11 @@ visualization = "gauge"
 show_value = false
 
 [widget.llama]
-scale = 0.8
+scale = 1.0
 type = "blaise/llama-meter:meter"
 
 [widget.zmk]
-scale = 0.8
+scale = 1.0
 type = "blaise/zmk-battery:meter"
 
 [widget.media_player]
