@@ -29,6 +29,29 @@ llama_resident_id() {
   jq -r '([.data[] | select(.status.value == "loaded")] + [.data[] | select(.status.value == "sleeping")])[0].id // empty'
 }
 
+# Model rows from the router's /models JSON on stdin: id <TAB> state <TAB> ctx (ctx-size from the preset, else
+# the model's max). Already-resident models sort first so the top (default) entry avoids a model reload.
+llama_model_rows() {
+  jq -r '.data | sort_by({loaded: 0, sleeping: 1}[.status.value // ""] // 2) | .[] |
+    (.status.args // []) as $a |
+    [.id, (.status.value // "?"),
+     (( [range(0; $a|length) | select($a[.]=="--ctx-size") | $a[.+1]] | first) // .context_length // 8192 | tostring)] | @tsv'
+}
+
+# llama_choose PROMPT ITEM...  → prints the chosen item (fzf, else bash select); returns 1 without a tty or choice
+llama_choose() {
+  local prompt=$1; shift
+  [[ -r /dev/tty ]] || { echo "interactive choice '$prompt' needs a tty" >&2; return 1; }
+  if command -v fzf >/dev/null; then
+    # fzf reads the list from the pipe and draws on /dev/tty by itself
+    printf '%s\n' "$@" | fzf --prompt="$prompt > " --height=~40% --reverse --no-multi \
+      --delimiter=$'\t' --tabstop=4
+  else
+    local PS3="$prompt # " item
+    select item in "$@"; do [[ -n ${item:-} ]] && { echo "$item"; break; }; done </dev/tty
+  fi
+}
+
 # Where the router's API key lives (see `llama-key`). Never commit it, never put it on a command line.
 LLAMA_KEY_FILE=${LLAMA_KEY_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/llama-serve/api-key}
 

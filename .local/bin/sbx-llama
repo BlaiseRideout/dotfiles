@@ -81,18 +81,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 # choose PROMPT ITEM...  → prints the chosen line
-choose() {
-  local prompt=$1; shift
-  [[ -r /dev/tty ]] || die "interactive choice '$prompt' needs a tty; pass flags"
-  if command -v fzf >/dev/null; then
-    # fzf reads the list from the pipe and draws on /dev/tty by itself
-    printf '%s\n' "$@" | fzf --prompt="$prompt > " --height=~40% --reverse --no-multi \
-      --delimiter=$'\t' --tabstop=4
-  else
-    local PS3="$prompt # " item
-    select item in "$@"; do [[ -n ${item:-} ]] && { echo "$item"; break; }; done </dev/tty
-  fi
-}
+choose() { llama_choose "$@" || die "no '$1' chosen (interactive choices need a tty; pass flags)"; }
 
 # --- llama.cpp service -------------------------------------------------------
 if ! systemctl --user is-active --quiet "$SERVICE"; then
@@ -110,10 +99,7 @@ DOWNLOAD_ROW=$'+ Download a model from Hugging Face…\t\t'
 # Already-resident models sort first so the top (default) entry avoids a model reload.
 load_models() {
   models_json=$(llama_curl -fsS -m 15 "$BASE/models${1:+?reload=1}") || die "llama.cpp not answering on $BASE"
-  mapfile -t MODEL_ROWS < <(jq -r '.data | sort_by({loaded: 0, sleeping: 1}[.status.value // ""] // 2) | .[] |
-    (.status.args // []) as $a |
-    [.id, (.status.value // "?"),
-     (( [range(0; $a|length) | select($a[.]=="--ctx-size") | $a[.+1]] | first) // .context_length // 8192 | tostring)] | @tsv' <<<"$models_json")
+  mapfile -t MODEL_ROWS < <(llama_model_rows <<<"$models_json")
   ((${#MODEL_ROWS[@]})) || die "llama.cpp reports no models"
   IDS_JSON=$(jq -c '[.data[].id]' <<<"$models_json")
 }

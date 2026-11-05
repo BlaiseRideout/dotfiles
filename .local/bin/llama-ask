@@ -2,28 +2,37 @@
 # One-shot, non-interactive prompt through the llama.cpp router with Pi or opencode, using the model that is
 # already resident so nothing gets swapped: the loaded model, else the one asleep (idle >240 s), else the one
 # llama-state last recorded, else DEFAULT_MODEL.
-#   llama-ask [-H pi|opencode] [-m MODEL-ID] [-q] PROMPT... [-]  a trailing "-" appends stdin to the prompt
+#   llama-ask [-H pi|opencode] [-m MODEL-ID | -i] [-q] PROMPT... [-]  a trailing "-" appends stdin to the prompt
+#   llama-ask -i ...   pick the model interactively (fzf, else a numbered menu); loaded models are listed first,
+#                      choosing another one makes the router swap it in
 #   llama-ask -w                                                 print the model that would be used and exit
 # Tool calls and their output go to stderr as they happen (-q hides them and the banner), the answer to stdout.
 set -euo pipefail
 
 . "${LLAMA_LIB:-$HOME/.local/lib/llama.sh}"
 OPENCODE_CONFIG=${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}
-harness=pi model="" quiet=0 which=0
-while getopts H:m:qwh opt; do
+harness=pi model="" quiet=0 which=0 pick=0
+while getopts H:m:iqwh opt; do
   case $opt in
     H) harness=$OPTARG ;;
     m) model=$OPTARG ;;
+    i) pick=1 ;;
     q) quiet=1 ;;
     w) which=1 ;;
-    h) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    h) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) exit 2 ;;
   esac
 done
 shift $((OPTIND - 1))
 
 models=$(llama_models) || { echo "llama-ask: router not answering on :$(llama_port)" >&2; exit 1; }
-if [[ -z $model ]]; then
+if ((pick)); then
+  [[ -z $model ]] || { echo "llama-ask: -i and -m are mutually exclusive" >&2; exit 2; }
+  mapfile -t rows < <(llama_model_rows <<<"$models")
+  ((${#rows[@]})) || { echo "llama-ask: router reports no models" >&2; exit 1; }
+  choice=$(llama_choose "model" "${rows[@]}") && [[ -n $choice ]] || { echo "llama-ask: no model chosen" >&2; exit 1; }
+  model=${choice%%$'\t'*}
+elif [[ -z $model ]]; then
   model=$("$(dirname "$(readlink -f "$0")")/llama-current-model")
 fi
 jq -e --arg m "$model" '.data[] | select(.id == $m)' <<<"$models" >/dev/null || {
@@ -37,7 +46,7 @@ jq -e --arg m "$model" '.data[] | select(.id == $m)' <<<"$models" >/dev/null || 
 if [[ ${*: -1} == - ]]; then set -- "${@:1:$#-1}"; read_stdin=1; else read_stdin=$(( $# == 0 )); fi
 prompt="$*"
 if ((read_stdin)) && [[ ! -t 0 ]]; then prompt+=${prompt:+$'\n\n'}$(cat); fi
-[[ -n ${prompt//[[:space:]]/} ]] || { echo "usage: llama-ask [-H pi|opencode] [-m MODEL-ID] PROMPT... [-]" >&2; exit 2; }
+[[ -n ${prompt//[[:space:]]/} ]] || { echo "usage: llama-ask [-H pi|opencode] [-m MODEL-ID | -i] PROMPT... [-]" >&2; exit 2; }
 
 # Pi's -p prints only the final answer, so run it in JSON mode and render the tool calls from the event stream:
 # "-> tool args" then the (clipped) result on stderr, assistant text on stdout.
