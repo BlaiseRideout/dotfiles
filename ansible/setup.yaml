@@ -88,6 +88,7 @@
         - powerline         # zsh, bash and tmux prompts (~/.config/powerline)
         - python3-powerline
         - fonts-powerline
+        - fonts-cascadia-code # kitty's font (Cascadia Code PL, in the same package)
         - pipx
         - lm-sensors
         - x11-xserver-utils # xrdb, xmodmap
@@ -108,6 +109,7 @@
         - ripgrep
         - powerline         # includes the Python module
         - powerline-fonts
+        - ttf-cascadia-code # kitty's font (Cascadia Code PL, in the same package)
         - python-pipx
         - lm_sensors
         - xorg-xrdb
