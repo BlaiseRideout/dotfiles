@@ -2,9 +2,10 @@
 { config, lib, pkgs, dotfilesLink, ... }:
 {
   home.activation.zoomWayland = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    ${pkgs.python3}/bin/python ${dotfilesLink "scripts/configure-zoom.py"}
+    ${pkgs.python3}/bin/python ${dotfilesLink ".local/libexec/zoom/configure.py"}
   '';
-  home.file.".local/bin/zoom".source = dotfilesLink "scripts/zoom.sh";
+  home.file.".local/libexec/zoom".source = dotfilesLink ".local/libexec/zoom";
+  home.file.".local/bin/zoom".source = dotfilesLink ".local/libexec/zoom/launch.sh";
   # The session may search /usr/share before Nix's profile. A local override
   # ensures meeting links and app launchers use the wrapper on those systems too.
   xdg.dataFile."applications/Zoom.desktop".source = config.lib.file.mkOutOfStoreSymlink
@@ -12,7 +13,7 @@
   xdg.desktopEntries.Zoom = {
     name = "Zoom Workplace";
     comment = "Zoom Video Conference";
-    exec = "${config.home.homeDirectory}/scripts/zoom.sh %U";
+    exec = "${config.home.homeDirectory}/.local/libexec/zoom/launch.sh %U";
     icon = "Zoom";
     terminal = false;
     categories = [ "Network" "VideoConference" ];

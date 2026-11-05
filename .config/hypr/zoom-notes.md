@@ -3,7 +3,7 @@ activation applies `xwayland=false` and `enableWaylandShare=true` to the writabl
 `zoomus.conf`, preserving all other settings. Quit Zoom before activating so
 Zoom cannot overwrite the changes on exit. The launcher never edits its config.
 
-On NVIDIA Wayland sessions, `scripts/zoom.sh` selects Mesa's CPU OpenGL renderer
+On NVIDIA Wayland sessions, `~/.local/libexec/zoom/launch.sh` selects Mesa's CPU OpenGL renderer
 when its EGL vendor file is available. This fixes corrupted icons and text while
 keeping the sharing preview working. It uses more CPU than GPU rendering. Other
 GPU/session combinations use their normal rendering environment.
