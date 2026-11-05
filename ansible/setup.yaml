@@ -9,7 +9,7 @@
 #   cd ~/.dotfiles/ansible
 #   ansible-playbook setup.yaml                        # Sway machine
 #   ansible-playbook setup.yaml -e desktop=openbox     # Openbox + tint2 machine
-#   ansible-playbook setup.yaml -e apps=false          # skip the desktop apps
+#   ansible-playbook setup.yaml -e apps=false          # skip the desktop apps (already the default on uhnet)
 #   ansible-playbook setup.yaml -e hyprland=true       # ...plus Hyprland (default on nhuto, nhuto-Mint)
 #   ansible-playbook setup.yaml -e build_sway=true     # apt: self-built Sway 1.11 + Waybar (default on nhuto-Mint; Waybar is built on pacman too)
 #   ansible-playbook setup.yaml -e llama_update=true   # update llama.cpp (installed by default on nhuto, nhuto-Mint)
@@ -35,7 +35,8 @@
     build_waybar: "{{ build_sway | bool or pkg_mgr == 'pacman' }}"
     # CachyOS shell and its flat Dropbox/Discord tray adapter.
     noctalia: "{{ ansible_facts['hostname'] == 'nhuto' and pkg_mgr == 'pacman' and hyprland | bool }}"
-    apps: true             # GIMP, Spotify, VS Code, Discord, etc. (see below)
+    # GIMP, Spotify, VS Code, Discord, etc. (see below). Off on uhnet, a server.
+    apps: "{{ ansible_facts['hostname'] != 'uhnet' }}"
     # llama.cpp from llama.app's prebuilt binaries (CUDA here), for llama-serve.service
     # (home/hosts/nhuto.nix). Installed once; -e llama_update=true fetches the latest,
     # or -e llama_version=b12019 a given build.
@@ -193,6 +194,8 @@
         - tint2
         - copyq
         - network-manager-gnome
+        - spacefm           # ~/.autostart.sh
+        - autocutsel        # ~/.autostart.sh: syncs the clipboard and primary selection
       pacman:
         - openbox
         - tint2
@@ -575,6 +578,28 @@
         name: noctalia-flat-tray.service
         scope: user
         state: started
+
+    # The login screen runs its own compositor, so it doesn't see hyprland.lua; this
+    # repeats its monitor layout (same make/model/serial IDs, same positions).
+    # greeter.toml is declarative: neither Sync nor the greeter UI rewrites it. Read
+    # at greetd start, so it applies at the next boot or `systemctl restart greetd`
+    # (which ends the running session; not done here).
+    - name: Give the login screen the Hyprland monitor layout
+      when: noctalia | bool
+      become: true
+      ansible.builtin.copy:
+        dest: /var/lib/noctalia-greeter/greeter.toml
+        owner: greeter
+        group: greeter
+        mode: "0644"
+        content: |
+          [output]
+          layout = "Samsung Electric Company Odyssey G95C HNTY301994:0,100; AOC 24G15N AP15338Z04043:5120,0"
+          scales = "Samsung Electric Company Odyssey G95C HNTY301994:1; AOC 24G15N AP15338Z04043:1"
+          transforms = "AOC 24G15N AP15338Z04043:270"
+          width = 5120
+          height = 1440
+          refresh_rate = "Samsung Electric Company Odyssey G95C HNTY301994:240; AOC 24G15N AP15338Z04043:180"
 
     # --- llama.cpp (llama=true) -----------------------------------------------------
     # The installer replaces ~/.llama-app (what the service runs) and copies the

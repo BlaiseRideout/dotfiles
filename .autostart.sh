@@ -11,9 +11,6 @@ if [ ! $(pidof unity-settings-daemon) ]; then
 	dropbox start &
 fi
 
-if [ -f ~/.compton.conf ]; then
-	compton --config ~/.compton.conf &
-fi
 if [ -f ~/.fehbg ]; then
 	~/.fehbg &
 fi
