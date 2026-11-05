@@ -17,9 +17,14 @@ capsule = false
 # Every widget's colour, unless it sets its own
 color = "#ffffff"
 icon_color = "#ffffff"
-# CachyOS's widgets, without the launcher, the spacers or the stats capsule
-start = [ "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "llama", "zmk" ]
+# CachyOS's widgets, without the spacers or the stats capsule
+start = [ "launcher", "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "llama", "zmk" ]
 end = [ "media", "fsearch", "t3code", "tray", "volume", "network", "caffeine", "notifications", "clock", "session" ]
+
+[widget.launcher]
+custom_image = "/usr/share/pixmaps/archlinux-logo.svg"
+custom_image_colorize = true
+color = "#ffffff"
 
 [widget.workspaces]
 font_scale = 1.1
