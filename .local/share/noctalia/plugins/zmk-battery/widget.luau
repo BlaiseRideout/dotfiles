@@ -11,6 +11,15 @@ local COMMAND_KEY = "zmk_command"
 
 local snapshot = noctalia.state.get(SNAPSHOT_KEY) or { halves = {} }
 
+-- The bar draws at 1.25 physical pixels per layout unit (bar scale 1.25 x
+-- widget scale 1.0, see meters.toml), so the 12-unit track is 15px. A fill of
+-- any other height lands on a fractional pixel and pokes out past the track's
+-- bottom edge; whole-pixel fills match the built-in sysmon gauges.
+local PX = 1.25
+local function fillHeight(fraction)
+	return math.round(12 * PX * fraction) / PX
+end
+
 local function render()
 	local halves = snapshot.halves or {}
 	if #halves == 0 then
@@ -42,7 +51,7 @@ local function render()
 		}, levelFraction > 0 and {
 			ui.box({
 				width = 4,
-				height = 12 * levelFraction,
+				height = fillHeight(levelFraction),
 				fill = isCritical and "error" or (isLow and "primary" or "#ffffff"),
 				radius = 2,
 			}),

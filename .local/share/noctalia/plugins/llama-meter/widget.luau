@@ -13,6 +13,15 @@ local FILL = {
 	idle = "on_surface_variant/0.6",
 }
 
+-- The bar draws at 1.25 physical pixels per layout unit (bar scale 1.25 x
+-- widget scale 1.0, see meters.toml), so the 12-unit track is 15px. A fill of
+-- any other height lands on a fractional pixel and pokes out past the track's
+-- bottom edge; whole-pixel fills match the built-in sysmon gauges.
+local PX = 1.25
+local function fillHeight(fraction)
+	return math.round(12 * PX * fraction) / PX
+end
+
 local function render()
 	if not snapshot.visible then
 		barWidget.setVisible(false)
@@ -37,7 +46,7 @@ local function render()
 			fill = "#ffffff4d",
 			radius = 2,
 		}, level > 0 and {
-			ui.box({ width = 4, height = 12 * level, fill = FILL[snapshot.state] or "primary", radius = 2 }),
+			ui.box({ width = 4, height = fillHeight(level), fill = FILL[snapshot.state] or "primary", radius = 2 }),
 		} or {}),
 	}
 	if noctalia.getConfig("show_value") then
