@@ -457,6 +457,8 @@ hl.on("hyprland.start", function()
              .. " /usr/libexec/hyprpolkitagent; do [ -x \"$a\" ] && exec \"$a\"; done")
     end
     exec("hypridle")
+    -- Holds an idle inhibitor during video calls, so they don't lock or blank the screens
+    exec(hyprdir .. "/call-inhibit.sh")
     -- Clipboard history for $mod+v (clipboard.sh). CopyQ stays Sway's: its
     -- autostart entry has NotShowIn=Hyprland
     exec("wl-paste --type text --watch cliphist store")
