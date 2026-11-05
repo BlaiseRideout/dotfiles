@@ -4,6 +4,10 @@
       "label": "Router URL",
       "description": "Address of the llama.cpp router (llama serve), without a trailing path"
     },
+    "api_key_file": {
+      "label": "API key file",
+      "description": "File holding the router's API key (blank: ~/.local/state/llama-serve/api-key, managed by llama-key)"
+    },
     "max_rate": {
       "label": "Full meter at (t/s)",
       "description": "Token rate that fills the meter"

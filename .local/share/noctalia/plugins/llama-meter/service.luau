@@ -28,6 +28,32 @@ local function baseUrl()
 	return (url:gsub("/+$", ""))
 end
 
+-- The router's API key is read from the file `llama-key` manages (never stored in the plugin or the repo), so
+-- every request carries it; re-read on each poll so a rotated key is picked up.
+local function authHeaders()
+	local path = noctalia.getConfig("api_key_file")
+	if path == nil or path == "" then
+		local home = noctalia.getenv("HOME")
+		if home == nil or home == "" then
+			return nil
+		end
+		path = home .. "/.local/state/llama-serve/api-key"
+	end
+	local ok, body = pcall(noctalia.readFile, path)
+	if not ok or type(body) ~= "string" then
+		return nil
+	end
+	local key = body:gsub("%s+", "")
+	if key == "" then
+		return nil
+	end
+	return { Authorization = "Bearer " .. key }
+end
+
+local function get(url, callback)
+	noctalia.http({ url = url, headers = authHeaders() }, callback)
+end
+
 local function publish(snapshot)
 	noctalia.state.set(SNAPSHOT_KEY, snapshot)
 end
@@ -185,7 +211,7 @@ local function poll()
 	startedAt = now
 	local base = baseUrl()
 
-	noctalia.http({ url = base .. "/models" }, function(res)
+	get(base .. "/models", function(res)
 		if mine ~= generation then
 			return
 		end
@@ -223,12 +249,12 @@ local function poll()
 		end
 		for _, model in ipairs(loaded) do
 			local q = `?model={noctalia.string.urlEncode(model)}&autoload=false`
-			noctalia.http({ url = base .. "/slots" .. q }, function(r)
+			get(base .. "/slots" .. q, function(r)
 				local decoded = r.ok and r.status == 200 and noctalia.json.decode(r.body or "") or nil
 				slots[model] = type(decoded) == "table" and decoded or {}
 				done()
 			end)
-			noctalia.http({ url = base .. "/metrics" .. q }, function(r)
+			get(base .. "/metrics" .. q, function(r)
 				metrics[model] = parseMetrics(r.ok and r.status == 200 and r.body or "")
 				done()
 			end)

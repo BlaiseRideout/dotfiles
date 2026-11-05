@@ -26,6 +26,13 @@ description_key = "settings.base_url.description"
 default = "http://127.0.0.1:9931"
 
 [[setting]]
+key = "api_key_file"
+type = "string"
+label_key = "settings.api_key_file.label"
+description_key = "settings.api_key_file.description"
+default = ""
+
+[[setting]]
 key = "max_rate"
 type = "int"
 label_key = "settings.max_rate.label"

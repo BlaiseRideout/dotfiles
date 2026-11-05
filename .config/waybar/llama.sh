@@ -7,6 +7,9 @@
 # The router keeps /slots and /metrics per model, so every loaded model is sampled and summed.
 export LC_ALL=C
 
+# llama_curl adds the router's API key (see llama-key); other machines without the library get plain curl
+. "$HOME/.local/lib/llama.sh" 2>/dev/null || llama_curl() { curl "$@"; }
+
 SERVICE=llama-serve.service
 HOLD=${LLAMA_TOKPS_HOLD:-15}
 ICON=$''
@@ -43,7 +46,7 @@ while :; do
     # gone we're reparented to init, so stop (orphaned copies each polled the server every second)
     [[ $(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ') == 1 ]] && exit 0
     BASE=http://127.0.0.1:$PORT
-    if ! models=$(curl -fsS -m 2 "$BASE/models" 2>/dev/null); then
+    if ! models=$(llama_curl -fsS -m 2 "$BASE/models" 2>/dev/null); then
         # A busy server can miss a poll; keep the last reading up on a brief failure, since hiding
         # the module shifts everything beside it
         PORT=$(find_port); prev_n=(); active=0
@@ -64,9 +67,9 @@ while :; do
             busy=$((busy + 1)); k="$m|$id"; cur[$k]=$n
             [[ -n ${prev_n[$k]:-} ]] && ((n >= prev_n[$k])) && live_tok=$((live_tok + n - prev_n[$k]))
             ((n == 0)) && prefill=$((prefill + 1))
-        done < <(curl -fsS -m 2 "$BASE/slots?model=$q&autoload=false" 2>/dev/null |
+        done < <(llama_curl -fsS -m 2 "$BASE/slots?model=$q&autoload=false" 2>/dev/null |
                  jq -r '.[]? | select(.is_processing) | [.id, (.next_token[0].n_decoded? // 0)] | @tsv')
-        mrows+=("$(curl -fsS -m 2 "$BASE/metrics?model=$q&autoload=false" 2>/dev/null | awk '
+        mrows+=("$(llama_curl -fsS -m 2 "$BASE/metrics?model=$q&autoload=false" 2>/dev/null | awk '
             $1 == "llamacpp:tokens_predicted_total"         {a = $2}
             $1 == "llamacpp:tokens_predicted_seconds_total" {b = $2}
             $1 == "llamacpp:prompt_tokens_total"            {c = $2}

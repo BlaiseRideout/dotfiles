@@ -12,7 +12,7 @@
   # The service's restore hook, and the tools wired to the router (local-llama notes)
   home.file = builtins.listToAttrs (map
     (name: { name = ".local/bin/${name}"; value.source = dotfilesLink ".local/bin/${name}"; })
-    [ "llama-ask" "llama-current-model" "llama-state" "opencode" "opencode-llama-sync" "sbx-llama" ])
+    [ "llama-ask" "llama-current-model" "llama-key" "llama-state" "opencode" "opencode-llama-sync" "sbx-llama" ])
     // {
       # Pi starts on the model the router already has loaded (see the extension for the rules)
       ".pi/agent/extensions/llama-current-model.ts".source =

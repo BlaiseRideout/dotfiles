@@ -15,7 +15,10 @@ ExecStart=/home/blaise/.llama-app/llama serve \
     --cache-type-k q8_0 \
     --cache-type-v q8_0 \
     --sleep-idle-seconds 240 \
+    --api-key-file /home/blaise/.local/state/llama-serve/api-key \
     --metrics
+# The API key lives outside the repo; create it (random) on first start. Clients read it with `llama-key`/llama_curl.
+ExecStartPre=/home/blaise/.local/bin/llama-key ensure
 # Reload whichever model was resident when the service last stopped
 ExecStartPost=-/home/blaise/.local/bin/llama-state restore
 ExecStop=-/home/blaise/.local/bin/llama-state save $MAINPID

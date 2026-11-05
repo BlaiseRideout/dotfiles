@@ -1,0 +1,22 @@
+#!/bin/bash
+# The local API key for the llama.cpp router (llama-serve.service --api-key-file). The key lives only in
+#   ~/.local/state/llama-serve/api-key   (mode 600, outside the dotfiles repo; never commit it)
+#   llama-key ensure    create it if missing (random, 256 bits); run by the service before it starts
+#   llama-key path      print the file's path
+#   llama-key show      print the key (for pasting into a client that cannot read the file)
+#   llama-key rotate    replace it with a fresh key; restart llama-serve and re-run client setup afterwards
+set -euo pipefail
+FILE=${XDG_STATE_HOME:-$HOME/.local/state}/llama-serve/api-key
+
+generate() {
+  mkdir -p "$(dirname "$FILE")"
+  ( umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' >"$FILE.tmp" && mv "$FILE.tmp" "$FILE" )
+  chmod 600 "$FILE"
+}
+case ${1:-} in
+  ensure) [[ -s $FILE ]] || generate ;;
+  path)   echo "$FILE" ;;
+  show)   cat "$FILE" ;;
+  rotate) generate ;;
+  *) echo "usage: llama-key ensure|path|show|rotate" >&2; exit 2 ;;
+esac

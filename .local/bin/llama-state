@@ -8,7 +8,7 @@ STATE=$LLAMA_LAST_MODEL_FILE
 
 case ${1:-} in
 save)
-    models=$(curl -fsS -m 3 "$(llama_base "${2:-}")/models") || exit 0   # already gone: keep the old record
+    models=$(llama_curl -fsS -m 3 "$(llama_base "${2:-}")/models") || exit 0   # already gone: keep the old record
     id=$(llama_resident_id <<<"$models")
     [[ -n $id ]] || exit 0
     mkdir -p "$(dirname "$STATE")" && printf '%s\n' "$id" >"$STATE"
@@ -18,12 +18,12 @@ restore)
     id=$(<"$STATE")
     for _ in $(seq 1 60); do
         base=$(llama_base)
-        models=$(curl -fsS -m 2 "$base/models" 2>/dev/null) && break
+        models=$(llama_curl -fsS -m 2 "$base/models" 2>/dev/null) && break
         sleep 1
     done
     [[ -n ${models:-} ]] || exit 0
     jq -e --arg m "$id" '.data[] | select(.id == $m)' <<<"$models" >/dev/null || exit 0   # model was removed since
-    curl -fsS -m 10 -X POST "$base/models/load" -H 'Content-Type: application/json' \
+    llama_curl -fsS -m 10 -X POST "$base/models/load" -H 'Content-Type: application/json' \
         -d "$(jq -nc --arg m "$id" '{model: $m}')" >/dev/null
     ;;
 *)  echo "usage: llama-state save [MAINPID] | restore" >&2; exit 2 ;;

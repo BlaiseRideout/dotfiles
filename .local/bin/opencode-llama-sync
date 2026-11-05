@@ -18,7 +18,7 @@ while [[ $# -gt 0 ]]; do
 done
 for c in curl jq; do command -v "$c" >/dev/null || { echo "missing: $c" >&2; exit 1; }; done
 
-models=$(curl -fsS -m 10 "http://127.0.0.1:$PORT/models") || { echo "llama.cpp router not answering on :$PORT" >&2; exit 1; }
+models=$(llama_curl -fsS -m 10 "http://127.0.0.1:$PORT/models") || { echo "llama.cpp router not answering on :$PORT" >&2; exit 1; }
 
 # Friendly keys/names for the models we know; anything else gets an automatic slug.
 read -r -d '' KNOWN <<'EOF' || true
@@ -50,7 +50,7 @@ provider=$(jq -n --argjson m "$models" --argjson known "$KNOWN" --argjson ctx "$
   {
     name: "llama.cpp (local)",
     package: "@opencode/ai/providers/openai-compatible",
-    settings: { baseURL: "http://127.0.0.1:\($port)/v1" },
+    settings: { baseURL: "http://127.0.0.1:\($port)/v1", apiKey: "{file:~/.local/state/llama-serve/api-key}" },
     models: (
       [ $m.data[] | . as $e
         | ($known[$e.id] // [($e.id | slug), ($e.id | slug)]) as $k

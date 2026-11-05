@@ -109,7 +109,7 @@ DOWNLOAD_ROW=$'+ Download a model from Hugging Face…\t\t'
 # Row: id <TAB> state <TAB> ctx (ctx-size from the router preset, else the model's max).
 # Already-resident models sort first so the top (default) entry avoids a model reload.
 load_models() {
-  models_json=$(curl -fsS -m 15 "$BASE/models${1:+?reload=1}") || die "llama.cpp not answering on $BASE"
+  models_json=$(llama_curl -fsS -m 15 "$BASE/models${1:+?reload=1}") || die "llama.cpp not answering on $BASE"
   mapfile -t MODEL_ROWS < <(jq -r '.data | sort_by({loaded: 0, sleeping: 1}[.status.value // ""] // 2) | .[] |
     (.status.args // []) as $a |
     [.id, (.status.value // "?"),
@@ -146,10 +146,10 @@ HF_QUANTS_JQ='
 watch_download() {   # MODEL_ID → 0 when the router finished, 1 on failure
   local m=$1 ev evs sp seen=0 start=$SECONDS prog status msg break_code=1
   ev=$(mktemp)
-  curl -sN "$BASE/models/sse" >"$ev" 2>/dev/null & sp=$!
+  llama_curl -sN "$BASE/models/sse" >"$ev" 2>/dev/null & sp=$!
   trap 'kill "$sp" 2>/dev/null; rm -f "$ev"; echo; exit 130' INT
   sleep 0.3
-  if ! curl -fsS -m 15 -X POST "$BASE/models" -H 'Content-Type: application/json' \
+  if ! llama_curl -fsS -m 15 -X POST "$BASE/models" -H 'Content-Type: application/json' \
          -d "$(jq -nc --arg m "$m" '{model: $m}')" >/dev/null; then
     kill "$sp" 2>/dev/null; rm -f "$ev"; trap - INT; echo "sbx-llama: router rejected the download request" >&2; return 1
   fi
@@ -166,7 +166,7 @@ watch_download() {   # MODEL_ID → 0 when the router finished, 1 on failure
         | select(length > 0) | {d: (map(.done) | add), t: (map(.total) | add)}
         | select(.t > 0) | "\((.d * 100 / .t) | floor)%  \((.d / 1048576) | floor) / \((.t / 1048576) | floor) MiB"' <<<"$evs" 2>/dev/null || true)
     [[ -n $prog ]] && { seen=1; printf '\r\033[K    %s' "$prog" >&2; }
-    status=$(curl -fsS -m 5 "$BASE/models" | jq -r --arg m "$m" '.data[] | select(.id == $m) | .status.value' 2>/dev/null || true)
+    status=$(llama_curl -fsS -m 5 "$BASE/models" | jq -r --arg m "$m" '.data[] | select(.id == $m) | .status.value' 2>/dev/null || true)
     [[ $status == downloading ]] && seen=1
     if [[ -n $status && $status != downloading && $seen == 1 ]]; then break_code=0; break; fi
     if ((SECONDS - start > 120 && !seen)) && [[ -z $status ]]; then
@@ -240,20 +240,20 @@ if [[ $state != loaded && $state != sleeping ]]; then
   info "loading $MODEL (llama.cpp fits its context to the free VRAM)"
   # With --models-max 1 the router answers 500 "model limit reached, try again later" while another swap is in flight
   for attempt in $(seq 1 30); do
-    curl -fsS -m 15 -X POST "$BASE/models/load" -H 'Content-Type: application/json' \
+    llama_curl -fsS -m 15 -X POST "$BASE/models/load" -H 'Content-Type: application/json' \
       -d "$(jq -nc --arg m "$MODEL" '{model: $m}')" >/dev/null 2>&1 && break
     ((attempt == 30)) && die "router refused to load $MODEL (another client may be mid-swap)"
     sleep 2
   done
   for _ in $(seq 1 900); do
-    st=$(curl -fsS -m 5 "$BASE/models" | jq -r --arg m "$MODEL" '.data[] | select(.id == $m) | "\(.status.value) \(.status.failed // false)"')
+    st=$(llama_curl -fsS -m 5 "$BASE/models" | jq -r --arg m "$MODEL" '.data[] | select(.id == $m) | "\(.status.value) \(.status.failed // false)"')
     [[ $st == loaded* ]] && break
     [[ $st == *true ]] && die "$MODEL failed to load (see: journalctl --user -u $SERVICE)"
     sleep 1
   done
   [[ $st == loaded* ]] || die "timed out loading $MODEL"
 fi
-real_ctx=$(curl -fsS -m 5 "$BASE/props?model=$(jq -rn --arg m "$MODEL" '$m | @uri')&autoload=false" 2>/dev/null |
+real_ctx=$(llama_curl -fsS -m 5 "$BASE/props?model=$(jq -rn --arg m "$MODEL" '$m | @uri')&autoload=false" 2>/dev/null |
            jq -r '.default_generation_settings.n_ctx // empty') || true
 [[ $real_ctx =~ ^[0-9]+$ ]] && CTX=$real_ctx
 MAXTOK=$(( CTX / 4 > 16384 ? 16384 : CTX / 4 ))
@@ -511,12 +511,15 @@ case $NET in
     ;;
 esac
 LLAMA_URL="http://$LLAMA_HOST:$PORT/v1"
+# The router's API key goes into the container by environment inheritance (`-e NAME` with no value), so it never
+# appears on a command line or in a config file the agent could commit. Harnesses read it from LLAMA_API_KEY.
+if [[ -r $LLAMA_KEY_FILE ]]; then LLAMA_API_KEY=$(<"$LLAMA_KEY_FILE"); export LLAMA_API_KEY; ENVARGS+=(-e LLAMA_API_KEY); fi
 
 # --- harness config + command ------------------------------------------------
 case $HARNESS in
   pi)
     jq -n --arg url "$LLAMA_URL" --argjson ctx "$CTX" --argjson max "$MAXTOK" --argjson ids "$IDS_JSON" '{
-      providers: {llamacpp: {baseUrl: $url, api: "openai-completions", apiKey: "sk-local",
+      providers: {llamacpp: {baseUrl: $url, api: "openai-completions", apiKey: "$LLAMA_API_KEY",
         models: [$ids[] | {id: ., name: ., reasoning: false, input: ["text"],
                            contextWindow: $ctx, maxTokens: $max}]}}}' >"$STATE/pi/agent/models.json"
     jq -n --arg m "$MODEL" '{defaultProvider: "llamacpp", defaultModel: $m}' >"$STATE/pi/agent/settings.json"
@@ -528,14 +531,15 @@ case $HARNESS in
           --argjson ids "$IDS_JSON" '{
       "$schema": "https://opencode.ai/config.json", model: $m, small_model: $m, autoupdate: false,
       provider: {llamacpp: {npm: "@ai-sdk/openai-compatible", name: "llama.cpp (host)",
-        options: {baseURL: $url, apiKey: "sk-local"},
+        options: {baseURL: $url, apiKey: "{env:LLAMA_API_KEY}"},
         models: ($ids | map({key: ., value: {name: ., limit: {context: $ctx, output: $max}}}) | from_entries)}}}')
     ENVARGS+=(-e "OPENCODE_CONFIG_CONTENT=$cfg")
     MOUNTS=(-v "$STATE/opencode:/home/agent/.local/share/opencode")
     DEFAULT_CMD=(opencode)
     ;;
   shell)
-    ENVARGS+=(-e "OPENAI_BASE_URL=$LLAMA_URL" -e OPENAI_API_KEY=sk-local -e "LLAMA_MODEL=$MODEL")
+    export OPENAI_API_KEY=${LLAMA_API_KEY:-sk-local}   # inherited by `-e OPENAI_API_KEY`, not placed on the command line
+    ENVARGS+=(-e "OPENAI_BASE_URL=$LLAMA_URL" -e OPENAI_API_KEY -e "LLAMA_MODEL=$MODEL")
     MOUNTS=()
     DEFAULT_CMD=(bash -l)
     ;;

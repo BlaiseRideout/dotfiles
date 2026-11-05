@@ -21,10 +21,23 @@ llama_port() {
 llama_base() { echo "http://127.0.0.1:$(llama_port "$@")"; }
 
 # GET /models as JSON. $1 = max seconds (default 5). Fails if the router is not answering.
-llama_models() { curl -fsS -m "${1:-5}" "$(llama_base)/models"; }
+llama_models() { llama_curl -fsS -m "${1:-5}" "$(llama_base)/models"; }
 
 # Reads /models JSON on stdin; prints the id of the model that is already resident: the loaded one, else a
 # sleeping one (idle >240 s, woken by the next request). Prints nothing if none is.
 llama_resident_id() {
   jq -r '([.data[] | select(.status.value == "loaded")] + [.data[] | select(.status.value == "sleeping")])[0].id // empty'
+}
+
+# Where the router's API key lives (see `llama-key`). Never commit it, never put it on a command line.
+LLAMA_KEY_FILE=${LLAMA_KEY_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/llama-serve/api-key}
+
+# curl to the router with its API key. The header goes in through a --config pipe, not argv, so it never shows up
+# in `ps`. Falls back to plain curl if there is no key file. Use it only for the router, never for other hosts.
+llama_curl() {
+  if [[ -r $LLAMA_KEY_FILE ]]; then
+    curl --config <(printf 'header = "Authorization: Bearer %s"\n' "$(<"$LLAMA_KEY_FILE")") "$@"
+  else
+    curl "$@"
+  fi
 }
