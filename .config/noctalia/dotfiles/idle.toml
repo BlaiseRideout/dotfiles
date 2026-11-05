@@ -1,0 +1,49 @@
+# Idle and locking belong to hypridle + hyprlock (.config/hypr/hypridle.conf),
+# as swayidle + swaylock did on Sway. Noctalia's own idle behaviours stay off
+# (they're off by default), and its lock-before-suspend is turned off so that
+# suspending doesn't raise a second lock screen next to hyprlock.
+
+[lockscreen]
+lock_before_suspend = false
+
+# The session menu's lock entries would otherwise raise Noctalia's own lock
+# screen, so their `command` overrides make them run lock.sh (hyprlock) instead. A list is replaced whole, so
+# the other entries are repeated from CachyOS's config.toml.
+[[shell.session.actions]]
+action = "lock"
+command = "~/scripts/lock.sh"
+countdown_seconds = 0.0
+enabled = true
+shortcut = "1"
+variant = "default"
+
+[[shell.session.actions]]
+action = "logout"
+countdown_seconds = 0.0
+enabled = true
+shortcut = "2"
+variant = "default"
+
+# hypridle's before_sleep_cmd locks too, but starting the lock first means
+# hyprlock is already up when the screens come back
+[[shell.session.actions]]
+action = "lock_and_suspend"
+command = "~/scripts/lock.sh & sleep 1; systemctl suspend"
+countdown_seconds = 3.0
+enabled = true
+shortcut = "3"
+variant = "default"
+
+[[shell.session.actions]]
+action = "reboot"
+countdown_seconds = 3.0
+enabled = true
+shortcut = "4"
+variant = "default"
+
+[[shell.session.actions]]
+action = "shutdown"
+countdown_seconds = 3.0
+enabled = true
+shortcut = "5"
+variant = "destructive"
