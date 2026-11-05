@@ -74,8 +74,18 @@ hyprlock_ready() {
   [[ -e /etc/pam.d/hyprlock && -x /run/wrappers/bin/unix_chkpwd ]]
 }
 if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]] && hyprlock_ready; then
-  pidof hyprlock >/dev/null || exec hyprlock
-  exit 0
+  # Already locked: nothing to do. A hyprlock that's been up a while without the
+  # session being locked is a hung leftover, which would otherwise swallow every
+  # lock request, so clear it out.
+  if pid=$(pidof hyprlock); then
+    locked=$(loginctl show-session "${XDG_SESSION_ID:-auto}" -p LockedHint --value 2>/dev/null)
+    up=$(ps -o etimes= -p "${pid%% *}" 2>/dev/null)
+    if [[ $locked == yes || ${up:-0} -lt 5 ]]; then
+      exit 0
+    fi
+    pkill -9 -x hyprlock
+  fi
+  exec hyprlock
 fi
 
 if [[ "$XDG_SESSION_TYPE" == "wayland" ]]; then
