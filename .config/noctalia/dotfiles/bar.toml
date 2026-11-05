@@ -1,15 +1,14 @@
-# The bar, styled like Waybar: the palette's background at 50%, white text,
-# rounded bottom corners (CachyOS's config.toml sets those) and 13px text.
-# The stats widgets in `end` are defined in meters.toml.
+# The bar, styled like Waybar
+# The stats widgets are defined in meters.toml.
 
 [bar.default]
-background_opacity = 0.5
-thickness = 30
-scale = 1.0
-font_scale = 0.9285714
-font_weight = 400
-padding = 10
-widget_spacing = 12
+background_opacity = 0.6
+thickness = 35
+scale = 1.25
+font_scale = 1
+font_weight = 600
+padding = 15
+widget_spacing = 15
 radius = 12
 shadow = false
 border_width = 0
