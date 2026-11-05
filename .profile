@@ -49,3 +49,8 @@ path_append /usr/local/lib
 
 export PATH
 unset -f path_prepend path_append
+
+# Share the systemd user agent; preserve agents forwarded over SSH.
+if [ -z "$SSH_AUTH_SOCK" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
+    export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/ssh-agent.socket"
+fi

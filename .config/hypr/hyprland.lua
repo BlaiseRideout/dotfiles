@@ -400,9 +400,17 @@ hl.window_rule({
 ---- AUTOSTART ------
 ---------------------
 
+-- Distro login sessions need not inherit systemd's environment.d variables.
+-- Set this before launching any applications so they share the user agent.
+local runtime_dir = os.getenv("XDG_RUNTIME_DIR")
+if runtime_dir then
+    hl.env("SSH_AUTH_SOCK", runtime_dir .. "/ssh-agent.socket")
+end
+
 local function exec(cmd) hl.exec_cmd(cmd) end
 
 hl.on("hyprland.start", function()
+    exec("systemctl --user start ssh-agent.service")
     -- Portals and D-Bus-started apps read these; the systemd user session can
     -- outlive a Sway or Cinnamon login and keep their values
     exec("systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE HYPRLAND_INSTANCE_SIGNATURE;"
