@@ -1,22 +1,25 @@
-# Set up the prompt
+# Oh My Zsh is installed by Home Manager. Keep the existing Powerline prompt.
+export ZSH="$HOME/.local/share/zsh/oh-my-zsh"
+ZSH_THEME=""
+# Nix manages updates; don't try to update the read-only package in place.
+zstyle ':omz:update' mode disabled
+plugins=(git)
+if [[ -r "$ZSH/oh-my-zsh.sh" ]]; then
+  source "$ZSH/oh-my-zsh.sh"
+else
+  autoload -Uz compinit
+  compinit
+fi
 
-#autoload -Uz promptinit
-#promptinit
-#prompt adam1
-
-setopt histignorealldups sharehistory
-
-# Use emacs keybindings even if our EDITOR is set to vi
+# Use emacs keybindings even if our EDITOR is set to vi.
 bindkey -e
 
-# Keep 1000 lines of history within the shell and save it to ~/.zsh_history:
-HISTSIZE=1000
-SAVEHIST=1000
+# Shared history with duplicates removed; a leading space keeps a command private.
+HISTSIZE=100000
+SAVEHIST=100000
 HISTFILE=~/.zsh_history
-
-# Use modern completion system
-autoload -Uz compinit
-compinit
+setopt histignorealldups sharehistory histignorespace histreduceblanks
+setopt auto_cd auto_pushd pushd_ignore_dups
 
 zstyle ':completion:*' auto-description 'specify: %d'
 zstyle ':completion:*' completer _expand _complete _correct _approximate
@@ -25,7 +28,6 @@ zstyle ':completion:*' group-name ''
 zstyle ':completion:*' menu select=2
 eval "$(dircolors -b)"
 zstyle ':completion:*:default' list-colors ${(s.:.)LS_COLORS}
-zstyle ':completion:*' list-colors ''
 zstyle ':completion:*' list-prompt %SAt %p: Hit TAB for more, or the character to insert%s
 zstyle ':completion:*' matcher-list '' 'm:{a-z}={A-Z}' 'm:{a-zA-Z}={A-Za-z}' 'r:|[._-]=* r:|=* l:|=*'
 zstyle ':completion:*' menu select=long
@@ -131,4 +133,25 @@ if [[ -d "$KITTY_INSTALLATION_DIR" ]]; then
   autoload -Uz -- "$KITTY_INSTALLATION_DIR"/shell-integration/zsh/kitty-integration
   kitty-integration
   unfunction kitty-integration
+fi
+
+# Fish-style suggestions: Right/End accepts the suggestion, Alt-Right a word.
+ZSH_AUTOSUGGEST_STRATEGY=(history completion)
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=8'
+if [[ -r "$HOME/.local/share/zsh/autosuggestions/zsh-autosuggestions.zsh" ]]; then
+  source "$HOME/.local/share/zsh/autosuggestions/zsh-autosuggestions.zsh"
+fi
+
+# Load highlighting after widgets, then history search as its upstream recommends.
+if [[ -r "$HOME/.local/share/zsh/syntax-highlighting/zsh-syntax-highlighting.zsh" ]]; then
+  source "$HOME/.local/share/zsh/syntax-highlighting/zsh-syntax-highlighting.zsh"
+fi
+if [[ -r "$ZSH/plugins/history-substring-search/history-substring-search.plugin.zsh" ]]; then
+  source "$ZSH/plugins/history-substring-search/history-substring-search.plugin.zsh"
+  bindkey '^[[A' history-substring-search-up
+  bindkey '^[[B' history-substring-search-down
+  bindkey '^[OA' history-substring-search-up
+  bindkey '^[OB' history-substring-search-down
+  bindkey '^P' history-substring-search-up
+  bindkey '^N' history-substring-search-down
 fi

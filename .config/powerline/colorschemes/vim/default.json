@@ -6,9 +6,9 @@
 		"background":               { "fg": "white", "bg": "gray2", "attrs": [] },
 		"background:divider":       { "fg": "gray6", "bg": "gray2", "attrs": [] },
 		"mode":                     { "fg": "darkestgreen", "bg": "brightgreen", "attrs": ["bold"] },
-		"visual_range":             { "fg": "brightestorange", "bg": "darkorange", "attrs": ["bold"] },
+		"visual_range":             { "fg": "brightestpink", "bg": "darkpink", "attrs": ["bold"] },
 		"modified_indicator":       { "fg": "brightyellow", "bg": "gray4", "attrs": ["bold"] },
-		"paste_indicator":          { "fg": "white", "bg": "mediumorange", "attrs": ["bold"] },
+		"paste_indicator":          { "fg": "white", "bg": "mediumpink", "attrs": ["bold"] },
 		"readonly_indicator":       { "fg": "brightestred", "bg": "gray4", "attrs": [] },
 		"branch_dirty":             { "fg": "brightyellow", "bg": "gray4", "attrs": [] },
 		"branch:divider":           { "fg": "gray7", "bg": "gray4", "attrs": [] },
@@ -29,7 +29,7 @@
 		"modified_buffers":         { "fg": "brightyellow", "bg": "gray2", "attrs": [] },
 		"attached_clients":         { "fg": "gray8", "bg": "gray2", "attrs": [] },
 		"error":                    { "fg": "brightestred", "bg": "darkred", "attrs": ["bold"] },
-		"warning":                  { "fg": "brightyellow", "bg": "darkorange", "attrs": ["bold"] },
+		"warning":                  { "fg": "brightyellow", "bg": "darkpink", "attrs": ["bold"] },
 		"current_tag":              { "fg": "gray9", "bg": "gray2", "attrs": [] },
 
 		"tab_nc:modified_indicator": { "fg": "brightyellow", "bg": "gray2", "attrs": ["bold"] }
@@ -37,7 +37,7 @@
 	"mode_translations": {
 		"nc": {
 			"colors": {
-				"brightyellow": "darkorange",
+				"brightyellow": "darkpink",
 				"brightestred": "darkred",
 				"gray0": "gray0",
 				"gray1": "gray0",
@@ -122,17 +122,17 @@
 		},
 		"v": {
 			"groups": {
-				"mode": { "fg": "darkorange", "bg": "brightestorange", "attrs": ["bold"] }
+				"mode": { "fg": "darkpink", "bg": "brightestpink", "attrs": ["bold"] }
 			}
 		},
 		"V": {
 			"groups": {
-				"mode": { "fg": "darkorange", "bg": "brightestorange", "attrs": ["bold"] }
+				"mode": { "fg": "darkpink", "bg": "brightestpink", "attrs": ["bold"] }
 			}
 		},
 		"^V": {
 			"groups": {
-				"mode": { "fg": "darkorange", "bg": "brightestorange", "attrs": ["bold"] }
+				"mode": { "fg": "darkpink", "bg": "brightestpink", "attrs": ["bold"] }
 			}
 		},
 		"R": {

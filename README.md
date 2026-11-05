@@ -32,3 +32,14 @@ Layout:
 Linked files point into this checkout, so edits take effect without a rebuild.
 After changing a `.nix` file: `home-manager switch --flake ~/.dotfiles`
 (new files must be `git add`ed first, or Nix won't see them).
+
+Zsh uses Oh My Zsh with the existing Powerline prompt. Home Manager supplies
+Oh My Zsh, zsh-autosuggestions and zsh-syntax-highlighting; `.zshrc` stays editable.
+
+- Gray suggestions come from history, then completion: Right/End accepts them;
+  Alt-Right accepts a word.
+- Type part of a command and press Up/Down (or Ctrl-P/Ctrl-N) to search history.
+- Ctrl-R opens fzf history search; Ctrl-Y opens the existing file picker.
+- Tab offers grouped, case-insensitive completion; commands are highlighted as you type.
+- History keeps 100,000 entries shared across shells. Start a command with a space
+  to leave it out of saved history.

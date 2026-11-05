@@ -1,14 +1,16 @@
 {
 	"groups": {
+        "hostname": {"fg": "white", "bg": "mediumpink", "attrs": ["bold"]},
+        "rounded_hostname_cap": {"fg": "mediumpink", "bg": "gray0", "attrs": []},
 		"active_window_status": {"fg": "gray70", "bg": "gray0",    "attrs": []},
 		"window_status":        {"fg": "gray70", "bg": "gray0",    "attrs": []},
 		"activity_status":      {"fg": "yellow", "bg": "gray0",    "attrs": []},
 		"bell_status":          {"fg": "red",    "bg": "gray0",    "attrs": []},
 		"window":               {"fg": "gray6",  "bg": "gray0",    "attrs": []},
 		"window:divider":       {"fg": "gray4",  "bg": "gray0",    "attrs": []},
-		"window:current":       {"fg": "gray3",  "bg": "mediumorange", "attrs": []},
-		"window_name":          {"fg": "white",  "bg": "mediumorange", "attrs": ["bold"]},
-		"session":              {"fg": "black",  "bg": "gray90",   "attrs": ["bold"]},
-		"session:prefix":       {"fg": "gray90", "bg": "mediumorange", "attrs": ["bold"]}
+		"window:current":       {"fg": "gray3",  "bg": "mediumpink", "attrs": []},
+		"window_name":          {"fg": "white",  "bg": "mediumpink", "attrs": ["bold"]},
+		"session":              {"fg": "white",  "bg": "mediumpink",   "attrs": ["bold"]},
+		"session:prefix":       {"fg": "black", "bg": "brightpink", "attrs": ["bold"]}
 	}
 }

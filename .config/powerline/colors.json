@@ -28,6 +28,12 @@
 		"mediumpurple": 98,
 		"brightpurple": 189,
 
+		"transparent": false,
+		"darkpink": [125, "af005f"],
+		"mediumpink": [168, "d75f87"],
+		"brightpink": [211, "ff87af"],
+		"brightestpink": [218, "ffafd7"],
+
 		"darkorange": 94,
 		"mediumorange": 166,
 		"brightorange": 208,

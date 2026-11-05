@@ -1,7 +1,9 @@
 {
+  "outer_padding": 0,
 	"segments": {
 		"above": [{
       "left": [
+        {"type": "string", "contents": "", "highlight_groups": ["rounded_user_cap"], "draw_soft_divider": false, "draw_hard_divider": false},
         {
           "function": "powerline.segments.shell.mode"
         },
@@ -11,6 +13,7 @@
         },
         {
           "function": "powerline.segments.common.env.user",
+          "before": " ",
           "priority": 30
         },
         {
@@ -39,7 +42,7 @@
       "right": [
         {
           "type": "string",
-          "highlight_groups": ["background:divider"],
+          "highlight_groups": ["rounded_branch_fill"],
           "draw_soft_divider": false,
           "draw_hard_divider": false,
           "width": "auto"
@@ -55,15 +58,20 @@
         {
           "function": "powerline.segments.common.vcs.branch",
           "priority": 40
-        }
+        },
+        {"type": "string", "contents": "", "highlight_groups": ["rounded_branch_cap"], "draw_soft_divider": false, "draw_hard_divider": false}
       ]
 		}],
     "left": [
+      {"type": "string", "contents": "", "highlight_groups": ["rounded_prompt_cap"], "draw_soft_divider": false, "draw_hard_divider": false},
       {
         "type": "string",
         "contents": "$",
-        "highlight_groups": ["continuation:current"]
-      }
+        "highlight_groups": ["continuation:current"],
+        "draw_soft_divider": false,
+        "draw_hard_divider": false
+      },
+      {"type": "string", "contents": " ", "highlight_groups": ["rounded_prompt_cap"], "draw_soft_divider": false, "draw_hard_divider": false}
     ],
     "right": []
 	}

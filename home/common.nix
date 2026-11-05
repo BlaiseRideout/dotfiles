@@ -1,5 +1,5 @@
 # Shared by every machine: shell, editors, tmux, powerline, ssh, scripts.
-{ config, lib, username, dotfilesLink, ... }:
+{ config, lib, pkgs, username, dotfilesLink, ... }:
 {
   imports = [ ./lib.nix ];
 
@@ -32,7 +32,12 @@
   # A new script needs a switch (and `git add`) before it's linked.
   home.file = lib.mapAttrs'
     (name: _: lib.nameValuePair "scripts/${name}" { source = dotfilesLink "scripts/${name}"; })
-    (builtins.readDir ../scripts);
+    (builtins.readDir ../scripts) // {
+      # Keep the editable .zshrc; Nix supplies the framework and plugins.
+      ".local/share/zsh/oh-my-zsh".source = "${pkgs.oh-my-zsh}/share/oh-my-zsh";
+      ".local/share/zsh/autosuggestions".source = "${pkgs.zsh-autosuggestions}/share/zsh-autosuggestions";
+      ".local/share/zsh/syntax-highlighting".source = "${pkgs.zsh-syntax-highlighting}/share/zsh-syntax-highlighting";
+    };
 
   dotfiles.configDirs = [
     "nvim"
