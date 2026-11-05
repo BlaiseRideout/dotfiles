@@ -12,7 +12,12 @@
   # The service's restore hook, and the tools wired to the router (local-llama notes)
   home.file = builtins.listToAttrs (map
     (name: { name = ".local/bin/${name}"; value.source = dotfilesLink ".local/bin/${name}"; })
-    [ "llama-state" "opencode-llama-sync" "sbx-llama" ]);
+    [ "llama-ask" "llama-current-model" "llama-state" "opencode" "opencode-llama-sync" "sbx-llama" ])
+    // {
+      # Pi starts on the model the router already has loaded (see the extension for the rules)
+      ".pi/agent/extensions/llama-current-model.ts".source =
+        dotfilesLink ".pi/agent/extensions/llama-current-model.ts";
+    };
 
   # Noctalia (CachyOS's shell): the config (dotfiles.toml and the files it
   # includes, layered over CachyOS's own config.toml, which stays local), the

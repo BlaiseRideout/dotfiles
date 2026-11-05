@@ -1,0 +1,23 @@
+#!/bin/bash
+# Wrapper that points opencode's default model at whatever the llama.cpp router already has loaded (the TUI has no
+# --model flag, and the background service caches its config). opencode.json holds
+#   "model": "{file:~/.local/state/llama-serve/opencode-model}"
+# so before a new session this rewrites that file and runs `opencode reload` if the model changed. An explicit
+# -m/--model always wins; if the router is down or the model is unknown to opencode, nothing changes.
+REAL=${OPENCODE_REAL:-/usr/bin/opencode}
+FILE=${XDG_STATE_HOME:-$HOME/.local/state}/llama-serve/opencode-model
+
+follow_loaded_model() {
+  local key; key=$("$(dirname "$(readlink -f "$0")")/llama-current-model" -o 2>/dev/null) || return 0
+  [[ -n $key ]] || return 0
+  [[ -f $FILE && $(<"$FILE") == "$key" ]] && return 0
+  mkdir -p "$(dirname "$FILE")" && printf '%s' "$key" >"$FILE.tmp" && mv "$FILE.tmp" "$FILE" || return 0
+  "$REAL" reload >/dev/null 2>&1 || true
+}
+
+for a in "$@"; do [[ $a == -m || $a == --model || $a == --model=* || $a == -h || $a == --help || $a == -v || $a == --version ]] && exec "$REAL" "$@"; done
+case ${1:-} in
+  ""|-*|run|mini) follow_loaded_model ;;
+  *) [[ -d $1 ]] && follow_loaded_model ;;
+esac
+exec "$REAL" "$@"

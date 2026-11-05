@@ -1,0 +1,24 @@
+#!/bin/bash
+# Print the llama.cpp model to use right now, so tools can follow what is already resident instead of forcing a swap:
+# the loaded model, else the one asleep (idle >240 s), else the one llama-state last recorded, else the default.
+#   llama-current-model        the router model id
+#   llama-current-model -o     the opencode model ("llamacpp/<key>"), empty if opencode does not know it
+# Exits 1, printing nothing, if the router is not answering.
+set -euo pipefail
+PORT=${LLAMA_PORT:-9931}
+DEFAULT_MODEL=${LLAMA_ASK_DEFAULT:-local/Qwen3.5-9B-official-Q4_K_M}   # Qwen's own weights, quantized locally
+STATE=${XDG_STATE_HOME:-$HOME/.local/state}/llama-serve/last-model
+OPENCODE_CONFIG=${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}
+
+models=$(curl -fsS -m 3 "http://127.0.0.1:$PORT/models") || exit 1
+id=$(jq -r '([.data[] | select(.status.value == "loaded")] + [.data[] | select(.status.value == "sleeping")])[0].id // empty' <<<"$models")
+[[ -z $id && -s $STATE ]] && id=$(<"$STATE")
+[[ -n $id ]] || id=$DEFAULT_MODEL
+jq -e --arg m "$id" '.data[] | select(.id == $m)' <<<"$models" >/dev/null || id=$DEFAULT_MODEL   # recorded model was removed
+
+if [[ ${1:-} == -o ]]; then
+  key=$(jq -r --arg m "$id" '.providers.llamacpp.models | to_entries[] | select(.value.modelID == $m) | .key' "$OPENCODE_CONFIG" 2>/dev/null | head -1)
+  [[ -n $key ]] && echo "llamacpp/$key"
+else
+  echo "$id"
+fi

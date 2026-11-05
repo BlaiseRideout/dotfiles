@@ -1,0 +1,73 @@
+#!/bin/bash
+# One-shot, non-interactive prompt through the llama.cpp router with Pi or opencode, using the model that is
+# already resident so nothing gets swapped: the loaded model, else the one asleep (idle >240 s), else the one
+# llama-state last recorded, else DEFAULT_MODEL.
+#   llama-ask [-H pi|opencode] [-m MODEL-ID] [-q] PROMPT... [-]  a trailing "-" appends stdin to the prompt
+#   llama-ask -w                                                 print the model that would be used and exit
+# Tool calls and their output go to stderr as they happen (-q hides them and the banner), the answer to stdout.
+set -euo pipefail
+
+PORT=${LLAMA_PORT:-9931}
+OPENCODE_CONFIG=${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}
+harness=pi model="" quiet=0 which=0
+while getopts H:m:qwh opt; do
+  case $opt in
+    H) harness=$OPTARG ;;
+    m) model=$OPTARG ;;
+    q) quiet=1 ;;
+    w) which=1 ;;
+    h) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) exit 2 ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+models=$(curl -fsS -m 5 "http://127.0.0.1:$PORT/models") || { echo "llama-ask: router not answering on :$PORT" >&2; exit 1; }
+if [[ -z $model ]]; then
+  model=$("$(dirname "$(readlink -f "$0")")/llama-current-model")
+fi
+jq -e --arg m "$model" '.data[] | select(.id == $m)' <<<"$models" >/dev/null || {
+  echo "llama-ask: $model is not served by the router (see: curl -s 127.0.0.1:$PORT/models | jq -r '.data[].id')" >&2
+  exit 1; }
+((quiet)) || echo "llama-ask: $harness on $model" >&2
+((which)) && { echo "$model"; exit 0; }
+
+# stdin is only read when asked (a trailing "-") or when there is no prompt argument, so an open, idle pipe
+# (cron, an agent shell) can never hang the call
+if [[ ${*: -1} == - ]]; then set -- "${@:1:$#-1}"; read_stdin=1; else read_stdin=$(( $# == 0 )); fi
+prompt="$*"
+if ((read_stdin)) && [[ ! -t 0 ]]; then prompt+=${prompt:+$'\n\n'}$(cat); fi
+[[ -n ${prompt//[[:space:]]/} ]] || { echo "usage: llama-ask [-H pi|opencode] [-m MODEL-ID] PROMPT... [-]" >&2; exit 2; }
+
+# Pi's -p prints only the final answer, so run it in JSON mode and render the tool calls from the event stream:
+# "-> tool args" then the (clipped) result on stderr, assistant text on stdout.
+pi_events() {
+  jq --unbuffered -r --argjson show "$1" '
+    def err: split("\n") | map("\u0001" + .) | join("\n");
+    def text: [.content[]? | select(.type == "text") | .text] | join("");
+    if .type == "tool_execution_start" and $show then
+      ("-> \(.toolName) " + (.args | if type == "object" and (.command? | type) == "string" then .command else tojson end)) | .[0:600] | err
+    elif .type == "tool_execution_end" and $show then
+      (.result | text | sub("\\s+$"; "") | split("\n")) as $l
+      | ((.result.structuredContent.exit_code // 0) != 0 or .isError) as $bad
+      | (["<- \(.toolName)"] + [ $l[0:12][] | "   | " + .[0:300] ]
+         + (if ($l | length) > 12 then ["   | ... (\($l | length - 12) more lines)"] else [] end)
+         + (if $bad then ["   ! failed (exit \(.result.structuredContent.exit_code // "error"))"] else [] end)
+         | join("\n") | err)
+    elif .type == "message_end" and .message.role == "assistant" then
+      (.message | text | select(. != ""))
+    else empty end'
+}
+case $harness in
+  pi) # Pi's cached catalog lags the router's list and warns "using custom model id" for new models; the run is fine
+    pi -p --mode json --provider llama.cpp --model "$model" "$prompt" </dev/null 2> >(grep -v -E '^Warning: Model .* not found for provider' >&2) \
+      | pi_events "$( ((quiet)) && echo false || echo true )" \
+      | awk -v dim="$([[ -t 2 ]] && printf '\033[2m')" -v off="$([[ -t 2 ]] && printf '\033[0m')" \
+          '/^\001/ { sub(/^\001/, ""); print dim $0 off > "/dev/stderr"; next } { print; fflush() }'
+    exit "${PIPESTATUS[0]}" ;;
+  opencode)
+    key=$(jq -r --arg m "$model" '.providers.llamacpp.models | to_entries[] | select(.value.modelID == $m) | .key' "$OPENCODE_CONFIG" 2>/dev/null | head -1)
+    [[ -n $key ]] || { echo "llama-ask: $model is not in the opencode config; run opencode-llama-sync" >&2; exit 1; }
+    exec opencode run -m "llamacpp/$key" "$prompt" </dev/null ;;
+  *) echo "llama-ask: harness must be pi or opencode" >&2; exit 2 ;;
+esac

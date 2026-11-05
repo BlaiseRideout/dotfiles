@@ -29,6 +29,8 @@ read -r -d '' KNOWN <<'EOF' || true
  "ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF:Q4_0": ["nemotron-3.5-lightning-30b", "Nemotron 3.5 Lightning 30B-A3B"],
  "google/gemma-4-12B-it-qat-q4_0-gguf:Q4_0": ["gemma4-12b", "Gemma 4 12B QAT"],
  "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF:Q4_0": ["gemma4-26b-a4b", "Gemma 4 26B-A4B QAT"],
+ "local/Qwen3.5-9B-official-Q4_K_M": ["qwen3.5-9b", "Qwen3.5 9B (Qwen official weights)"],
+ "unsloth/Qwen3.5-9B-MTP-GGUF:Q4_K_M": ["qwen3.5-9b-unsloth", "Qwen3.5 9B (unsloth)"],
  "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M": ["qwen3-coder-30b-a3b", "Qwen3-Coder 30B-A3B"]
 }
 EOF
@@ -37,7 +39,7 @@ EOF
 # so the true value moves around. 32768 is always safe (the [*] fit-ctx); the entries below match the fit-ctx
 # set per model in models.ini (benchmarked 2026-11-04), or are conservative for models that fit far more.
 read -r -d '' CTX <<'EOF' || true
-{ "qwen3.5-9b-defiant": 131072, "gemma4-12b": 131072, "gemma4-26b-a4b": 131072,
+{ "qwen3.5-9b": 131072, "qwen3.5-9b-unsloth": 131072, "qwen3.5-9b-defiant": 131072, "gemma4-12b": 131072, "gemma4-26b-a4b": 131072,
   "nemotron-3.5-lightning-30b": 131072, "gemma4-26b-a4b-hauhau": 65536, "qwen3-coder-30b-a3b": 65536 }
 EOF
 
@@ -53,7 +55,7 @@ provider=$(jq -n --argjson m "$models" --argjson known "$KNOWN" --argjson ctx "$
         | ($known[$e.id] // [($e.id | slug), ($e.id | slug)]) as $k
         | { key: $k[0],
             value: {
-              name: "\($k[1]) (\($e.id | quant)) - local",
+              name: ("\($k[1])" + (($e.id | quant) as $q | if $q == "" then "" else " (\($q))" end) + " - local"),
               modelID: $e.id,
               compatibility: { reasoningField: "reasoning_content" },
               capabilities: {
@@ -68,11 +70,14 @@ provider=$(jq -n --argjson m "$models" --argjson known "$KNOWN" --argjson ctx "$
   }')
 
 n=$(jq '.models | length' <<<"$provider")
-new=$(jq --argjson p "$provider" '.providers.llamacpp = $p' "$CONFIG" 2>/dev/null || jq -n --argjson p "$provider" '{"$schema": "https://opencode.ai/config.json", providers: {llamacpp: $p}}')
+# The default model follows whatever the router has loaded: ~/.local/bin/opencode (a wrapper) keeps this file current.
+MODEL_FILE=${XDG_STATE_HOME:-$HOME/.local/state}/llama-serve/opencode-model
+new=$(jq --argjson p "$provider" '.providers.llamacpp = $p | .model //= "{file:~/.local/state/llama-serve/opencode-model}"' "$CONFIG" 2>/dev/null || jq -n --argjson p "$provider" '{"$schema": "https://opencode.ai/config.json", providers: {llamacpp: $p}}')
 
 if ((DRY)); then jq . <<<"$new"; exit 0; fi
 if [[ -f $CONFIG && ! -e $CONFIG.bak ]]; then cp -p "$CONFIG" "$CONFIG.bak"; echo "backed up the previous config to $CONFIG.bak"; fi
 mkdir -p "$(dirname "$CONFIG")"
 printf '%s\n' "$new" | jq . >"$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+[[ -e $MODEL_FILE ]] || { mkdir -p "$(dirname "$MODEL_FILE")"; printf 'llamacpp/qwen3.5-9b' >"$MODEL_FILE"; }
 echo "wrote $n models to $CONFIG:"
 jq -r '.providers.llamacpp.models | to_entries[] | "  llamacpp/\(.key)\t\(.value.limit.context) ctx\t\(.value.capabilities.input | join("+"))"' "$CONFIG" | column -t -s$'\t'
