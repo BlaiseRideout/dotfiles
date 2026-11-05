@@ -13,6 +13,8 @@ fi
 
 if [ -f ~/.fehbg ]; then
 	~/.fehbg &
+else
+  xsetroot -solid dimgrey -cursor_name left_ptr &
 fi
 
 autocutsel -f
