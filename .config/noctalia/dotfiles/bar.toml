@@ -16,7 +16,15 @@ capsule = false
 # Every widget's colour, unless it sets its own
 color = "#ffffff"
 icon_color = "#ffffff"
-# CachyOS's widgets, without the spacers or the stats capsule
+# Every monitor but the primary gets a plain bar, like Waybar's: workspaces,
+# the window title, the scratchpad buttons, tray and clock
+start = [ "workspaces" ]
+end = [ "fsearch", "t3code", "tray", "clock" ]
+
+# The primary monitor gets every widget: CachyOS's, without the spacers or the
+# stats capsule. Its `match` (the output's connector) comes from the generated
+# primary.toml (see dotfiles.toml), so it follows the primary at runtime.
+[bar.default.monitor.primary]
 start = [ "launcher", "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "llama", "zmk" ]
 end = [ "media", "fsearch", "t3code", "tray", "volume", "network", "caffeine", "notifications", "clock", "session" ]
 

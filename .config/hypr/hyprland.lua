@@ -113,6 +113,25 @@ end
 -- Noctalia uses workspace names for its icon labels; numeric IDs and binds stay the same.
 local workspace_icons = { "", "", "", "", "", "", "", "", "", "" }
 
+-- Noctalia shows the full bar only on the primary monitor (noctalia/dotfiles/
+-- bar.toml). It includes this file, which names that monitor, and reloads when
+-- it changes, like Waybar's launch.sh following kanshi/primary_output.sh.
+-- Only rewritten when the primary changes, since every write reloads the bar.
+local bar_primary_file = home .. "/.cache/noctalia/primary.toml"
+local function set_bar_primary(name)
+    local text = "# Written by hypr/hyprland.lua: the primary monitor, which gets the full bar\n"
+        .. "[bar.default.monitor.primary]\nmatch = \"" .. name .. "\"\n"
+    local f = io.open(bar_primary_file, "r")
+    local old = f and f:read("a")
+    if f then f:close() end
+    if old == text then return end
+    os.execute("mkdir -p " .. home .. "/.cache/noctalia")
+    f = io.open(bar_primary_file, "w")
+    if not f then return end
+    f:write(text)
+    f:close()
+end
+
 function place_workspaces(keep_view)
     local mons = hl.get_monitors() or {}
     local externals, tertiaries = {}, {}
@@ -132,6 +151,8 @@ function place_workspaces(keep_view)
     local secondary = externals[2]
     local tertiary = tertiaries[1]
     if tertiary == primary then tertiary = tertiaries[2] end
+
+    set_bar_primary(primary.name)
 
     local target = {}
     for i = 1, 8 do target[i] = primary end
