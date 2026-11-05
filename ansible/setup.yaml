@@ -33,6 +33,8 @@
     # Build Waybar from waybar_version: everywhere on pacman (Arch's 0.15.0 lacks the
     # tray features bar.jsonc uses); on apt it needs build_sway's Wayland
     build_waybar: "{{ build_sway | bool or pkg_mgr == 'pacman' }}"
+    # CachyOS shell and its flat Dropbox/Discord tray adapter.
+    noctalia: "{{ ansible_hostname == 'nhuto' and pkg_mgr == 'pacman' and hyprland | bool }}"
     apps: true             # GIMP, Spotify, VS Code, Discord, etc. (see below)
     # llama.cpp from llama.app's prebuilt binaries (CUDA here), for llama-serve.service
     # (home/hosts/nhuto.nix). Installed once; -e llama_update=true fetches the latest,
@@ -71,6 +73,7 @@
       apt:
         - git
         - curl
+        - openssh-client    # shared ssh-agent.service
         - xz-utils          # for the Nix installer
         - build-essential
         - zsh
@@ -90,6 +93,7 @@
       pacman:
         - git
         - curl
+        - openssh           # shared ssh-agent.service
         - xz
         - base-devel
         - tree-sitter-cli   # nvim-treesitter needs the CLI, not just libtree-sitter
@@ -176,6 +180,12 @@
       - grimblast-git       # CachyOS's repo (AUR elsewhere)
       - fuzzel
       - cliphist
+
+    # CachyOS supplies noctalia; the tray adapter uses the system Python.
+    noctalia_packages:
+      - noctalia
+      - python-dbus
+      - python-gobject
 
     openbox_packages:
       apt:
@@ -281,6 +291,7 @@
       {{ base_packages[pkg_mgr]
          + (sway_packages[pkg_mgr] if desktop == 'sway' else openbox_packages[pkg_mgr])
          + (hyprland_packages if hyprland | bool and pkg_mgr == 'pacman' else [])
+         + (noctalia_packages if noctalia | bool else [])
          + (build_packages if build_sway | bool and pkg_mgr == 'apt' else [])
          + (waybar_build_packages if build_waybar | bool and pkg_mgr == 'pacman' else []) }}
 
@@ -290,12 +301,13 @@
         that:
           - desktop in ['sway', 'openbox']
           - pkg_mgr in ['apt', 'pacman']
+          - not (noctalia | bool and (pkg_mgr != 'pacman' or not hyprland | bool))
           - not (build_sway | bool and pkg_mgr != 'apt')
           - not (build_waybar | bool and pkg_mgr == 'apt' and not build_sway | bool)
         fail_msg: >-
           desktop must be sway or openbox (not {{ desktop }}), the package
           manager apt or pacman (not {{ pkg_mgr }}), build_sway is for apt only, and on
-          apt build_waybar needs build_sway
+          apt build_waybar needs build_sway; noctalia needs pacman and hyprland=true
 
     # --- System (root) ---------------------------------------------------------
 
@@ -520,6 +532,29 @@
         PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
       register: hm
       changed_when: "'Activating' in hm.stdout"
+
+    # Home Manager links/enables the unit; start it on this login too.
+    - name: Start the shared SSH agent
+      ansible.builtin.systemd:
+        name: ssh-agent.service
+        scope: user
+        daemon_reload: true
+        state: started
+
+    # Defer graphical services when provisioning over SSH or a TTY.
+    - name: Check for an active graphical session
+      when: noctalia | bool
+      ansible.builtin.command: systemctl --user is-active graphical-session.target
+      register: graphical_session
+      changed_when: false
+      failed_when: graphical_session.rc not in [0, 3]
+
+    - name: Start Noctalia's flat tray adapter
+      when: noctalia | bool and graphical_session.rc == 0
+      ansible.builtin.systemd:
+        name: noctalia-flat-tray.service
+        scope: user
+        state: started
 
     # --- llama.cpp (llama=true) -----------------------------------------------------
     # The installer replaces ~/.llama-app (what the service runs) and copies the

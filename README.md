@@ -33,6 +33,11 @@ Linked files point into this checkout, so edits take effect without a rebuild.
 After changing a `.nix` file: `home-manager switch --flake ~/.dotfiles`
 (new files must be `git add`ed first, or Nix won't see them).
 
+On nhuto (CachyOS), Ansible also installs Noctalia and the Python dependencies
+for its flat tray icons. The tray service starts in an active graphical session,
+or on the next graphical login. Use `-e noctalia=false` to skip this setup.
+The shared SSH agent starts after Home Manager links its unit.
+
 Zsh uses Oh My Zsh with the existing Powerline prompt. Home Manager supplies
 Oh My Zsh, zsh-autosuggestions and zsh-syntax-highlighting; `.zshrc` stays editable.
 
