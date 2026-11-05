@@ -1,6 +1,7 @@
 {
 	"common": {
 		"term_truecolor": false,
+		"watcher": "stat",
 		"default_top_theme": "powerline"
 	},
 	"ext": {
