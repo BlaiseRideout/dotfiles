@@ -26,30 +26,30 @@
     desktop: sway          # sway | openbox
     # Hyprland next to Sway. apt: from Nix, with build/hyprland/system-setup.sh
     # (home/hosts/nhuto-Mint.nix); pacman: the distro's packages.
-    hyprland: "{{ ansible_hostname in ['nhuto', 'nhuto-Mint'] }}"
+    hyprland: "{{ ansible_facts['hostname'] in ['nhuto', 'nhuto-Mint'] }}"
     # apt only: build Sway 1.11 + Waybar into ~/.local/opt, as NVIDIA needs
     # newer than Ubuntu's. A workaround for nhuto-Mint (the desktop on Mint).
-    build_sway: "{{ ansible_hostname == 'nhuto-Mint' }}"
+    build_sway: "{{ ansible_facts['hostname'] == 'nhuto-Mint' }}"
     # Build Waybar from waybar_version: everywhere on pacman (Arch's 0.15.0 lacks the
     # tray features bar.jsonc uses); on apt it needs build_sway's Wayland
     build_waybar: "{{ build_sway | bool or pkg_mgr == 'pacman' }}"
     # CachyOS shell and its flat Dropbox/Discord tray adapter.
-    noctalia: "{{ ansible_hostname == 'nhuto' and pkg_mgr == 'pacman' and hyprland | bool }}"
+    noctalia: "{{ ansible_facts['hostname'] == 'nhuto' and pkg_mgr == 'pacman' and hyprland | bool }}"
     apps: true             # GIMP, Spotify, VS Code, Discord, etc. (see below)
     # llama.cpp from llama.app's prebuilt binaries (CUDA here), for llama-serve.service
     # (home/hosts/nhuto.nix). Installed once; -e llama_update=true fetches the latest,
     # or -e llama_version=b12019 a given build.
-    llama: "{{ ansible_hostname in ['nhuto', 'nhuto-Mint'] }}"
+    llama: "{{ ansible_facts['hostname'] in ['nhuto', 'nhuto-Mint'] }}"
     llama_update: false
     llama_version: ""
-    hm_config: "{{ ansible_user_id }}@{{ ansible_hostname }}"
-    dotfiles: "{{ ansible_env.HOME }}/.dotfiles"
+    hm_config: "{{ ansible_facts['user_id'] }}@{{ ansible_facts['hostname'] }}"
+    dotfiles: "{{ ansible_facts['env']['HOME'] }}/.dotfiles"
     dotfiles_repo: https://github.com/BlaiseRideout/dotfiles.git
     nix: /nix/var/nix/profiles/default/bin/nix
-    pkg_mgr: "{{ ansible_pkg_mgr }}"   # apt | pacman
+    pkg_mgr: "{{ ansible_facts['pkg_mgr'] }}"   # apt | pacman
 
     # Pinned sources for the self-built Sway (see build/sway/build.sh)
-    sway_src: "{{ ansible_env.HOME }}/.local/src/sway-1.11"
+    sway_src: "{{ ansible_facts['env']['HOME'] }}/.local/src/sway-1.11"
     sway_sources:
       - { name: wayland,  repo: "https://gitlab.freedesktop.org/wayland/wayland.git",  version: "1.24.0" }
       - { name: libinput, repo: "https://gitlab.freedesktop.org/libinput/libinput.git", version: "1.26.2" }
@@ -59,14 +59,14 @@
     # Unreleased master plus the tray icon wildcard patch (the fork's tray-icons-glob
     # branch), for the tray ignore-list and custom icons (see build/waybar/build.sh)
     waybar_repo: https://github.com/BlaiseRideout/Waybar.git
-    waybar_src: "{{ ansible_env.HOME }}/.local/src/waybar"
+    waybar_src: "{{ ansible_facts['env']['HOME'] }}/.local/src/waybar"
     waybar_version: 7121ff779c89da1cb0a81aa4b1ae0f1b9e098716
 
     # The GTK theme and icons in .config/gtk-{3,4}.0/settings.ini, built from their repos
     orchis_repo: https://github.com/vinceliuice/Orchis-theme.git
-    orchis_src: "{{ ansible_env.HOME }}/.local/src/orchis-theme"
+    orchis_src: "{{ ansible_facts['env']['HOME'] }}/.local/src/orchis-theme"
     flatery_repo: https://github.com/cbrnix/Flatery.git
-    flatery_src: "{{ ansible_env.HOME }}/.local/src/flatery"
+    flatery_src: "{{ ansible_facts['env']['HOME'] }}/.local/src/flatery"
 
     # Package lists per package manager, same order in both
     base_packages:
@@ -409,7 +409,7 @@
           become: true
           ansible.builtin.copy:
             dest: /etc/sudoers.d/ansible-paru
-            content: "{{ ansible_user_id }} ALL=(root) NOPASSWD: /usr/bin/pacman\n"
+            content: "{{ ansible_facts['user_id'] }} ALL=(root) NOPASSWD: /usr/bin/pacman\n"
             mode: "0440"
             validate: visudo -cf %s
 
@@ -472,7 +472,7 @@
     - name: Use zsh as the login shell
       become: true
       ansible.builtin.user:
-        name: "{{ ansible_user_id }}"
+        name: "{{ ansible_facts['user_id'] }}"
         shell: /usr/bin/zsh
 
     - name: Install Nix (multi-user)
@@ -511,7 +511,7 @@
     # (A folder link would make Home Manager's -b backup rename the repo's own files.)
     - name: Check for old whole-folder links
       ansible.builtin.stat:
-        path: "{{ ansible_env.HOME }}/{{ item }}"
+        path: "{{ ansible_facts['env']['HOME'] }}/{{ item }}"
       loop: [.config/systemd, .config/environment.d, scripts]
       register: old_links
 
@@ -524,12 +524,32 @@
         label: "{{ item.item }}"
       when: item.stat.islnk | default(false)
 
+    # Orchis's installer/older setup can link gtk.css directly to the theme.
+    # Home Manager's -b only backs up regular files, not foreign symlinks.
+    - name: Check for the old Orchis GTK 4 stylesheet link
+      ansible.builtin.stat:
+        path: "{{ ansible_facts['env']['HOME'] }}/.config/gtk-4.0/gtk.css"
+        follow: false
+      register: orchis_gtk_link
+
+    - name: Back up the old Orchis GTK 4 stylesheet link
+      ansible.builtin.command:
+        argv:
+          - mv
+          - --backup=numbered
+          - --
+          - "{{ ansible_facts['env']['HOME'] }}/.config/gtk-4.0/gtk.css"
+          - "{{ ansible_facts['env']['HOME'] }}/.config/gtk-4.0/gtk.css.bak"
+      when:
+        - orchis_gtk_link.stat.islnk | default(false)
+        - orchis_gtk_link.stat.lnk_source | default('') == ansible_facts['env']['HOME'] + '/.themes/Orchis-Pink-Dark/gtk-4.0/gtk.css'
+
     # -b bak: existing files in the way are renamed to <name>.bak, not overwritten
     - name: Apply the Home Manager config
       ansible.builtin.command: >-
         {{ nix }} run home-manager -- switch -b bak --flake {{ dotfiles }}#{{ hm_config }}
       environment:
-        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_env.PATH }}"
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_facts['env']['PATH'] }}"
       register: hm
       changed_when: "'Activating' in hm.stdout"
 
@@ -564,7 +584,7 @@
       block:
         - name: Check for llama.cpp
           ansible.builtin.stat:
-            path: "{{ ansible_env.HOME }}/.llama-app/llama"
+            path: "{{ ansible_facts['env']['HOME'] }}/.llama-app/llama"
           register: llama_bin
 
         - name: Install llama.cpp
@@ -580,14 +600,14 @@
         # symlinks Hugging Face's cache needs (ntfs3 shows them as unreadable stubs).
         - name: Create the model cache
           ansible.builtin.file:
-            path: "{{ ansible_env.HOME }}/.local/share/huggingface"
+            path: "{{ ansible_facts['env']['HOME'] }}/.local/share/huggingface"
             state: directory
             mode: "0755"
 
         - name: Link ~/.cache/huggingface to the model cache
           ansible.builtin.file:
-            src: "{{ ansible_env.HOME }}/.local/share/huggingface"
-            dest: "{{ ansible_env.HOME }}/.cache/huggingface"
+            src: "{{ ansible_facts['env']['HOME'] }}/.local/share/huggingface"
+            dest: "{{ ansible_facts['env']['HOME'] }}/.cache/huggingface"
             state: link
 
         # Home Manager links the unit and enables it (default.target.wants)
@@ -608,7 +628,7 @@
       become: true
       ansible.builtin.command: "{{ dotfiles }}/build/hyprland/system-setup.sh"
       environment:
-        SUDO_USER: "{{ ansible_user_id }}"
+        SUDO_USER: "{{ ansible_facts['user_id'] }}"
       changed_when: true
 
     # --- GTK theme and icons ----------------------------------------------------------
@@ -629,22 +649,22 @@
         label: "{{ item.dest }}"
 
     - name: Install the Orchis-Pink-Dark GTK theme
-      ansible.builtin.command: ./install.sh -d "{{ ansible_env.HOME }}/.themes" -t pink -c dark -s standard
+      ansible.builtin.command: ./install.sh -d "{{ ansible_facts['env']['HOME'] }}/.themes" -t pink -c dark -s standard
       args:
         chdir: "{{ orchis_src }}"
-        creates: "{{ ansible_env.HOME }}/.themes/Orchis-Pink-Dark"
+        creates: "{{ ansible_facts['env']['HOME'] }}/.themes/Orchis-Pink-Dark"
 
     # install.sh lists its own folder, so it runs from there
     - name: Install the Flatery-Pink-Dark icons
       ansible.builtin.command: ./install.sh -v "Pink-Dark"
       args:
         chdir: "{{ flatery_src }}"
-        creates: "{{ ansible_env.HOME }}/.local/share/icons/Flatery-Pink-Dark"
+        creates: "{{ ansible_facts['env']['HOME'] }}/.local/share/icons/Flatery-Pink-Dark"
 
     - name: Install sway_auto_floating (floating rules)
       ansible.builtin.command: pipx install git+https://github.com/artemave/sway_auto_floating
       args:
-        creates: "{{ ansible_env.HOME }}/.local/bin/sway_auto_floating"
+        creates: "{{ ansible_facts['env']['HOME'] }}/.local/bin/sway_auto_floating"
       when: desktop == 'sway'
 
     # --- Self-built Sway 1.11 (apt, build_sway=true) -------------------------------
@@ -664,7 +684,7 @@
 
         - name: Check for built Sway
           ansible.builtin.stat:
-            path: "{{ ansible_env.HOME }}/.local/opt/sway/bin/sway"
+            path: "{{ ansible_facts['env']['HOME'] }}/.local/opt/sway/bin/sway"
           register: sway_built
 
         - name: Build Sway (takes a few minutes)
@@ -676,7 +696,7 @@
         - name: Install the Sway NVIDIA launcher
           ansible.builtin.copy:
             src: "{{ dotfiles }}/build/sway/sway-nvidia"
-            dest: "{{ ansible_env.HOME }}/.local/opt/sway/bin/sway-nvidia"
+            dest: "{{ ansible_facts['env']['HOME'] }}/.local/opt/sway/bin/sway-nvidia"
             mode: "0755"
 
         - name: Add the login session
@@ -688,7 +708,7 @@
               [Desktop Entry]
               Name=Sway 1.11 (NVIDIA)
               Comment=Self-built Sway with explicit sync
-              Exec={{ ansible_env.HOME }}/.local/opt/sway/bin/sway-nvidia
+              Exec={{ ansible_facts['env']['HOME'] }}/.local/opt/sway/bin/sway-nvidia
               Type=Application
               DesktopNames=sway
 
@@ -709,7 +729,7 @@
 
         - name: Check for built Waybar
           ansible.builtin.stat:
-            path: "{{ ansible_env.HOME }}/.local/opt/waybar/bin/waybar"
+            path: "{{ ansible_facts['env']['HOME'] }}/.local/opt/waybar/bin/waybar"
           register: waybar_built
 
         # Rebuilt after a Sway rebuild too on apt: it links the Sway prefix's Wayland
@@ -722,6 +742,6 @@
         # So `waybar` in a terminal runs this one (launch.sh uses the full path)
         - name: Link Waybar into ~/.local/bin
           ansible.builtin.file:
-            src: "{{ ansible_env.HOME }}/.local/opt/waybar/bin/waybar"
-            dest: "{{ ansible_env.HOME }}/.local/bin/waybar"
+            src: "{{ ansible_facts['env']['HOME'] }}/.local/opt/waybar/bin/waybar"
+            dest: "{{ ansible_facts['env']['HOME'] }}/.local/bin/waybar"
             state: link
