@@ -30,24 +30,26 @@ end
 
 -- The router's API key is read from the file `llama-key` manages (never stored in the plugin or the repo), so
 -- every request carries it; re-read on each poll so a rotated key is picked up.
+local DEFAULT_KEY_FILE = "~/.local/state/llama-serve/api-key"
+local warnedKey = false
+
 local function authHeaders()
 	local path = noctalia.getConfig("api_key_file")
 	if path == nil or path == "" then
-		local home = noctalia.getenv("HOME")
-		if home == nil or home == "" then
-			return nil
-		end
-		path = home .. "/.local/state/llama-serve/api-key"
+		path = DEFAULT_KEY_FILE
 	end
-	local ok, body = pcall(noctalia.readFile, path)
-	if not ok or type(body) ~= "string" then
-		return nil
-	end
-	local key = body:gsub("%s+", "")
+	local ok, body = pcall(function()
+		return noctalia.readFile(noctalia.expandPath(path))
+	end)
+	local key = ok and type(body) == "string" and body:gsub("%s+", "") or ""
 	if key == "" then
+		if not warnedKey then
+			warnedKey = true
+			noctalia.warn("llama-meter: could not read the API key from " .. path)
+		end
 		return nil
 	end
-	return { Authorization = "Bearer " .. key }
+	return { "Authorization: Bearer " .. key }
 end
 
 local function get(url, callback)
