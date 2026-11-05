@@ -1,0 +1,12 @@
+[Unit]
+Description=Flat white Dropbox and Discord tray icons for Noctalia
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/python %h/.local/share/noctalia/tray-icons/adapter.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

@@ -19,7 +19,7 @@ color = "#ffffff"
 icon_color = "#ffffff"
 # CachyOS's widgets, without the launcher, the spacers or the stats capsule
 start = [ "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "llama", "zmk" ]
-end = [ "media", "tray", "volume", "network", "caffeine", "notifications", "clock", "session" ]
+end = [ "media", "fsearch", "t3code", "tray", "volume", "network", "caffeine", "notifications", "clock", "session" ]
 
 [widget.workspaces]
 font_scale = 1.1
@@ -42,6 +42,10 @@ max_length = 520
 
 [widget.tray]
 capsule = false
+# Noctalia 5.4 has no icon override map. noctalia-flat-tray.service publishes
+# the same items with Waybar's white SVGs and forwards clicks and menus.
+# Match the original IDs (numeric suffixes are reduced by Noctalia).
+hidden = [ "dropbox-client", "discord_status_icon" ]
 
 # CachyOS gives the widgets below their own colour (secondary, or error for
 # session), so the bar's white is repeated on each
@@ -63,3 +67,28 @@ show_label = false
 
 [widget.session]
 color = "#ffffff"
+
+# The Waybar scratchpad buttons: show/hide the existing app window.
+[widget.fsearch]
+type = "custom_button"
+glyph = "search"
+tooltip = "Search files"
+color = "#ffffff"
+capsule = false
+
+[widget.fsearch.actions]
+left = "exec $HOME/.config/sway/scratchpad-app.sh fsearch toggle"
+
+[widget.t3code]
+type = "custom_button"
+glyph = ""
+label = "T3"
+font_weight = 700
+tooltip = "T3 Code"
+color = "#ffffff"
+capsule = false
+
+[widget.t3code.actions]
+left = "exec $HOME/.config/sway/scratchpad-app.sh t3code toggle"
+middle = "exec $HOME/.config/sway/scratchpad-app.sh t3code toggle"
+right = "exec $HOME/.config/sway/scratchpad-app.sh t3code toggle"

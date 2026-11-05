@@ -324,7 +324,7 @@ local function show(name, w)
         fit_overlay(w)
     else
         local ws = hl.get_active_workspace()
-        hl.dispatch(hl.dsp.window.move({ workspace = ws.id, window = sel(w) }))
+        hl.dispatch(hl.dsp.window.move({ workspace = tostring(ws.id), window = sel(w) }))
     end
     hl.dispatch(hl.dsp.focus({ window = sel(w) }))
 end
@@ -344,7 +344,7 @@ function scratch_toggle(name)
         end
     elseif w.active or (not app.overlay and w.visible and w.workspace
             and hl.get_active_workspace()
-            and w.workspace.id == hl.get_active_workspace().id) then
+            and w.workspace.name == hl.get_active_workspace().name) then
         -- Moving to the bar can move keyboard focus away from T3. A tiled
         -- scratchpad app already visible here should still toggle closed.
         hide(name, w)
@@ -626,6 +626,20 @@ bind("x", hl.dsp.window.close())
 local function fuzzel(cmd) return run("pkill -x fuzzel || " .. cmd) end
 bind("d", run("noctalia msg panel-toggle launcher"))
 bind("u", function() scratch_toggle("fsearch") end)   -- search files: show or hide FSearch
+
+-- Escape dismisses FSearch's main window. Disable the binding everywhere
+-- else so other apps and FSearch dialogs keep their normal Escape handling.
+local fsearch_escape = hl.bind("Escape", function()
+    scratch_toggle("fsearch")
+end, { description = "Hide FSearch" })
+local function update_fsearch_escape()
+    local w = hl.get_active_window()
+    fsearch_escape:set_enabled(w ~= nil and app_matches(apps.fsearch, w))
+end
+hl.on("window.active", update_fsearch_escape)
+hl.on("window.title", update_fsearch_escape)
+hl.on("window.class", update_fsearch_escape)
+update_fsearch_escape()
 bind("r", fuzzel(hyprdir .. "/run-launcher.sh"))
 -- Clipboard history: Noctalia's clipboard panel
 bind("v", run("noctalia msg panel-toggle clipboard"))

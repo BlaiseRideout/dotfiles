@@ -20,7 +20,13 @@
   xdg.configFile."noctalia/dotfiles.toml".source = dotfilesLink ".config/noctalia/dotfiles.toml";
   xdg.configFile."noctalia/dotfiles".source = dotfilesLink ".config/noctalia/dotfiles";
   xdg.configFile."noctalia/palettes/Waybar.json".source = dotfilesLink ".config/noctalia/palettes/Waybar.json";
+  xdg.configFile."systemd/user/noctalia-flat-tray.service".source =
+    dotfilesLink ".config/systemd/user/noctalia-flat-tray.service";
+  xdg.configFile."systemd/user/graphical-session.target.wants/noctalia-flat-tray.service".source =
+    dotfilesLink ".config/systemd/user/noctalia-flat-tray.service";
   xdg.dataFile = builtins.listToAttrs (map
     (name: { name = "noctalia/plugins/${name}"; value.source = dotfilesLink ".local/share/noctalia/plugins/${name}"; })
-    [ "llama-meter" "zmk-battery" ]);
+    [ "llama-meter" "zmk-battery" ]) // {
+      "noctalia/tray-icons".source = dotfilesLink ".local/share/noctalia/tray-icons";
+    };
 }
