@@ -1,0 +1,17 @@
+{
+  "settings": {
+    "max_chars": {
+      "label": "Max text length",
+      "description": "Characters of the track text shown in the bar before it is cut off with an ellipsis; the tooltip has the whole title"
+    }
+  },
+  "tooltip": {
+    "title": "Title",
+    "artist": "Artist",
+    "status": "Status",
+    "nothing": "Nothing playing",
+    "Playing": "Playing",
+    "Paused": "Paused",
+    "Stopped": "Stopped"
+  }
+}

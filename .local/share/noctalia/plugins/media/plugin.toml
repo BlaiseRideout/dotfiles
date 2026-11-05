@@ -1,0 +1,29 @@
+# The media widget with a fixed music glyph instead of the player's album art, which the
+# built-in widget always shows and has no setting to turn off. It shows "title - artist"
+# for whatever playerctl's active player is playing or has paused, and a crossed-out note
+# (text-free) when there's no player. What clicks do is bound in bar.toml, like any
+# widget's: the built-in widget's actions work on this one too.
+
+id = "blaise/media"
+name = "Media"
+version = "1.0.0"
+plugin_api = 43
+author = "blaise"
+license = "MIT"
+icon = "music"
+description = "Now playing text with a static music glyph, no album art."
+tags = ["bar", "media", "indicator"]
+dependencies = ["playerctl"]
+
+[[setting]]
+key = "max_chars"
+type = "int"
+label_key = "settings.max_chars.label"
+description_key = "settings.max_chars.description"
+default = 40
+min = 10
+max = 200
+
+[[widget]]
+id = "player"
+entry = "widget.luau"

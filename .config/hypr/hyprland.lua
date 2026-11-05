@@ -450,7 +450,7 @@ hl.on("hyprland.start", function()
     -- (the distro's, or Nix's linked by home/hosts/nhuto-Mint.nix), and mako,
     -- which D-Bus starts on the first notification. No bar there.
     if succeeds("command -v noctalia") then
-        exec("noctalia")
+        exec(home .. "/scripts/noctalia.sh")
     else
         exec("hyprpaper")
         exec("for a in " .. home .. "/.local/libexec/hyprpolkitagent /usr/lib/hyprpolkitagent/hyprpolkitagent"

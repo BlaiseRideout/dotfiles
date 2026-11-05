@@ -1,0 +1,24 @@
+{
+  "settings": {
+    "glyph": {
+      "label": "Glyph",
+      "description": "Tabler glyph name; leave empty for a text-only button"
+    },
+    "glyph_size": {
+      "label": "Glyph size",
+      "description": "Size of the glyph in pixels"
+    },
+    "label": {
+      "label": "Label",
+      "description": "Bold text shown next to (or instead of) the glyph"
+    },
+    "font_size": {
+      "label": "Label size",
+      "description": "Size of the label text in pixels"
+    },
+    "tooltip": {
+      "label": "Tooltip",
+      "description": "Text shown on hover"
+    }
+  }
+}

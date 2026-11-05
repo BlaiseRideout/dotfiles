@@ -33,7 +33,7 @@
     dotfilesLink ".config/systemd/user/noctalia-flat-tray.service";
   xdg.dataFile = builtins.listToAttrs (map
     (name: { name = "noctalia/plugins/${name}"; value.source = dotfilesLink ".local/share/noctalia/plugins/${name}"; })
-    [ "llama-meter" "zmk-battery" ]) // {
+    [ "bar-button" "llama-meter" "media" "zmk-battery" ]) // {
       "noctalia/tray-icons".source = dotfilesLink ".local/share/noctalia/tray-icons";
     };
 }

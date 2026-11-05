@@ -3,7 +3,7 @@
 
 [bar.default]
 background_opacity = 0.6
-thickness = 35
+thickness = 36
 scale = 1.25
 font_scale = 1
 font_weight = 600
@@ -19,14 +19,14 @@ icon_color = "#ffffff"
 # Every monitor but the primary gets a plain bar, like Waybar's: workspaces,
 # the window title, the scratchpad buttons, tray and clock
 start = [ "workspaces" ]
-end = [ "fsearch", "t3code", "spotify", "tray", "clock" ]
+end = [ "fsearch", "t3code", "tray", "clock" ]
 
 # The primary monitor gets every widget: CachyOS's, without the spacers or the
 # stats capsule. Its `match` (the output's connector) comes from the generated
 # primary.toml (see dotfiles.toml), so it follows the primary at runtime.
 [bar.default.monitor.primary]
-start = [ "launcher", "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "media", "llama", "zmk" ]
-end = [ "fsearch", "t3code", "spotify", "tray", "volume", "network", "caffeine", "notifications", "clock", "session" ]
+start = [ "launcher", "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "llama", "zmk", "media_player" ]
+end = [ "fsearch", "t3code", "tray", "volume", "network", "caffeine", "notifications", "clock", "session" ]
 
 [widget.launcher]
 custom_image = "/usr/share/pixmaps/archlinux-logo.svg"
@@ -65,6 +65,8 @@ hidden = [ "discord_status_icon", "dropboxstatus-idle", "dropboxstatus-busy", "d
 
 [widget.clock]
 color = "#ffffff"
+# 0.97-0.99 puts the date on the icons' centre line at thickness 36 (1.0 sits 1px low)
+font_scale = 0.98
 format = "{:%a, %b %d %R}"
 
 [widget.network]
@@ -83,8 +85,9 @@ color = "#ffffff"
 
 # The Waybar scratchpad buttons: show/hide the existing app window.
 [widget.fsearch]
-type = "custom_button"
+type = "blaise/bar-button:button"
 glyph = "search"
+glyph_size = 13
 tooltip = "Search files"
 color = "#ffffff"
 capsule = false
@@ -93,10 +96,11 @@ capsule = false
 left = "exec $HOME/.config/sway/scratchpad-app.sh fsearch toggle"
 
 [widget.t3code]
-type = "custom_button"
+type = "blaise/bar-button:button"
 glyph = ""
 label = "T3"
-font_weight = 700
+# Centre the letters themselves without enlarging the font to shift its baseline.
+font_size = 11
 tooltip = "T3 Code"
 color = "#ffffff"
 capsule = false
@@ -106,17 +110,7 @@ left = "exec $HOME/.config/sway/scratchpad-app.sh t3code toggle"
 middle = "exec $HOME/.config/sway/scratchpad-app.sh t3code toggle"
 right = "exec $HOME/.config/sway/scratchpad-app.sh t3code toggle"
 
+[widget.media_player.actions]
 # Play/pause while a player is open, otherwise launch Spotify (as Waybar did).
-[widget.spotify]
-type = "custom_button"
-glyph = "brand-spotify-filled"
-tooltip = "Spotify"
-color = "#ffffff"
-capsule = false
-
-[widget.spotify.actions]
 left = "exec sh -c 'case $(playerctl status 2>/dev/null) in Playing|Paused) playerctl play-pause;; *) setsid -f spotify-launcher >/dev/null 2>&1;; esac'"
-
-# Keep the media widget on the bar when nothing is playing
-[widget.media]
-hide_when_no_media = false
+right = "panel-toggle control-center media"

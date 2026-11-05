@@ -1,0 +1,57 @@
+# A click-only bar button: a glyph and/or a short bold label, like the built-in
+# custom_button but with a settable glyph size and an ink-centred label, so
+# it lines up with the other bar icons (custom_button has neither). What clicks
+# do is bound in bar.toml ([widget.<name>.actions]), as with any widget.
+
+id = "blaise/bar-button"
+name = "Bar Button"
+version = "1.0.0"
+plugin_api = 43
+author = "blaise"
+license = "MIT"
+icon = "click"
+description = "A glyph and/or label button with an adjustable glyph size."
+tags = ["bar", "button"]
+
+[[widget]]
+id = "button"
+entry = "widget.luau"
+
+  [[widget.setting]]
+  key = "glyph"
+  type = "glyph"
+  label_key = "settings.glyph.label"
+  description_key = "settings.glyph.description"
+  default = ""
+
+  [[widget.setting]]
+  key = "glyph_size"
+  type = "int"
+  label_key = "settings.glyph_size.label"
+  description_key = "settings.glyph_size.description"
+  default = 16
+  min = 8
+  max = 40
+
+  [[widget.setting]]
+  key = "label"
+  type = "string"
+  label_key = "settings.label.label"
+  description_key = "settings.label.description"
+  default = ""
+
+  [[widget.setting]]
+  key = "font_size"
+  type = "int"
+  label_key = "settings.font_size.label"
+  description_key = "settings.font_size.description"
+  default = 14
+  min = 6
+  max = 40
+
+  [[widget.setting]]
+  key = "tooltip"
+  type = "string"
+  label_key = "settings.tooltip.label"
+  description_key = "settings.tooltip.description"
+  default = ""
