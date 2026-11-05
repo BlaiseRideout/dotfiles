@@ -22,8 +22,8 @@
 
 set -euo pipefail
 
-SERVICE=llama-serve.service
-FALLBACK_PORT=9931
+. "${LLAMA_LIB:-$HOME/.local/lib/llama.sh}"
+SERVICE=$LLAMA_SERVICE
 
 # --- balanced allow-list (fnmatch patterns on hostname; ports 80/443 only) ----
 BALANCED_ALLOW=(
@@ -101,15 +101,8 @@ if ! systemctl --user is-active --quiet "$SERVICE"; then
   systemctl --user start "$SERVICE"; sleep 2
 fi
 
-detect_port() {
-  [[ -n ${LLAMA_PORT:-} ]] && { echo "$LLAMA_PORT"; return; }
-  local pid p
-  pid=$(systemctl --user show -p MainPID --value "$SERVICE")
-  p=$(ss -ltnpH 2>/dev/null | awk -v pat="pid=$pid," '$0 ~ pat {n=split($4,a,":"); print a[n]; exit}')
-  echo "${p:-$FALLBACK_PORT}"
-}
-PORT=$(detect_port)
-BASE="http://127.0.0.1:$PORT"
+PORT=$(llama_port)
+BASE=$(llama_base)
 DOWNLOAD_ROW=$'+ Download a model from Hugging Face…\t\t'
 
 # Refresh models_json / MODEL_ROWS / IDS_JSON from the router (any arg = rescan the cache).

@@ -7,7 +7,7 @@
 # Tool calls and their output go to stderr as they happen (-q hides them and the banner), the answer to stdout.
 set -euo pipefail
 
-PORT=${LLAMA_PORT:-9931}
+. "${LLAMA_LIB:-$HOME/.local/lib/llama.sh}"
 OPENCODE_CONFIG=${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}
 harness=pi model="" quiet=0 which=0
 while getopts H:m:qwh opt; do
@@ -22,12 +22,12 @@ while getopts H:m:qwh opt; do
 done
 shift $((OPTIND - 1))
 
-models=$(curl -fsS -m 5 "http://127.0.0.1:$PORT/models") || { echo "llama-ask: router not answering on :$PORT" >&2; exit 1; }
+models=$(llama_models) || { echo "llama-ask: router not answering on :$(llama_port)" >&2; exit 1; }
 if [[ -z $model ]]; then
   model=$("$(dirname "$(readlink -f "$0")")/llama-current-model")
 fi
 jq -e --arg m "$model" '.data[] | select(.id == $m)' <<<"$models" >/dev/null || {
-  echo "llama-ask: $model is not served by the router (see: curl -s 127.0.0.1:$PORT/models | jq -r '.data[].id')" >&2
+  echo "llama-ask: $model is not served by the router (see: curl -s $(llama_base)/models | jq -r '.data[].id')" >&2
   exit 1; }
 ((quiet)) || echo "llama-ask: $harness on $model" >&2
 ((which)) && { echo "$model"; exit 0; }

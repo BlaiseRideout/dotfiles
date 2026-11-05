@@ -17,6 +17,8 @@
       # Pi starts on the model the router already has loaded (see the extension for the rules)
       ".pi/agent/extensions/llama-current-model.ts".source =
         dotfilesLink ".pi/agent/extensions/llama-current-model.ts";
+      # Shared helpers the tools above source (port detection, resident model, last-model path)
+      ".local/lib/llama.sh".source = dotfilesLink ".local/lib/llama.sh";
     };
 
   # Noctalia (CachyOS's shell): the config (dotfiles.toml and the files it

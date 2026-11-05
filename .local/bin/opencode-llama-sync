@@ -5,7 +5,8 @@
 set -euo pipefail
 
 CONFIG=${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}
-PORT=${LLAMA_PORT:-9931}
+. "${LLAMA_LIB:-$HOME/.local/lib/llama.sh}"
+PORT=$(llama_port)
 DRY=0
 while [[ $# -gt 0 ]]; do
   case $1 in

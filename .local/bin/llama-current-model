@@ -5,13 +5,13 @@
 #   llama-current-model -o     the opencode model ("llamacpp/<key>"), empty if opencode does not know it
 # Exits 1, printing nothing, if the router is not answering.
 set -euo pipefail
-PORT=${LLAMA_PORT:-9931}
+. "${LLAMA_LIB:-$HOME/.local/lib/llama.sh}"
 DEFAULT_MODEL=${LLAMA_ASK_DEFAULT:-local/Qwen3.5-9B-official-Q4_K_M}   # Qwen's own weights, quantized locally
-STATE=${XDG_STATE_HOME:-$HOME/.local/state}/llama-serve/last-model
+STATE=$LLAMA_LAST_MODEL_FILE
 OPENCODE_CONFIG=${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}
 
-models=$(curl -fsS -m 3 "http://127.0.0.1:$PORT/models") || exit 1
-id=$(jq -r '([.data[] | select(.status.value == "loaded")] + [.data[] | select(.status.value == "sleeping")])[0].id // empty' <<<"$models")
+models=$(llama_models 3) || exit 1
+id=$(llama_resident_id <<<"$models")
 [[ -z $id && -s $STATE ]] && id=$(<"$STATE")
 [[ -n $id ]] || id=$DEFAULT_MODEL
 jq -e --arg m "$id" '.data[] | select(.id == $m)' <<<"$models" >/dev/null || id=$DEFAULT_MODEL   # recorded model was removed
