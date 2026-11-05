@@ -19,14 +19,14 @@ icon_color = "#ffffff"
 # Every monitor but the primary gets a plain bar, like Waybar's: workspaces,
 # the window title, the scratchpad buttons, tray and clock
 start = [ "workspaces" ]
-end = [ "fsearch", "t3code", "tray", "clock" ]
+end = [ "fsearch", "t3code", "spotify", "tray", "clock" ]
 
 # The primary monitor gets every widget: CachyOS's, without the spacers or the
 # stats capsule. Its `match` (the output's connector) comes from the generated
 # primary.toml (see dotfiles.toml), so it follows the primary at runtime.
 [bar.default.monitor.primary]
-start = [ "launcher", "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "llama", "zmk" ]
-end = [ "media", "fsearch", "t3code", "tray", "volume", "network", "caffeine", "notifications", "clock", "session" ]
+start = [ "launcher", "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "media", "llama", "zmk" ]
+end = [ "fsearch", "t3code", "spotify", "tray", "volume", "network", "caffeine", "notifications", "clock", "session" ]
 
 [widget.launcher]
 custom_image = "/usr/share/pixmaps/archlinux-logo.svg"
@@ -105,3 +105,18 @@ capsule = false
 left = "exec $HOME/.config/sway/scratchpad-app.sh t3code toggle"
 middle = "exec $HOME/.config/sway/scratchpad-app.sh t3code toggle"
 right = "exec $HOME/.config/sway/scratchpad-app.sh t3code toggle"
+
+# Play/pause while a player is open, otherwise launch Spotify (as Waybar did).
+[widget.spotify]
+type = "custom_button"
+glyph = "brand-spotify-filled"
+tooltip = "Spotify"
+color = "#ffffff"
+capsule = false
+
+[widget.spotify.actions]
+left = "exec sh -c 'case $(playerctl status 2>/dev/null) in Playing|Paused) playerctl play-pause;; *) setsid -f spotify-launcher >/dev/null 2>&1;; esac'"
+
+# Keep the media widget on the bar when nothing is playing
+[widget.media]
+hide_when_no_media = false
