@@ -1,5 +1,5 @@
 [Unit]
-Description=Flat white Dropbox and Discord tray icons for Noctalia
+Description=Flat white Dropbox, Discord and Zoom tray icons for Noctalia
 After=graphical-session.target
 PartOf=graphical-session.target
 

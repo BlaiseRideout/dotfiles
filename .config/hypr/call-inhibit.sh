@@ -1,7 +1,7 @@
 #!/bin/sh
 # Keep the screen awake during video calls, so hypridle neither locks nor turns
 # the monitors off mid-call. Counts as a call when either:
-#   - the Zoom app has its meeting window open (class "zoom", title "Zoom Meeting"), or
+#   - the Zoom app has its meeting window open (class "zoom" or "Zoom"), or
 #   - a browser is capturing the microphone (Zoom's web client, and any other call).
 # It does what pressing Noctalia's caffeine button does: on when a call starts,
 # off again once it has been over for a while. (hypridle ignores systemd's idle
@@ -27,7 +27,7 @@ for _ in $(seq 20); do
 done
 
 in_call() {
-  hyprctl clients -j | jq -e 'any(.[]; .class == "zoom" and (.title | test("^(Zoom )?Meeting")))' >/dev/null && return 0
+  hyprctl clients -j | jq -e 'any(.[]; (.class | test("^zoom$"; "i")) and (.title | test("^(Zoom )?Meeting")))' >/dev/null && return 0
   # A browser capturing the mic (a muted call still holds its stream open)
   pactl -f json list source-outputs 2>/dev/null |
     jq -e --arg re "($BROWSERS)" 'any(.[]; ((.properties["application.process.binary"] // "") + " " + (.properties["application.name"] // "")) | test($re; "i"))' >/dev/null

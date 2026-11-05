@@ -5,6 +5,7 @@
 # drivers on a non-NixOS system.
 { pkgs, dotfilesLink, ... }:
 {
+  imports = [ ./zoom.nix ];
   dotfiles.configDirs = [
     "sway"
     "waybar"

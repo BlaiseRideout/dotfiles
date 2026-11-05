@@ -58,7 +58,7 @@ capsule = false
 # the same items with Waybar's white SVGs and forwards clicks and menus.
 # Dropbox's ID reduces to "dropbox", which also matches the proxy's original
 # title. Match its stock icon names instead so the proxy keeps verbatim hover text.
-hidden = [ "discord_status_icon", "dropboxstatus-idle", "dropboxstatus-busy", "dropboxstatus-busy2", "dropboxstatus-x", "dropboxstatus-logo", "dropboxstatus-blank" ]
+hidden = [ "discord_status_icon", "dropboxstatus-idle", "dropboxstatus-busy", "dropboxstatus-busy2", "dropboxstatus-x", "dropboxstatus-logo", "dropboxstatus-blank", "zoom" ]
 
 # CachyOS gives the widgets below their own colour (secondary, or error for
 # session), so the bar's white is repeated on each

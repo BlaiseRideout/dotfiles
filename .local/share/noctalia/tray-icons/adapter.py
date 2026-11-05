@@ -1,7 +1,7 @@
 #!/usr/bin/python
 """Flat tray artwork for Noctalia 5.4 (which lacks icon overrides).
 
-Proxy only the two selected StatusNotifierItems. All methods and menu traffic
+Proxy only the selected StatusNotifierItems. All methods and menu traffic
 still go to the application; only icon properties and the public Id change.
 Requires python-dbus and python-gobject on CachyOS.
 """
@@ -22,7 +22,7 @@ PROPS = 'org.freedesktop.DBus.Properties'
 WATCHER = 'org.kde.StatusNotifierWatcher'
 ROOT = Path(__file__).resolve().parent
 adapters = {}
-ENABLED_WRAPPERS = {'dropbox', 'discord'}
+ENABLED_WRAPPERS = {'dropbox', 'discord', 'zoom'}
 
 
 def emit(path, interface, member, signature='', args=()):
@@ -43,6 +43,11 @@ def properties(kind, values):
                   OverlayIconPixmap=dbus.Array([], signature='(iiay)'))
     if values.get('Menu'):
         values['Menu'] = dbus.ObjectPath('/FlatTray/flat_' + kind + '/Menu')
+    if kind == 'zoom':
+        # Noctalia hides the original by ID/title (Zoom supplies only pixmaps).
+        # Keep its tooltip but give the proxy a distinct ID and fallback title.
+        values['Id'] = dbus.String('flat-videoconference')
+        values['Title'] = dbus.String('Video conference')
     return values
 
 
@@ -114,6 +119,8 @@ def discover():
                 continue
             identity = str(values.get('Id', ''))
             kind = 'dropbox' if identity.startswith('dropbox-client-') else 'discord' if identity.startswith('discord_status_icon_') else None
+            if identity.lower() == 'zoom' or str(values.get('Title', '')).lower() == 'zoom':
+                kind = 'zoom'
             if kind in ENABLED_WRAPPERS:
                 found[kind] = (service, source, values)
         for kind, adapter in found.items():
@@ -137,7 +144,11 @@ def discover():
 
 def forward_signal(*args, message):
     for kind, (service, source, values) in adapters.items():
-        if message.get_sender() != bus.get_name_owner(service):
+        try:
+            owner = service if service.startswith(':') else bus.get_name_owner(service)
+        except dbus.DBusException:
+            continue
+        if message.get_sender() != owner:
             continue
         if message.get_path() == values.get('Menu'):
             emit('/FlatTray/flat_' + kind + '/Menu', message.get_interface(), message.get_member(),

@@ -1,13 +1,15 @@
 # Flat tray icons
 
 Noctalia 5.4.1 cannot override individual tray icons. This adapter republishes
-Dropbox and Discord's StatusNotifierItems using the flat white SVG artwork from
-`.config/waybar/icons`. The bar hides Discord by its stable ID and Dropbox by
+Dropbox, Discord and Zoom's StatusNotifierItems using flat white SVG artwork.
+Dropbox and Discord reuse the artwork from `.config/waybar/icons`.
+The bar hides Discord and Zoom by their stable IDs and Dropbox by
 its stock icon names (matching Dropbox's ID also hides the proxy by its title).
 Clicks and dbusmenu calls/signals are forwarded to the original applications.
 Hover tooltips retain the original applications' text and update with their state.
 Like the Waybar overrides, the artwork stays fixed through sync/unread states.
-Other tray items are untouched.
+Zoom's proxy uses a distinct ID/title so hiding `zoom` does not hide its
+replacement; its original tooltip and menu are preserved. Other tray items are untouched.
 
 The CachyOS user service uses `/usr/bin/python`, `python-dbus`, and
 `python-gobject`. Home Manager links the files and enables the service for the

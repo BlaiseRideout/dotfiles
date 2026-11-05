@@ -5,6 +5,7 @@
 # Nix instead, see home/hosts/nhuto-Mint.nix.
 { dotfilesLink, ... }:
 {
+  imports = [ ./zoom.nix ];
   dotfiles.configDirs = [ "hypr" "fuzzel" ];
 
   # FSearch's look, in the sandbox config dir of its Flatpak so only it gets it

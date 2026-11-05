@@ -630,6 +630,80 @@ hl.window_rule({
     center = true,
 })
 
+-- Zoom runs as a native Wayland client (xwayland=false in zoomus.conf), so
+-- its screen-share toolbar takes clicks, but Hyprland tiles the toolbar and the
+-- self-view window unless told to float them (XWayland ones floated on their own).
+hl.window_rule({
+    name  = "zoom-share-overlay",
+    match = { class = "^[Zz]oom$", title = "^(as_toolbar|as_preview|zoom_linux_float_video_window)$" },
+    float = true,
+    pin = true,
+    border_size = 0,
+    rounding = 0,
+    no_shadow = true,
+    no_blur = true,
+})
+
+-- Both the startup home window and the audio toast are "Zoom Workplace".
+-- Decorations can match that title, but floating/pinning requires a separate
+-- home window to exist (checked below), otherwise startup floats the home too.
+hl.window_rule({
+    name = "zoom-audio-notification",
+    match = { class = "^[Zz]oom$", title = "^Zoom Workplace$" },
+    border_size = 0,
+    rounding = 0,
+    no_shadow = true,
+    no_blur = true,
+})
+
+-- Use monitor-local logical dimensions and the actual reserved panel area.
+-- Recheck after Zoom resizes its surfaces, panel changes and monitor hotplug.
+local zoom_position = dofile(hyprdir .. "/zoom-overlay-position.lua")
+local function place_zoom_overlays()
+    local windows = hl.get_windows() or {}
+    local toolbars = {}
+    local homes = {}
+    for _, w in ipairs(windows) do
+        if w.mapped and w.class:lower() == "zoom" and w.title:match("^Zoom Workplace .+") then
+            homes[w.pid] = w.address
+        end
+    end
+    for _, w in ipairs(windows) do
+        if w.mapped and w.class:lower() == "zoom" and w.title == "Zoom Workplace"
+            and homes[w.pid] and homes[w.pid] ~= w.address then
+            if not w.floating then
+                hl.dispatch(hl.dsp.window.float({ window = sel(w), action = "enable" }))
+            end
+            if not w.pinned then
+                hl.dispatch(hl.dsp.window.pin({ window = sel(w), action = "enable" }))
+            end
+        end
+    end
+    for _, w in ipairs(windows) do
+        if w.mapped and w.floating and w.class:lower() == "zoom"
+            and w.title == "as_toolbar" and w.monitor then
+            toolbars[w.monitor.name] = w.size
+        end
+    end
+    for _, w in ipairs(windows) do
+        if w.mapped and w.floating and w.class:lower() == "zoom" and w.monitor then
+            local kind = ({ as_toolbar = "toolbar", as_preview = "preview",
+                zoom_linux_float_video_window = "preview" })[w.title]
+            if w.title == "Zoom Workplace" and homes[w.pid] ~= nil and homes[w.pid] ~= w.address then
+                kind = "toast"
+            end
+            if kind then
+                local x, y = zoom_position(w.monitor, w.size, kind, toolbars[w.monitor.name])
+                if math.abs(w.at.x - x) >= 1 or math.abs(w.at.y - y) >= 1 then
+                    hl.dispatch(hl.dsp.window.move({ window = sel(w), x = x, y = y }))
+                end
+            end
+        end
+    end
+end
+hl.timer(place_zoom_overlays, { timeout = 500, type = "repeat" })
+hl.on("config.reloaded", place_zoom_overlays)
+
 hl.window_rule({
     name  = "spotify",
     match = { class = "^Spotify$" },
