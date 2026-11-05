@@ -22,6 +22,7 @@ PROPS = 'org.freedesktop.DBus.Properties'
 WATCHER = 'org.kde.StatusNotifierWatcher'
 ROOT = Path(__file__).resolve().parent
 adapters = {}
+ENABLED_WRAPPERS = {'dropbox', 'discord'}
 
 
 def emit(path, interface, member, signature='', args=()):
@@ -32,12 +33,6 @@ def emit(path, interface, member, signature='', args=()):
 
 def properties(kind, values):
     values = dict(values)
-    # Keep the proxy out of Noctalia's reduced-ID hide matching for originals.
-    values['Title'] = dbus.String(kind.capitalize() + ' tray icon')
-    if 'ToolTip' in values:
-        tooltip = list(values['ToolTip'])
-        tooltip[2] = dbus.String(kind.capitalize() + ' tray icon')
-        values['ToolTip'] = dbus.Struct(tooltip, signature='sa(iiay)ss')
     values.update(Id=dbus.String('flat-' + kind),
                   IconName=dbus.String(str(ROOT / (kind + '.svg'))),
                   AttentionIconName=dbus.String(str(ROOT / (kind + '.svg'))),
@@ -119,7 +114,7 @@ def discover():
                 continue
             identity = str(values.get('Id', ''))
             kind = 'dropbox' if identity.startswith('dropbox-client-') else 'discord' if identity.startswith('discord_status_icon_') else None
-            if kind:
+            if kind in ENABLED_WRAPPERS:
                 found[kind] = (service, source, values)
         for kind, adapter in found.items():
             previous = adapters.get(kind)
