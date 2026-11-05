@@ -1,9 +1,6 @@
 --!nonstrict
--- A robot glyph and a small level bar for the token rate (full at max_rate t/s),
--- drawn from the poller's snapshot. Bright while generating, dimmer for the last
--- request's rate, dimmest for the lifetime average; an empty bar while reading the
--- prompt. Hidden while no model is loaded. The numbers are in the tooltip, or next
--- to the bar with show_value.
+-- A robot glyph and a vertical token-rate bar, full at max_rate t/s.
+-- Empty unless generating; historical rates remain in the tooltip.
 
 local SNAPSHOT_KEY = "llama"
 
@@ -26,21 +23,22 @@ local function render()
 	local maxRate = tonumber(noctalia.getConfig("max_rate")) or 100
 	local rate = snapshot.rate
 	local level = 0
-	if type(rate) == "number" and snapshot.state ~= "prefill" then
+	if type(rate) == "number" and snapshot.state == "generating" then
 		level = math.clamp(rate / maxRate, 0, 1)
 	end
 	local busy = snapshot.state == "generating" or snapshot.state == "prefill"
 
 	local children = {
-		ui.glyph({ name = "robot", size = 14, color = busy and "primary" or nil }),
-		ui.progress({
-			progress = level,
-			fill = FILL[snapshot.state] or "primary",
-			track = "on_surface_variant/0.2",
-			width = 22,
-			height = 5,
-			radius = 2.5,
-		}),
+		ui.glyph({ name = "robot", color = busy and "primary" or nil }),
+		ui.column({
+			width = 4,
+			height = 12,
+			justify = "end",
+			fill = "on_surface_variant/0.2",
+			radius = 2,
+		}, level > 0 and {
+			ui.box({ width = 4, height = 12 * level, fill = FILL[snapshot.state] or "primary", radius = 2 }),
+		} or {}),
 	}
 	if noctalia.getConfig("show_value") then
 		-- Whole tokens/s; three dots while there's no number yet
@@ -50,7 +48,7 @@ local function render()
 	end
 
 	local container = barWidget.isVertical() and ui.column or ui.row
-	barWidget.render(container({ gap = 5, align = "center" }, children))
+	barWidget.render(container({ gap = 4, align = "center" }, children))
 	barWidget.setTooltip(snapshot.rows)
 end
 
