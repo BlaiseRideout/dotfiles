@@ -4,7 +4,7 @@
 
 xrdb -merge ~/.Xresources &
 xmodmap ~/.Xmodmap &
-pidof nm-applet || nm-applet &
+command -v nm-applet >/dev/null && { pidof nm-applet || nm-applet & }
 
 if [ ! $(pidof unity-settings-daemon) ]; then
 	spacefm -d &

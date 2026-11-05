@@ -37,6 +37,8 @@
     noctalia: "{{ ansible_facts['hostname'] == 'nhuto' and pkg_mgr == 'pacman' and hyprland | bool }}"
     # GIMP, Spotify, VS Code, Discord, etc. (see below). Off on uhnet, a server.
     apps: "{{ ansible_facts['hostname'] != 'uhnet' }}"
+    # Openbox only: nm-applet. uhnet has a static IP from a network config file instead.
+    nm_applet: "{{ ansible_facts['hostname'] != 'uhnet' }}"
     # llama.cpp from llama.app's prebuilt binaries (CUDA here), for llama-serve.service
     # (home/hosts/nhuto.nix). Installed once; -e llama_update=true fetches the latest,
     # or -e llama_version=b12019 a given build.
@@ -193,13 +195,18 @@
         - openbox
         - tint2
         - copyq
-        - network-manager-gnome
         - spacefm           # ~/.autostart.sh
         - autocutsel        # ~/.autostart.sh: syncs the clipboard and primary selection
       pacman:
         - openbox
         - tint2
         - copyq
+
+    # The tray applet for NetworkManager; uhnet doesn't use it (nm_applet: false)
+    nm_applet_packages:
+      apt:
+        - network-manager-gnome
+      pacman:
         - network-manager-applet
 
     # Desktop apps (apps=true). FSearch and OpenRGB come from Flathub on both
@@ -293,6 +300,7 @@
     packages: >-
       {{ base_packages[pkg_mgr]
          + (sway_packages[pkg_mgr] if desktop == 'sway' else openbox_packages[pkg_mgr])
+         + (nm_applet_packages[pkg_mgr] if desktop == 'openbox' and nm_applet | bool else [])
          + (hyprland_packages if hyprland | bool and pkg_mgr == 'pacman' else [])
          + (noctalia_packages if noctalia | bool else [])
          + (build_packages if build_sway | bool and pkg_mgr == 'apt' else [])
