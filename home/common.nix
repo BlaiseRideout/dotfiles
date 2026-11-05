@@ -59,6 +59,9 @@
   xdg.configFile."gtk-4.0/assets".source =
     config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/.themes/Orchis-Pink-Dark/gtk-4.0/assets";
 
+  # git's global ignore list. Just the file: ~/.config/git/config stays local
+  xdg.configFile."git/ignore".source = dotfilesLink ".config/git/ignore";
+
   # environment.d is linked per file so a machine can add its own
   # (e.g. a gitignored file linked from hosts/<host>.nix)
   xdg.configFile."environment.d/ssh-agent.conf".source =

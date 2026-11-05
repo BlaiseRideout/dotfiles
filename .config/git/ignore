@@ -1,0 +1,4 @@
+# Ignored in every repo (git's global excludes file, ~/.config/git/ignore)
+
+# Claude Code's per-project permissions, saved when a command is approved for good
+.claude/settings.local.json
