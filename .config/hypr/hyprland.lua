@@ -151,12 +151,9 @@ function place_workspaces(keep_view)
 
     for i = 1, 10 do
         -- Repeating a rule for the same workspace replaces its monitor
-        -- A lone tiled window is at most 2:1 and centered, on ultrawides only
         local t = target[i]
-        local ultrawide = t.width >= 2 * t.height
         hl.workspace_rule({
             workspace = tostring(i), monitor = t.name, default_name = workspace_icons[i],
-            layout_opts = { single_window_aspect_ratio = ultrawide and "2 1" or "0 0" },
         })
         local ws = hl.get_workspace(i)
         if ws then
@@ -176,6 +173,61 @@ function place_workspaces(keep_view)
         focus_ws(1)
     end
 end
+
+-- A lone tiled window on an ultrawide is at most 2:1 and centered (like
+-- center_single.py on Sway). Hyprland's single_window_aspect_ratio is global,
+-- so it stays off (vertical monitors fill the screen) and the cap is made with
+-- side gaps on the workspace instead, added while it has exactly one tiled window.
+local GAP = 5
+local lone_gaps = {}   -- workspace id -> side gap currently applied
+
+local function workspace_gaps(id)
+    local side = lone_gaps[id] or GAP
+    return { top = GAP, bottom = GAP, left = side, right = side }
+end
+
+local function update_lone_windows()
+    for id = 1, 10 do
+        local ws = hl.get_workspace(id)
+        local m = ws and ws.monitor
+        local want = GAP
+        if m and m.width >= 2 * m.height then
+            local tiled
+            local n = 0
+            for _, w in ipairs(ws:get_windows() or {}) do
+                if w.mapped and not w.floating and not w.hidden then
+                    n = n + 1
+                    tiled = w
+                end
+            end
+            if n == 1 and tiled.fullscreen == 0 then
+                -- Window width is the monitor's, less the side gaps and borders
+                local h = tiled.size.y
+                local border = 5
+                want = math.max(GAP, math.floor((m.width - 2 * h) / 2) - border)
+            end
+        end
+        if (lone_gaps[id] or GAP) ~= want then
+            lone_gaps[id] = want
+            hl.workspace_rule({ workspace = tostring(id), gaps_out = workspace_gaps(id) })
+        end
+    end
+end
+
+-- Events fire before the state changes, so look again once it has settled
+local lone_timer
+local function schedule_lone_update()
+    if lone_timer then return end
+    lone_timer = hl.timer(function() lone_timer = nil; update_lone_windows() end,
+                          { timeout = 50, type = "oneshot" })
+end
+for _, ev in ipairs({ "window.open", "window.close", "window.move_to_workspace",
+                      "window.update_state", "workspace.active", "monitor.focused",
+                      "workspace.move_to_monitor" }) do
+    hl.on(ev, schedule_lone_update)
+end
+-- A reload clears the workspace rules, gaps included
+hl.on("config.reloaded", function() lone_gaps = {}; schedule_lone_update() end)
 
 hl.on("monitor.added",   function() place_workspaces(true) end)
 hl.on("monitor.removed", function() place_workspaces(true) end)
@@ -290,7 +342,11 @@ function scratch_toggle(name)
         else
             show(name, w)
         end
-    elseif w.active then
+    elseif w.active or (not app.overlay and w.visible and w.workspace
+            and hl.get_active_workspace()
+            and w.workspace.id == hl.get_active_workspace().id) then
+        -- Moving to the bar can move keyboard focus away from T3. A tiled
+        -- scratchpad app already visible here should still toggle closed.
         hide(name, w)
     else
         hl.dispatch(hl.dsp.focus({ window = sel(w) }))
@@ -448,8 +504,7 @@ hl.config({
     -- Splits follow the window's shape (wider than tall: side by side), and are
     -- worked out again when windows come and go
     dwindle = { preserve_split = false },
-    -- The 2:1 cap on a lone tiled window is per workspace, for ultrawide
-    -- monitors only (see place_workspaces); everything else fills the screen
+    -- Lone windows on ultrawides are capped with gaps instead (update_lone_windows)
     render = {
         -- Don't tell the monitor a fullscreen window's content type (game,
         -- video...): changing it takes a modeset, and the screens went blank
@@ -560,26 +615,26 @@ local function run(cmd) return hl.dsp.exec_cmd(cmd) end
 
 -- Basics
 bind("Return", run(term))
-hl.bind("CTRL + SHIFT + Escape", run(term .. " htop"))   -- task manager, like Windows
+hl.bind("CTRL + SHIFT + Escape", run(term .. " btop"))   -- task manager, like Windows
 -- x-www-browser is Debian's; elsewhere the default browser's .desktop entry
 bind("w", run([[command -v x-www-browser >/dev/null && exec x-www-browser; exec gtk-launch "$(xdg-settings get default-web-browser)"]]))
 bind("e", run("xdg-open ~"))   -- default folder handler (Nemo)
 bind("k", run("keepassxc"))
 bind("q", hl.dsp.window.close())
 bind("x", hl.dsp.window.close())
--- fuzzel: apps, and (scripts next to this file) commands and windows. The same key again closes it.
+-- Noctalia's launcher panel (apps; the same key again closes it) and run-launcher.sh (fuzzel) for commands
 local function fuzzel(cmd) return run("pkill -x fuzzel || " .. cmd) end
-bind("d", fuzzel("fuzzel"))
+bind("d", run("noctalia msg panel-toggle launcher"))
 bind("u", function() scratch_toggle("fsearch") end)   -- search files: show or hide FSearch
 bind("r", fuzzel(hyprdir .. "/run-launcher.sh"))
--- Clipboard history: fzf in a kitty window, for its preview (the script toggles it)
-bind("v", run(hyprdir .. "/clipboard.sh"))
+-- Clipboard history: Noctalia's clipboard panel
+bind("v", run("noctalia msg panel-toggle clipboard"))
 -- Noctalia can only dismiss them all
 bind("BackSpace", run("makoctl dismiss || noctalia msg notification-clear-active"))
 bind("SHIFT + BackSpace", run("makoctl dismiss -a || noctalia msg notification-clear-active"))
 bind("l", run("~/scripts/lock.sh"))
 bind("SHIFT + r", hl.dsp.reload_config())
-bind("SHIFT + q", run([[swaynag -t warning -m 'You pressed the exit shortcut. Do you really want to exit Hyprland? This will end your Wayland session.' -B 'Yes, exit Hyprland' 'hyprctl dispatch "hl.dsp.exit()"']]))
+bind("SHIFT + q", run("noctalia msg panel-toggle session"))   -- same dialog as the bar's power icon
 
 -- Drag windows with $mod + left mouse button, resize with $mod + right
 bind("mouse:272", hl.dsp.window.drag(),   { mouse = true })
@@ -645,10 +700,18 @@ bind("space", function()
 end)
 
 -- Scratchpad: a special workspace shown over the current one
-bind("SHIFT + minus", hl.dsp.window.move({ workspace = "special:scratchpad", follow = false }))
+-- Toggles: a window in the scratchpad comes back to the workspace underneath, any other goes in
+bind("SHIFT + minus", run([[
+  if [ "$(hyprctl -j activewindow | jq -r '.workspace.name')" = "special:scratchpad" ]; then
+    ws=$(hyprctl -j monitors | jq '.[] | select(.focused) | .activeWorkspace.id')
+    hyprctl -q dispatch "hl.dsp.window.move({ workspace = $ws })"
+  else
+    hyprctl -q dispatch 'hl.dsp.window.move({ workspace = "special:scratchpad", follow = false })'
+  fi]]))
 bind("CTRL + minus",  hl.dsp.workspace.toggle_special("scratchpad"))
 -- Pick any window (scratchpad included) from a list
-bind("minus", fuzzel(hyprdir .. "/window-switcher.sh"))
+bind("minus", run("noctalia msg panel-toggle launcher /win"))   -- Noctalia's launcher, windows provider
+bind("Tab", run("noctalia msg window-switcher"))   -- Noctalia's switcher overlay
 
 -- Media and brightness keys, also while locked
 local media = {
