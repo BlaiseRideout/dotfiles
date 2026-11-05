@@ -20,6 +20,10 @@ path_append()  { case ":$PATH:" in *":$1:"*) ;; *) PATH="$PATH:$1" ;; esac; }
 [ -d "$HOME/bin" ] && path_prepend "$HOME/bin"
 [ -d "$HOME/.local/bin" ] && path_prepend "$HOME/.local/bin"
 
+# pip --user scripts live in <user-base>/bin. On Linux that is $PYTHONUSERBASE
+# or ~/.local (what `python3 -m site --user-base` prints, minus the startup cost).
+[ -n "$PYTHONUSERBASE" ] && [ -d "$PYTHONUSERBASE/bin" ] && path_prepend "$PYTHONUSERBASE/bin"
+
 if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
     export RUSTFLAGS="-C target-cpu=native"
@@ -34,8 +38,12 @@ export GOPATH="$HOME/prog/go"
 path_append "$GOROOT/bin"
 path_append "$GOPATH/bin"
 
-export JAVA_HOME=/opt/jdk
-path_prepend "$JAVA_HOME/bin"
+if [ -d /usr/lib/jvm/default-java ]; then
+    export JAVA_HOME=/usr/lib/jvm/default-java   # Debian's default-jdk
+elif [ -d /usr/lib/jvm/default ]; then
+    export JAVA_HOME=/usr/lib/jvm/default        # pacman's archlinux-java
+fi
+[ -n "$JAVA_HOME" ] && path_prepend "$JAVA_HOME/bin"
 
 export ANDROID_HOME="$HOME/Android/Sdk"
 export ANDROID_NDK_HOME="$HOME/Android/Ndk"
