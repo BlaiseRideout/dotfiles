@@ -29,17 +29,16 @@ read -r -d '' KNOWN <<'EOF' || true
  "ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF:Q4_0": ["nemotron-3.5-lightning-30b", "Nemotron 3.5 Lightning 30B-A3B"],
  "google/gemma-4-12B-it-qat-q4_0-gguf:Q4_0": ["gemma4-12b", "Gemma 4 12B QAT"],
  "lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF:Q4_0": ["gemma4-26b-a4b", "Gemma 4 26B-A4B QAT"],
- "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF:Q4_K_M": ["devstral-small-2-24b", "Devstral Small 2 24B"],
- "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M": ["qwen3-coder-30b-a3b", "Qwen3-Coder 30B-A3B"],
- "unsloth/Qwen3.8-27B-GGUF:IQ3_S": ["qwen3.8-27b", "Qwen3.8 27B"]
+ "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M": ["qwen3-coder-30b-a3b", "Qwen3-Coder 30B-A3B"]
 }
 EOF
 
-# The router sizes each model's context to the VRAM free at load (--fit, never below --fit-ctx 32768), so
-# the true value moves around. 32768 is always safe (the [*] fit-ctx in models.ini); models that routinely get far more are raised
-# to 131072, and Qwen3-Coder is pinned to a guaranteed 65536 by its own fit-ctx section in models.ini.
+# The router sizes each model's context to the VRAM free at load (--fit, never below the fit-ctx in models.ini),
+# so the true value moves around. 32768 is always safe (the [*] fit-ctx); the entries below match the fit-ctx
+# set per model in models.ini (benchmarked 2026-11-04), or are conservative for models that fit far more.
 read -r -d '' CTX <<'EOF' || true
-{ "qwen3.5-9b-defiant": 131072, "gemma4-12b": 131072, "qwen3-coder-30b-a3b": 65536 }
+{ "qwen3.5-9b-defiant": 131072, "gemma4-12b": 131072, "gemma4-26b-a4b": 131072,
+  "nemotron-3.5-lightning-30b": 131072, "gemma4-26b-a4b-hauhau": 65536, "qwen3-coder-30b-a3b": 65536 }
 EOF
 
 provider=$(jq -n --argjson m "$models" --argjson known "$KNOWN" --argjson ctx "$CTX" --arg port "$PORT" '
