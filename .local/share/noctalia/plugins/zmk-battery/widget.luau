@@ -37,7 +37,7 @@ local function render()
 			width = 4,
 			height = 12,
 			justify = "end",
-			fill = level ~= nil and "on_surface_variant/0.2" or "error/0.3",
+			fill = level ~= nil and "#ffffff4d" or "error/0.3",
 			radius = 2,
 		}, levelFraction > 0 and {
 			ui.box({

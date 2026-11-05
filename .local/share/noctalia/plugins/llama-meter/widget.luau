@@ -34,7 +34,7 @@ local function render()
 			width = 4,
 			height = 12,
 			justify = "end",
-			fill = "on_surface_variant/0.2",
+			fill = "#ffffff4d",
 			radius = 2,
 		}, level > 0 and {
 			ui.box({ width = 4, height = 12 * level, fill = FILL[snapshot.state] or "primary", radius = 2 }),
