@@ -1,0 +1,76 @@
+#!/bin/sh
+# Yoga Book 9i (13IMU9) platform health in one screen: speaker amp firmware,
+# Bluetooth, power profile, battery charge mode, suspend counters, ambient light
+# sensor and the IR camera node. Read-only and needs no root.
+# Notes and the fixes behind each line: docs/yoga-book/platform.md.
+#
+#   yoga-platform-status            # everything
+#   yoga-platform-status als        # live ambient light readings (cover the sensor, shine a light)
+#   yoga-platform-status sleep      # only the suspend counters (run before and after a suspend)
+
+section() { printf '\n== %s ==\n' "$1"; }
+
+sleep_counters() {
+  s=/sys/power/suspend_stats
+  echo "suspend success/fail: $(cat $s/success) / $(cat $s/fail)"
+  echo "last_hw_sleep:  $(cat $s/last_hw_sleep) us   total_hw_sleep: $(cat $s/total_hw_sleep) us"
+  c=/sys/devices/system/cpu/cpuidle
+  [ -r $c/low_power_idle_system_residency_us ] &&
+    echo "SLP_S0 (system) residency since boot: $(cat $c/low_power_idle_system_residency_us) us"
+  [ -r $c/low_power_idle_cpu_residency_us ] &&
+    echo "package C10 (cpu) residency since boot: $(cat $c/low_power_idle_cpu_residency_us) us"
+  echo "mem_sleep: $(cat /sys/power/mem_sleep)"
+}
+
+als() {
+  d=
+  for i in /sys/bus/iio/devices/iio:device*; do
+    [ "$(cat "$i/name" 2>/dev/null)" = als ] && d=$i
+  done
+  [ -n "$d" ] || { echo "no ALS IIO device"; return 1; }
+  echo "$d: raw * scale = lux?  (illuminance_scale $(cat "$d/in_illuminance_scale"))"
+  for n in 1 2 3 4 5; do
+    r=$(cat "$d/in_illuminance_raw") sc=$(cat "$d/in_illuminance_scale")
+    echo "raw $r -> $(awk -v r="$r" -v s="$sc" 'BEGIN { printf "%.3f", r * s }')"
+    sleep 1
+  done
+}
+
+case "$1" in
+  als) als; exit ;;
+  sleep) sleep_counters; exit ;;
+esac
+
+section "Speaker amp (TAS2781, codec SSID $(sed -n 's/^Subsystem Id: 0x17aa//p' /proc/asound/card0/codec#0 2>/dev/null))"
+journalctl -b -k --no-pager 2>/dev/null | grep -E 'tas2781-hda.*(Direct firmware load|dspfw load)' | tail -2
+if journalctl -b -k --no-pager 2>/dev/null | grep -q 'dspfw load.*error'; then
+  echo "-> DSP firmware MISSING: speakers run without tuning (thin, no bass)."
+else
+  echo "-> no firmware errors this boot"
+fi
+
+section "Bluetooth"
+rfkill list bluetooth 2>/dev/null | grep -E 'Soft|Hard|:' | paste -sd' ' | sed 's/  */ /g'
+bluetoothctl show 2>/dev/null | grep -E 'Powered|PowerState'
+bluetoothctl devices 2>/dev/null
+
+section "Power profile"
+powerprofilesctl get 2>/dev/null
+cat /sys/firmware/acpi/platform_profile 2>/dev/null
+
+section "Battery"
+b=/sys/class/power_supply/BAT0
+echo "capacity $(cat $b/capacity)%  status $(cat $b/status)  charge_types: $(cat $b/charge_types 2>/dev/null)"
+awk -v f="$(cat $b/energy_full)" -v d="$(cat $b/energy_full_design)" -v c="$(cat $b/cycle_count)" \
+  'BEGIN { printf "health %.0f%% of design, %d cycles\n", 100 * f / d, c }'
+
+section "Suspend"
+sleep_counters
+
+section "Ambient light sensor"
+als | head -3
+
+section "Cameras"
+for v in /sys/class/video4linux/video*; do
+  printf '%s: %s\n' "$(basename "$v")" "$(cat "$v/name")"
+done

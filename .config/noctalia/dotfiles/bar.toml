@@ -19,6 +19,7 @@ icon_color = "#ffffff"
 # Every monitor but the primary gets a plain bar, like Waybar's: workspaces,
 # the window title, the scratchpad buttons, tray and clock
 start = [ "workspaces" ]
+center = [ "active_window" ]
 end = [ "fsearch", "t3code", "tray", "clock" ]
 
 # The primary monitor gets every widget: CachyOS's, without the spacers or the
