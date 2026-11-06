@@ -100,7 +100,9 @@
         - openssh           # shared ssh-agent.service
         - xz
         - base-devel
+        - neovim
         - tree-sitter-cli   # nvim-treesitter needs the CLI, not just libtree-sitter
+        - unzip             # Mason unpacks lua-language-server with it
         - zsh
         - tmux
         - fzf
