@@ -1,0 +1,17 @@
+# The desktop's bar extras, linked as ~/.config/noctalia/host.toml by
+# home/hosts/nhuto.nix: the llama.cpp and ZMK battery meters (plugins in
+# ~/.local/share/noctalia/plugins). Lists replace the ones in dotfiles/ whole.
+
+[plugins]
+enabled = [ "blaise/bar-button", "blaise/llama-meter", "blaise/media", "blaise/zmk-battery" ]
+
+[bar.default.monitor.primary]
+start = [ "launcher", "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "llama", "zmk", "media_player" ]
+
+[widget.llama]
+scale = 1.0
+type = "blaise/llama-meter:meter"
+
+[widget.zmk]
+scale = 1.0
+type = "blaise/zmk-battery:meter"

@@ -1,9 +1,14 @@
 # The dotfiles' Noctalia config, one file per concern in dotfiles/:
 #   theme.toml      palette (palettes/Waybar.json) and which apps it recolours
 #   bar.toml        the bar's layout and look, Waybar style
-#   meters.toml     the stats: sysmon gauges, llama.cpp and ZMK battery plugins
+#   meters.toml     the stats: sysmon gauges and the media plugin
 #   wallpaper.toml  per-monitor wallpaper rotation
 #   idle.toml       leaves idle and locking to hypridle + hyprlock
+#
+# host.toml (linked per machine from hosts/<host>.toml, absent elsewhere) sits
+# next to this file, so it loads after this one and everything it includes,
+# and adds that machine's bar widgets and plugins (e.g. the desktop's llama.cpp
+# and ZMK meters).
 #
 # Noctalia merges every *.toml in this folder in name order, so this file loads
 # after CachyOS's own config.toml and overrides it; the included files don't

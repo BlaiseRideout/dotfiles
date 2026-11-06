@@ -21,19 +21,11 @@
       ".local/lib/llama.sh".source = dotfilesLink ".local/lib/llama.sh";
     };
 
-  # Noctalia (CachyOS's shell): the config (dotfiles.toml and the files it
-  # includes, layered over CachyOS's own config.toml, which stays local), the
-  # palette, and the llama.cpp and ZMK battery meter plugins
-  xdg.configFile."noctalia/dotfiles.toml".source = dotfilesLink ".config/noctalia/dotfiles.toml";
-  xdg.configFile."noctalia/dotfiles".source = dotfilesLink ".config/noctalia/dotfiles";
-  xdg.configFile."noctalia/palettes/Waybar.json".source = dotfilesLink ".config/noctalia/palettes/Waybar.json";
-  xdg.configFile."systemd/user/noctalia-flat-tray.service".source =
-    dotfilesLink ".config/systemd/user/noctalia-flat-tray.service";
-  xdg.configFile."systemd/user/graphical-session.target.wants/noctalia-flat-tray.service".source =
-    dotfilesLink ".config/systemd/user/noctalia-flat-tray.service";
+  # Noctalia's desktop extras: the llama.cpp and ZMK battery meters, and the
+  # bar layout and plugin list that use them
+  imports = [ ../noctalia.nix ];
+  xdg.configFile."noctalia/host.toml".source = dotfilesLink ".config/noctalia/hosts/nhuto.toml";
   xdg.dataFile = builtins.listToAttrs (map
     (name: { name = "noctalia/plugins/${name}"; value.source = dotfilesLink ".local/share/noctalia/plugins/${name}"; })
-    [ "bar-button" "llama-meter" "media" "zmk-battery" ]) // {
-      "noctalia/tray-icons".source = dotfilesLink ".local/share/noctalia/tray-icons";
-    };
+    [ "llama-meter" "zmk-battery" ]);
 }

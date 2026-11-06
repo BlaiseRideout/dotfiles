@@ -1,10 +1,9 @@
 # The stats in the bar (bar.toml places them): small gauges with an icon and
-# no numbers, which are in the tooltips. The llama.cpp and ZMK battery meters
-# and the media widget (the built-in one always shows album art) are plugins in
+# no numbers, which are in the tooltips. The media widget (the built-in one always shows album art) are plugins in
 # ~/.local/share/noctalia/plugins, linked from the dotfiles.
 
 [plugins]
-enabled = [ "blaise/bar-button", "blaise/llama-meter", "blaise/media", "blaise/zmk-battery" ]
+enabled = [ "blaise/bar-button", "blaise/media" ]
 
 # Keep all meters at widget scale 1.0 (effective 1.25 with the bar scale).
 [widget.sysmon_2]
@@ -46,14 +45,6 @@ stat = "ram_used"
 glyph = "database"
 visualization = "gauge"
 show_value = false
-
-[widget.llama]
-scale = 1.0
-type = "blaise/llama-meter:meter"
-
-[widget.zmk]
-scale = 1.0
-type = "blaise/zmk-battery:meter"
 
 [widget.media_player]
 type = "blaise/media:player"

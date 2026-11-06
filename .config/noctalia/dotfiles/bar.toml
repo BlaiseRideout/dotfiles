@@ -25,7 +25,7 @@ end = [ "fsearch", "t3code", "tray", "clock" ]
 # stats capsule. Its `match` (the output's connector) comes from the generated
 # primary.toml (see dotfiles.toml), so it follows the primary at runtime.
 [bar.default.monitor.primary]
-start = [ "launcher", "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "llama", "zmk", "media_player" ]
+start = [ "launcher", "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "media_player" ]
 end = [ "fsearch", "t3code", "tray", "volume", "network", "caffeine", "notifications", "clock", "session" ]
 
 [widget.launcher]
