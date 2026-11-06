@@ -10,7 +10,7 @@
 #   ansible-playbook setup.yaml                        # Sway machine
 #   ansible-playbook setup.yaml -e desktop=openbox     # Openbox + tint2 machine
 #   ansible-playbook setup.yaml -e apps=false          # skip the desktop apps (already the default on uhnet)
-#   ansible-playbook setup.yaml -e hyprland=true       # ...plus Hyprland (default on nhuto, nhuto-Mint)
+#   ansible-playbook setup.yaml -e hyprland=true       # ...plus Hyprland (default on nhuto, nhuto-Mint, yoga-linux)
 #   ansible-playbook setup.yaml -e build_sway=true     # apt: self-built Sway 1.11 + Waybar (default on nhuto-Mint; Waybar is built on pacman too)
 #   ansible-playbook setup.yaml -e llama_update=true   # update llama.cpp (installed by default on nhuto, nhuto-Mint)
 #
@@ -26,7 +26,7 @@
     desktop: sway          # sway | openbox
     # Hyprland next to Sway. apt: from Nix, with build/hyprland/system-setup.sh
     # (home/hosts/nhuto-Mint.nix); pacman: the distro's packages.
-    hyprland: "{{ ansible_facts['hostname'] in ['nhuto', 'nhuto-Mint'] }}"
+    hyprland: "{{ ansible_facts['hostname'] in ['nhuto', 'nhuto-Mint', 'yoga-linux'] }}"
     # apt only: build Sway 1.11 + Waybar into ~/.local/opt, as NVIDIA needs
     # newer than Ubuntu's. A workaround for nhuto-Mint (the desktop on Mint).
     build_sway: "{{ ansible_facts['hostname'] == 'nhuto-Mint' }}"
@@ -34,7 +34,7 @@
     # tray features bar.jsonc uses); on apt it needs build_sway's Wayland
     build_waybar: "{{ build_sway | bool or pkg_mgr == 'pacman' }}"
     # CachyOS shell and its flat Dropbox/Discord tray adapter.
-    noctalia: "{{ ansible_facts['hostname'] == 'nhuto' and pkg_mgr == 'pacman' and hyprland | bool }}"
+    noctalia: "{{ ansible_facts['hostname'] in ['nhuto', 'yoga-linux'] and pkg_mgr == 'pacman' and hyprland | bool }}"
     # GIMP, Spotify, VS Code, Discord, etc. (see below). Off on uhnet, a server.
     apps: "{{ ansible_facts['hostname'] != 'uhnet' }}"
     # Openbox only: nm-applet. uhnet has a static IP from a network config file instead.
@@ -595,7 +595,7 @@
     # at greetd start, so it applies at the next boot or `systemctl restart greetd`
     # (which ends the running session; not done here).
     - name: Give the login screen the Hyprland monitor layout
-      when: noctalia | bool
+      when: noctalia | bool and ansible_facts['hostname'] == 'nhuto'
       become: true
       ansible.builtin.copy:
         dest: /var/lib/noctalia-greeter/greeter.toml

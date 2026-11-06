@@ -40,10 +40,12 @@
           modules = [ ./home/sway.nix ./home/hyprland.nix ./home/hosts/nhuto.nix ];
         };
 
-        # Yoga Book 9i (13IMU9) on CachyOS: Hyprland, two touchscreens
+        # Yoga Book 9i (13IMU9) on CachyOS: the desktop's Hyprland + Noctalia
+        # setup (sway.nix too, for the scripts, kitty and fonts it shares),
+        # without the llama.cpp server
         "blaise@yoga-linux" = mkHome {
           username = "blaise";
-          modules = [ ./home/hyprland.nix ./home/hosts/yoga-linux.nix ];
+          modules = [ ./home/sway.nix ./home/hyprland.nix ./home/noctalia.nix ./home/hosts/yoga-linux.nix ];
         };
 
         # Laptop: Sway. Rename to "<user>@<hostname>" so a bare
