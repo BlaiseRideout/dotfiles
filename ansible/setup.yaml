@@ -347,6 +347,26 @@
         update_cache: true
         name: "{{ packages }}"
 
+    # CachyOS installs Vim by default; vi and vim open Neovim instead. The links
+    # are in /usr/local/bin, ahead of /usr/bin, so they still win if a package
+    # brings Vim back.
+    - name: Remove Vim (pacman)
+      when: pkg_mgr == 'pacman'
+      become: true
+      community.general.pacman:
+        name: [ vim, gvim, vi ]
+        state: absent
+
+    - name: Point vi and vim at Neovim (pacman)
+      when: pkg_mgr == 'pacman'
+      become: true
+      ansible.builtin.file:
+        src: /usr/bin/nvim
+        dest: "/usr/local/bin/{{ item }}"
+        state: link
+        force: true
+      loop: [ vi, vim ]
+
     - name: Install Neovim's Python provider
       community.general.pipx:
         name: pynvim
