@@ -40,6 +40,12 @@
           modules = [ ./home/sway.nix ./home/hyprland.nix ./home/hosts/nhuto.nix ];
         };
 
+        # Yoga Book 9i (13IMU9) on CachyOS: Hyprland, two touchscreens
+        "blaise@yoga-linux" = mkHome {
+          username = "blaise";
+          modules = [ ./home/hyprland.nix ./home/hosts/yoga-linux.nix ];
+        };
+
         # Laptop: Sway. Rename to "<user>@<hostname>" so a bare
         # `home-manager switch --flake ~/.dotfiles` finds it.
         laptop = mkHome {
