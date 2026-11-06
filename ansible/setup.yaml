@@ -354,7 +354,7 @@
       when: pkg_mgr == 'pacman'
       become: true
       community.general.pacman:
-        name: [ vim, gvim, vi ]
+        name: [ vim, gvim, vi, cachyos-zsh-config ]
         state: absent
 
     - name: Point vi and vim at Neovim (pacman)
