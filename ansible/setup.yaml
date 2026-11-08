@@ -705,6 +705,44 @@
     # Orchis-Pink-Dark into ~/.themes and Flatery-Pink-Dark into ~/.local/share/icons. The settings
     # files that select them, and the gtk-4.0 links for libadwaita apps, come from
     # Home Manager; nwg-look changes the settings. Qt apps get Orchis-kde's Kvantum theme
+    # Home Manager (xdg.userDirs, home/common.nix) gives the user dirs their own
+    # names. Carry over a distro-made folder (~/Documents) when the new name isn't
+    # there yet; where both exist (or either is a link, as on nhuto's /mnt/files),
+    # leave them alone. Templates and Public are unused, so those are removed if
+    # empty (rmdir refuses a folder with anything in it).
+    - name: Rename the capitalized user dirs to the new names, and drop empty Templates and Public
+      ansible.builtin.shell: |
+        set -eu
+        cd "$HOME"
+        for pair in Desktop:.desktop Documents:documents Downloads:downloads Music:audio \
+                    Pictures:images Projects:prog Videos:videos; do
+          d=${pair%%:*}
+          l=${pair#*:}
+          if [ -d "$d" ] && [ ! -L "$d" ] && [ ! -e "$l" ] && [ ! -L "$l" ]; then
+            mv -- "$d" "$l"
+            echo "renamed $d"
+          fi
+        done
+        for d in Templates Public; do
+          if [ -d "$d" ] && [ ! -L "$d" ] && rmdir -- "$d" 2>/dev/null; then
+            echo "removed $d"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: userdirs_rename
+      changed_when: "'renamed' in userdirs_rename.stdout or 'removed' in userdirs_rename.stdout"
+
+    # The Print binds (sway, Hyprland) save to $(xdg-user-dir PICTURES)/screenshots
+    # and neither grim nor grimblast creates it, so without it every save fails.
+    # After the rename above (and after any hand-made link to /mnt/files, which
+    # state=directory follows), so it lands in the real images folder.
+    - name: Create the screenshots folder
+      ansible.builtin.file:
+        path: "{{ ansible_facts['env']['HOME'] }}/images/screenshots"
+        state: directory
+        mode: "0755"
+
     # recoloured pink (OrchisPinkDark); Home Manager links kvantum.kvconfig that selects it
     # and the environment.d file that makes Qt use Kvantum.
 

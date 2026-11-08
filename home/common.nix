@@ -57,6 +57,25 @@
     "gsimplecal"
   ];
 
+  # Own names for the user dirs instead of xdg-user-dirs' capitalized defaults.
+  # Templates and Public are unused: pointing them at $HOME is how xdg-user-dirs
+  # says "none", and creates nothing. nhuto and nhuto-Mint have the rest as links
+  # into /mnt/files, made by hand; createDirectories skips anything that is
+  # already a link, so only the other machines get real folders.
+  xdg.userDirs = {
+    enable = true;
+    createDirectories = true;
+    desktop = "${config.home.homeDirectory}/.desktop";
+    documents = "${config.home.homeDirectory}/documents";
+    download = "${config.home.homeDirectory}/downloads";
+    music = "${config.home.homeDirectory}/audio";
+    pictures = "${config.home.homeDirectory}/images";
+    projects = "${config.home.homeDirectory}/prog";
+    publicShare = config.home.homeDirectory;
+    templates = config.home.homeDirectory;
+    videos = "${config.home.homeDirectory}/videos";
+  };
+
   # GTK's theme, icons and font: the files in the repo, so nwg-look (which writes
   # through the links) edits them in place. ansible/setup.yaml installs the
   # Orchis-Pink-Dark theme and Flatery-Pink-Dark icons these name.
