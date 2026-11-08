@@ -1,0 +1,18 @@
+[Unit]
+Description=Yoga Book palm rejection (switches a touchscreen off while a palm or the pen is on it)
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionPathExists=%h/.local/bin/yoga-palm
+
+[Service]
+ExecStart=/usr/bin/python3 %h/.local/bin/yoga-palm watch
+Restart=on-failure
+RestartSec=3
+SyslogIdentifier=yoga-palm
+# On SIGTERM the daemon switches the touchscreens back on itself; this covers a crash or
+# SIGKILL, so a panel can never stay off.
+ExecStopPost=-/usr/bin/python3 %h/.local/bin/yoga-palm reset
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target

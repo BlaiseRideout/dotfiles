@@ -1,0 +1,12 @@
+# Yoga Book 9i palm rejection (yoga/bin/yoga-palm): read access to the touch controller's raw HID
+# reports. The controller's touch interface (USB 17ef:6161, interface 3, the one hid-multitouch
+# drives) reports a position per contact and nothing about its size; yoga-palm watches HOW the
+# contacts arrive (dropped frames, jumps), which the evdev nodes do not show (they drop repeats).
+# uaccess gives the logged-in seat's user an ACL, no root and no "input" group; the symlink is a
+# stable name (hidraw numbers change when other HID devices come and go).
+#
+# Installed to /etc/udev/rules.d by ansible/yoga.yaml on yoga-linux only.
+ACTION=="remove", GOTO="yoga_palm_end"
+SUBSYSTEM=="hidraw", KERNELS=="0003:17EF:6161.*", DRIVERS=="hid-multitouch", \
+  TAG+="uaccess", SYMLINK+="input/yoga-touch-raw"
+LABEL="yoga_palm_end"

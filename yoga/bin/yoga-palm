@@ -1,0 +1,411 @@
+#!/usr/bin/env python3
+"""yoga-palm: palm rejection for the Yoga Book's touchscreens. Run by yoga-palm.service.
+Notes, measurements and tuning: docs/yoga-book/palm.md.
+
+The touch controller reports only a position per contact (no size, no pressure, and its
+"confidence" palm flag is never cleared), so a palm cannot be told from a finger by what one
+contact says. What differs is how the controller behaves: it scans at a fixed 125 Hz and a finger
+is reported every frame, but a palm on the glass makes it drop most frames (13-58 reports/s
+measured, a whole hand 2/s), and its contacts flicker between blobs (jumps of 13 cm in 8 ms).
+This daemon reads the raw HID reports of the touch interface (hidraw), scores each touchscreen
+node on those two signals, and while a node sees a palm, or the pen is near it, switches that
+node's touchscreen off in Hyprland (yoga_set_touch_suppressed in yoga/hypr/yoga.lua).
+
+A node stays off until nothing has touched it for HOLD, so a palm resting on the glass while
+drawing can neither tap nor drag. A finger touching in the same second is swallowed too.
+
+  yoga-palm [watch]          # the daemon (the service)
+  yoga-palm watch --dry      # decide and log, never touch Hyprland (tuning; also works as root)
+  yoga-palm watch --log      # also print what each node's detector sees while a contact is down
+  yoga-palm status           # what Hyprland has suppressed
+  yoga-palm reset            # release both nodes
+
+Knobs (environment; `systemctl --user edit yoga-palm` to set them for the service):
+  YOGA_PALM_DENSITY=0.6      reject when fewer than this fraction of the 125 Hz frames arrive
+                             (a finger measured 0.89-0.95, a palm 0.1-0.5). Higher = stricter.
+  YOGA_PALM_WINDOW_MS=160    how long a contact is watched before the density counts (= latency)
+  YOGA_PALM_JUMP=1500        a contact moving more than this in one frame is a palm (units, ~38/mm;
+                             the fastest finger seen: 700). 0 turns the check off.
+  YOGA_PALM_HOLD_MS=600      how long a node stays off after the last touch lifted (the controller sends a
+                             report when the last contact leaves)
+  YOGA_PALM_SILENCE_MS=5000  how long a node stays off when its reports just stop without a lift report.
+                             The firmware goes silent on a resting palm and reports only as it lands and peels
+                             off, so this is how long the palm is covered; a normal contact always sends its lift
+  YOGA_PALM_PEN=1            0 = no pen proximity rule
+  YOGA_PALM_PEN_TAIL_MS=600  how long a node stays off after the pen leaves its range
+  YOGA_PALM_RATE_HZ=125      the controller's frame rate
+  YOGA_PALM_HIDRAW=/dev/...  the touch interface (default: found by USB id 17ef:6161 + its report ids)
+"""
+import collections
+import glob
+import os
+import selectors
+import signal
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import yoga_state   # noqa: E402
+
+
+def _f(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return float(default)
+
+
+DENSITY = _f("YOGA_PALM_DENSITY", 0.6)
+WINDOW = _f("YOGA_PALM_WINDOW_MS", 160) / 1000
+JUMP = _f("YOGA_PALM_JUMP", 1500)
+HOLD = _f("YOGA_PALM_HOLD_MS", 600) / 1000
+SILENCE = _f("YOGA_PALM_SILENCE_MS", 5000) / 1000
+USE_PEN = os.environ.get("YOGA_PALM_PEN", "1") == "1"
+PEN_TAIL = _f("YOGA_PALM_PEN_TAIL_MS", 600) / 1000
+RATE = _f("YOGA_PALM_RATE_HZ", 125)
+
+PEN_WATCHDOG = 2.0       # a pen "in range" that stops reporting for this long is taken as gone
+JUMP_MAX_GAP = 0.05      # a jump only counts between two reports this close
+TICK_S = 0.05
+REASSERT_S = 5.0         # a config reload resets the Lua side
+RETRY_S = 1.0
+OK_ANSWERS = ("suppressed", "released", "unchanged")
+
+# report ids of the touch interface (USB 17ef:6161, interface 3; docs/yoga-book/palm.md). The
+# kernel names the nodes in the same order: the first touch report is "Touchscreen Top". Verify
+# on a given unit with `yoga-palm watch --dry --log` (touch the top panel, the log says "top").
+TOUCH_IDS = {48: "top", 56: "bottom"}
+PEN_IDS = {20: "top", 40: "bottom"}
+TOUCH_LEN = 57           # id + 10 contacts * 5 + scan time 4 + contact count 1 + 1
+NODES = ("top", "bottom")
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+# -- parsing ----------------------------------------------------------------------------------
+def parse_touch(buf):
+    """-> [(contact id, confident, x, y), ...] of the contacts touching, or None if not a touch report.
+
+    Only the first <contact count> slots are valid: the controller leaves stale contacts in the
+    rest (seen: the previous hand, tip bit and all)."""
+    if len(buf) < TOUCH_LEN or buf[0] not in TOUCH_IDS:
+        return None
+    out = []
+    for k in range(min(buf[55], 10)):
+        o = 1 + 5 * k
+        flags = buf[o]
+        if flags & 1:     # tip switch
+            out.append((flags >> 3, bool(flags & 2), buf[o + 1] | buf[o + 2] << 8, buf[o + 3] | buf[o + 4] << 8))
+    return out
+
+
+def parse_pen(buf):
+    """-> True if the pen is in range, False if not, None if not a pen report."""
+    if len(buf) < 2 or buf[0] not in PEN_IDS:
+        return None
+    return bool(buf[1] & 0x20)     # TipSwitch BarrelSw Eraser Invert SecondaryTip InRange
+
+
+# -- the detector -----------------------------------------------------------------------------
+class Node:
+    """One touchscreen node's palm detector. Time is passed in, so a test can drive it."""
+
+    def __init__(self, name):
+        self.name = name
+        self.down = False
+        self.lifted = True                    # the last report was the "all contacts left" one
+        self.down_since = 0.0
+        self.last_tip = -1e9
+        self.times = collections.deque()      # arrival times of the reports with a contact, in the window
+        self.prev = {}                        # contact id -> (x, y, t)
+        self.jump = 0                         # biggest jump this contact session
+        self.jump_seen = False
+        self.latched = False
+        self.reason = ""
+        self.contacts = 0
+        self.pen_hold = -1e9
+        self.pen_in = False
+        self.reports = 0                      # reports in this contact session
+        self.notes = []                       # for --log: what happened that the state line does not show
+
+    # inputs
+    def feed_touch(self, now, contacts):
+        self.contacts = len(contacts)
+        if not contacts:
+            if self.down:
+                self.notes.append(f"lift report after {self.reports} reports, {now - self.down_since:.2f}s")
+            else:
+                self.notes.append("lift report with no contact down (the contact was silent)")
+            self.down = False
+            self.lifted = True
+            self.prev = {}
+            self.last_tip = now      # the hold runs from the lift: a palm peels off with a few reports of its own
+            return
+        self.lifted = False
+        if not self.down:
+            self.notes.append(f"touch down, {len(contacts)} contact(s)" + (" (node is off)" if self.latched else ""))
+            self.down = True
+            self.down_since = now
+            self.times.clear()
+            self.prev = {}
+            self.jump = 0
+            self.jump_seen = False
+            self.reports = 0
+        self.reports += 1
+        self.last_tip = now
+        self.times.append(now)
+        self.density(now)      # drops what fell out of the window
+        cur = {}
+        for cid, confident, x, y in contacts:
+            if not confident:
+                self._latch(now, "firmware palm flag")
+            p = self.prev.get(cid)
+            if p and now - p[2] <= JUMP_MAX_GAP:
+                step = abs(x - p[0]) + abs(y - p[1])
+                self.jump = max(self.jump, step)
+                if JUMP and step > JUMP:
+                    self.jump_seen = True
+            cur[cid] = (x, y, now)
+        self.prev = cur
+        # a jump is judged at once; the density in update() too, because a resting palm is exactly
+        # a contact that stops reporting
+        if not self.latched:
+            if self.jump_seen:
+                self._latch(now, f"palm: contact jumped {self.jump} units in one frame")
+            elif now - self.down_since >= WINDOW:
+                d = self.density(now)
+                if d < DENSITY:
+                    self._latch(now, f"palm: only {d:.2f} of the frames arrive")
+
+    def feed_pen(self, now, in_range):
+        if not USE_PEN:
+            return
+        self.pen_in = in_range
+        self.pen_hold = now + (PEN_WATCHDOG if in_range else PEN_TAIL)
+
+    def _latch(self, now, why):
+        if not self.latched:
+            self.latched = True
+            self.reason = why
+
+    # state
+    def density(self, now):
+        while self.times and now - self.times[0] > WINDOW:
+            self.times.popleft()
+        return len(self.times) / (WINDOW * RATE)
+
+    def update(self, now):
+        """-> (suppress this node's touchscreen, why)."""
+        if now - self.last_tip >= (HOLD if self.lifted else SILENCE):    # untouched: a new start
+            if self.down:
+                self.notes.append(f"no report for {now - self.last_tip:.1f}s and no lift report: contact taken as gone")
+            self.down = False
+            self.latched = False
+            self.prev = {}
+        if self.down and not self.latched and now - self.down_since >= WINDOW:
+            d = self.density(now)
+            if d < DENSITY:
+                self._latch(now, f"palm: only {d:.2f} of the frames arrive")
+        if self.latched:
+            return True, self.reason
+        if now < self.pen_hold:
+            return True, "pen " + ("in range" if self.pen_in else "just left")
+        return False, ""
+
+
+class Palm:
+    def __init__(self):
+        self.nodes = {n: Node(n) for n in NODES}
+
+    def feed(self, now, buf):
+        """One hidraw report. -> the node it was for (touch reports only), or None."""
+        c = parse_touch(buf)
+        if c is not None:
+            n = self.nodes[TOUCH_IDS[buf[0]]]
+            n.feed_touch(now, c)
+            return n
+        p = parse_pen(buf)
+        if p is not None:
+            self.nodes[PEN_IDS[buf[0]]].feed_pen(now, p)
+        return None
+
+    def want(self, now):
+        return {name: n.update(now) for name, n in self.nodes.items()}
+
+
+# -- finding and talking to things ------------------------------------------------------------
+def find_hidraw():
+    """The touch interface's hidraw node: USB 17ef:6161, and the one whose descriptor has the touch
+    report ids (the device has five HID interfaces)."""
+    if os.environ.get("YOGA_PALM_HIDRAW"):
+        return os.environ["YOGA_PALM_HIDRAW"]
+    for d in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
+        try:
+            if "HID_ID=0003:000017EF:00006161" not in open(d + "/device/uevent").read():
+                continue
+            desc = open(d + "/device/report_descriptor", "rb").read()
+        except OSError:
+            continue
+        if b"\x85\x30" in desc and b"\x85\x38" in desc:
+            return "/dev/" + os.path.basename(d)
+    return None
+
+
+def set_suppressed(node, on):
+    """-> the answer of yoga_set_touch_suppressed(), or an error text."""
+    try:
+        p = subprocess.run(["hyprctl", "repl", f"return yoga_set_touch_suppressed('{node}', {'true' if on else 'false'})"],
+                           capture_output=True, text=True, timeout=8, env=yoga_state.hypr_env())
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"error: {e}"
+    return (p.stdout + p.stderr).strip()
+
+
+class Daemon:
+    def __init__(self, dry=False, verbose=False, apply=None):
+        self.palm = Palm()
+        self.dry = dry
+        self.verbose = verbose
+        self.apply = apply or set_suppressed
+        self.applied = {n: False for n in NODES}      # what Hyprland was told last
+        self.applied_at = {n: 0.0 for n in NODES}
+        self.next_try = {n: 0.0 for n in NODES}
+        self.shown = {n: False for n in NODES}        # for the log
+        self.last_verbose = {n: 0.0 for n in NODES}
+        self.t0 = time.monotonic()
+
+    def sync(self, now):
+        """Tell Hyprland what each node should be, once, and again if it failed or every REASSERT_S."""
+        wants = self.palm.want(now)
+        self.drain_notes(now)
+        for name, (want, why) in wants.items():
+            if want != self.shown[name]:
+                self.shown[name] = want
+                log(f"[{now - self.t0:7.2f}s] {name}: {'OFF  ' + why if want else 'on again'}")
+            if self.dry:
+                continue
+            due = (want != self.applied[name]) or (want and now - self.applied_at[name] >= REASSERT_S)
+            if not due or now < self.next_try[name]:
+                continue
+            ans = self.apply(name, want)
+            if ans in OK_ANSWERS:
+                self.applied[name] = want
+                self.applied_at[name] = now
+            else:
+                self.next_try[name] = now + RETRY_S
+                log(f"{name}: hyprctl said {ans or 'nothing'}; retrying")
+
+    def release_all(self):
+        if self.dry:
+            return
+        for name in NODES:
+            if self.applied[name]:      # what a crashed run left is cleared by `yoga-palm reset` (the unit's ExecStopPost)
+                self.apply(name, False)
+                self.applied[name] = False
+
+    def drain_notes(self, now):
+        for n in self.palm.nodes.values():
+            if self.verbose:
+                for note in n.notes:
+                    log(f"  [{now - self.t0:7.2f}s] {n.name}: {note}")
+            n.notes.clear()
+
+    def feed(self, now, buf):
+        n = self.palm.feed(now, buf)
+        self.drain_notes(now)
+        if self.verbose and n is not None and n.down and now - self.last_verbose[n.name] >= 0.2:
+            self.last_verbose[n.name] = now
+            log(f"  [{now - self.t0:7.2f}s] {n.name}: contacts {n.contacts}, age {now - n.down_since:.2f}s, "
+                f"density {n.density(now):.2f} (<{DENSITY} rejects), biggest jump {n.jump} (>{JUMP:g} rejects)"
+                + ("  [latched]" if n.latched else ""))
+
+    def run(self):
+        stop = []
+        signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+        signal.signal(signal.SIGINT, lambda *_: stop.append(1))
+        log(f"yoga-palm started: density {DENSITY}, window {WINDOW*1000:.0f} ms, jump {JUMP:g}, hold {HOLD*1000:.0f} ms "
+            f"(silence {SILENCE*1000:.0f} ms), "
+            f"pen {'on, tail %.0f ms' % (PEN_TAIL*1000) if USE_PEN else 'off'}{', DRY RUN' if self.dry else ''}")
+        fd = None
+        warned = None
+        try:
+            while not stop:
+                if fd is None:
+                    path = find_hidraw()
+                    try:
+                        if not path:
+                            raise FileNotFoundError("the touch interface (17ef:6161) is not there (it drops off USB "
+                                                    "three times in the first minute after boot)")
+                        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                        log(f"reading {path}")
+                        warned = None
+                    except OSError as e:
+                        msg = (f"cannot open {path}: {e}; is yoga/udev/64-yoga-palm.rules installed?"
+                               if isinstance(e, PermissionError) else str(e))
+                        if msg != warned:
+                            log(msg)
+                            warned = msg
+                        self.release_all()
+                        time.sleep(5)
+                        continue
+                sel = selectors.DefaultSelector()
+                sel.register(fd, selectors.EVENT_READ)
+                try:
+                    while not stop:
+                        ready = sel.select(TICK_S)
+                        now = time.monotonic()
+                        if ready:
+                            try:
+                                while True:
+                                    buf = os.read(fd, 4096)
+                                    if not buf:
+                                        raise OSError("hidraw closed")
+                                    self.feed(now, buf)
+                            except BlockingIOError:
+                                pass
+                        self.sync(now)
+                except OSError as e:
+                    log(f"lost the touch interface ({e}); waiting for it")
+                    self.release_all()
+                finally:
+                    sel.close()
+                    if fd is not None:
+                        os.close(fd)
+                        fd = None
+                    self.palm = Palm()
+        finally:
+            self.release_all()
+            log("yoga-palm stopped")
+
+
+def status():
+    p = subprocess.run(["hyprctl", "repl", 'local t = {} for k, v in pairs(yoga_touch_suppressed or {}) do t[#t+1] = k end '
+                        'table.sort(t) return "suppressed: " .. (#t > 0 and table.concat(t, ", ") or "none")'],
+                       capture_output=True, text=True, env=yoga_state.hypr_env())
+    print((p.stdout + p.stderr).strip() or "no answer from Hyprland")
+    print(f"hidraw: {find_hidraw() or 'not found'}")
+
+
+def main(argv):
+    args = [a for a in argv[1:] if not a.startswith("--")]
+    flags = [a for a in argv[1:] if a.startswith("--")]
+    cmd = args[0] if args else "watch"
+    if cmd == "status":
+        status()
+        return 0
+    if cmd == "reset":
+        for n in NODES:
+            print(f"{n}: {set_suppressed(n, False)}")
+        return 0
+    if cmd in ("watch", "daemon"):
+        Daemon(dry="--dry" in flags, verbose="--log" in flags).run()
+        return 0
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
