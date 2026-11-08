@@ -47,8 +47,8 @@ the SHA-256, so the files are the same ones. By hand: `sudo ~/.dotfiles/yoga/bin
   match). Until it ships, `yoga/greeter/build-greeter.sh` builds the pinned PR on top of upstream main (the compositor
   is unchanged between v1.7.0 and that main, so it pairs with the packaged one), ansible copies the result to `/usr/local/lib/yoga/noctalia-greeter` and
   greetd runs it (`NOCTALIA_GREETER_BIN` in `/etc/greetd/config.toml`). Needs `nlohmann-json` and `stb` (pacman,
-  done by ansible). **Off by default** since it broke the login screen on 2026-11-07; opt in with
-  `-e yoga_greeter_pr183=true`. **Cause of the 2026-11-07 failure (fixed, retry untested):** the binary looks for its
+  done by ansible). **On by default** (turn it off with
+  `-e yoga_greeter_pr183=false`; works as of 2026-11-08). It broke the login screen on 2026-11-07. **Cause of that failure (fixed):** the binary looks for its
   assets next to itself and otherwise in the build tree under `$HOME`, which the `greeter` user can't read; it threw
   on start and greetd gave up after five restarts (black screen with a pointer, then an empty console). Ansible now
   links `/usr/local/lib/yoga/assets` to the packaged assets, and greetd starts the greeter through

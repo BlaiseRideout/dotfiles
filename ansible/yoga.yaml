@@ -41,6 +41,10 @@
     # plugin ever lock the touch screen up, -e yoga_sshd=true
     yoga_touch: "{{ pkg_mgr == 'pacman' and hyprland | bool }}"
     yoga_sshd: false
+    # Greeter that starts face unlock without Enter (upstream PR #183, built from
+    # yoga/greeter; docs/yoga-book/faceunlock.md). It falls back to the packaged greeter by
+    # itself if the binary is unusable. Needs yoga_faceunlock_pam. Off: -e yoga_greeter_pr183=false
+    yoga_greeter_pr183: true
 
 # --- Yoga Book 9i keyboard dock (yoga_kbdock=true) --------------------------------
 # The in-tree lenovo-yb9-kbdock only accepts the Gen 10 (83KJ). This is a copy with
@@ -301,10 +305,11 @@
 # the user, and it is copied to /usr/local/lib/yoga (pacman upgrades don't touch it). The
 # packaged compositor is unchanged between v1.7.0 and that main, so it pairs fine. Remove
 # these three tasks and the NOCTALIA_GREETER_BIN part below once #183 ships.
-# OFF by default: the patched greeter broke the login screen (2026-11-07), so the packaged
-# one runs. Opt back in with -e yoga_greeter_pr183=true (also needs yoga_faceunlock_pam).
+# ON by default (yoga_greeter_pr183, the switches above). It broke the login screen once
+# (2026-11-07); the assets link and the pre-flight wrapper below now fall back to the packaged
+# greeter. Turn it off with -e yoga_greeter_pr183=false (also needs yoga_faceunlock_pam).
 - name: Greeter auto-start for face unlock (Yoga Book)
-  when: noctalia | bool and ansible_facts['hostname'] == 'yoga-linux' and pkg_mgr == 'pacman' and yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | default(false) | bool
+  when: noctalia | bool and ansible_facts['hostname'] == 'yoga-linux' and pkg_mgr == 'pacman' and yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | bool
   block:
     - name: Install the greeter's extra build dependencies
       become: true
@@ -353,7 +358,7 @@
             mode: "0755"
 
 - name: Remove the PR #183 greeter when it's not used
-  when: ansible_facts['hostname'] == 'yoga-linux' and not (yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | default(false) | bool)
+  when: ansible_facts['hostname'] == 'yoga-linux' and not (yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | bool)
   become: true
   ansible.builtin.file:
     path: "/usr/local/lib/yoga/{{ item }}"
@@ -403,7 +408,7 @@
       {% if yoga_greeter_transforms | length > 0 %}
       transforms = "{{ yoga_greeter_transforms }}"
       {% endif %}
-      {% if yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | default(false) | bool %}
+      {% if yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | bool %}
 
       [auth]
       # start PAM (so Howdy, so the IR emitter) when the password step appears instead of
@@ -426,7 +431,7 @@
     yoga_greeter_env: >-
       env WLR_NO_HARDWARE_CURSORS=1
       {{ 'NOCTALIA_GREETER_BIN=/usr/local/lib/yoga/noctalia-greeter' if yoga_greeter_patched | bool else '' }}
-    yoga_greeter_patched: "{{ yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | default(false) | bool }}"
+    yoga_greeter_patched: "{{ yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | bool }}"
     yoga_greeter_session: "{{ '/usr/local/lib/yoga/noctalia-greeter-session' if yoga_greeter_patched | bool else '/usr/bin/noctalia-greeter-session' }}"
   ansible.builtin.lineinfile:
     path: /etc/greetd/config.toml
