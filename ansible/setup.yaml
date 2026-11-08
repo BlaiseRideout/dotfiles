@@ -112,6 +112,8 @@
         - xz
         - base-devel
         - neovim
+      # Tailscale isn't in Ubuntu's repos: its install script adds Tailscale's
+      # apt repository (below)
         - tree-sitter-cli   # nvim-treesitter needs the CLI, not just libtree-sitter
         - unzip             # Mason unpacks lua-language-server with it
         - zsh
@@ -138,6 +140,7 @@
         - xwayland
         - kanshi
         - mako-notifier
+        - tailscale
         - wofi
         - swayidle
         - swaylock
@@ -166,6 +169,7 @@
         - kanshi
         - mako
         - wofi
+        - nautilus          # the default file manager (inode/directory)
         - swayidle
         - swaylock
         - grim
@@ -193,6 +197,7 @@
     hyprland_packages:
       - hyprland
       - hyprland-guiutils
+        - nautilus          # the default file manager (inode/directory)
       - hyprpaper
       - hypridle
       - hyprlock
@@ -229,11 +234,6 @@
         - network-manager-applet
 
     # Desktop apps (apps=true). FSearch and OpenRGB come from Flathub on both
-    # (hyprland.lua and the FSearch stylesheet expect the Flatpak).
-    # apt: Spotify from its own repo, Dropbox from Mint's "import" repo; VS Code
-    # and Discord are .debs (VS Code's adds its own apt repo for updates).
-    # pacman: the rest from the repos, Dropbox and Microsoft's VS Code from the
-    # AUR (with paru, from CachyOS's repo).
     # Default apps by MIME type, set with xdg-mime (~/.config/mimeapps.list).
     # smplayer comes from app_packages (apps=true); feh from base_packages.
     video_player: smplayer.desktop
@@ -254,6 +254,37 @@
       - image/png
       - image/gif
       - image/webp
+      - image/bmp
+      - image/tiff
+      - image/avif
+
+    # (hyprland.lua and the FSearch stylesheet expect the Flatpak).
+    # apt: Spotify from its own repo, Dropbox from Mint's "import" repo; VS Code
+    # and Discord are .debs (VS Code's adds its own apt repo for updates).
+    # pacman: the rest from the repos, Dropbox and Microsoft's VS Code from the
+    # AUR (with paru, from CachyOS's repo).
+    # Default apps by MIME type, set with xdg-mime (~/.config/mimeapps.list).
+    # smplayer comes from app_packages (apps=true); feh from base_packages.
+    video_player: smplayer.desktop
+    video_mimes:
+      - video/mp4
+      - video/x-matroska
+      - video/webm
+      - video/quicktime
+      - video/x-msvideo
+      - video/mpeg
+      - video/x-flv
+      - video/x-ms-wmv
+      - video/ogg
+        - smplayer          # the default video player (video_mimes)
+      - video/3gpp
+    image_viewer: feh.desktop
+    image_mimes:
+      - image/jpeg
+      - image/png
+      - image/gif
+      - image/webp
+        - smplayer          # the default video player (video_mimes)
       - image/bmp
       - image/tiff
       - image/avif
@@ -390,6 +421,26 @@
 
     # CachyOS installs Vim by default; vi and vim open Neovim instead. The links
     # are in /usr/local/bin, ahead of /usr/bin, so they still win if a package
+    # --- Tailscale ----------------------------------------------------------------
+    # pacman: the package is in base_packages. apt: Tailscale's own script adds
+    # their apt repository (it knows Mint's Ubuntu base) and installs the package.
+    # Logging in is interactive: `sudo tailscale up` once per machine.
+
+    - name: Install Tailscale (apt)
+      when: pkg_mgr == 'apt'
+      become: true
+      ansible.builtin.shell: set -o pipefail; curl -fsSL https://tailscale.com/install.sh | sh
+      args:
+        executable: /bin/bash
+        creates: /usr/bin/tailscale
+
+    - name: Start Tailscale at boot
+      become: true
+      ansible.builtin.systemd:
+        name: tailscaled.service
+        enabled: true
+        state: started
+
     # brings Vim back.
     - name: Remove Vim (pacman)
       when: pkg_mgr == 'pacman'
@@ -654,6 +705,44 @@
 
     # The login screen runs its own compositor, so it doesn't see hyprland.lua; this
     # repeats its monitor layout (same make/model/serial IDs, same positions).
+    # Home Manager (xdg.userDirs, home/common.nix) gives the user dirs their own
+    # names. Carry over a distro-made folder (~/Documents) when the new name isn't
+    # there yet; where both exist (or either is a link, as on nhuto's /mnt/files),
+    # leave them alone. Templates and Public are unused, so those are removed if
+    # empty (rmdir refuses a folder with anything in it).
+    - name: Rename the capitalized user dirs to the new names, and drop empty Templates and Public
+      ansible.builtin.shell: |
+        set -eu
+        cd "$HOME"
+        for pair in Desktop:.desktop Documents:documents Downloads:downloads Music:audio \
+                    Pictures:images Projects:prog Videos:videos; do
+          d=${pair%%:*}
+          l=${pair#*:}
+          if [ -d "$d" ] && [ ! -L "$d" ] && [ ! -e "$l" ] && [ ! -L "$l" ]; then
+            mv -- "$d" "$l"
+            echo "renamed $d"
+          fi
+        done
+        for d in Templates Public; do
+          if [ -d "$d" ] && [ ! -L "$d" ] && rmdir -- "$d" 2>/dev/null; then
+            echo "removed $d"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: userdirs_rename
+      changed_when: "'renamed' in userdirs_rename.stdout or 'removed' in userdirs_rename.stdout"
+
+    # The Print binds (sway, Hyprland) save to $(xdg-user-dir PICTURES)/screenshots
+    # and neither grim nor grimblast creates it, so without it every save fails.
+    # After the rename above (and after any hand-made link to /mnt/files, which
+    # state=directory follows), so it lands in the real images folder.
+    - name: Create the screenshots folder
+      ansible.builtin.file:
+        path: "{{ ansible_facts['env']['HOME'] }}/images/screenshots"
+        state: directory
+        mode: "0755"
+
     # greeter.toml is declarative: neither Sync nor the greeter UI rewrites it. Read
     # at greetd start, so it applies at the next boot or `systemctl restart greetd`
     # (which ends the running session; not done here).
@@ -913,6 +1002,48 @@
           become: true
           ansible.builtin.copy:
             dest: /usr/share/wayland-sessions/sway-1.11-nvidia.desktop
+    # sway.nix's machines open folders with xdg-open (sway's and Hyprland's $mod+e)
+    - name: Check the default file manager
+      when: desktop == 'sway'
+      ansible.builtin.command: xdg-mime query default inode/directory
+      register: file_manager
+      changed_when: false
+
+    - name: Make Nautilus the default file manager
+      when: desktop == 'sway' and file_manager.stdout != 'org.gnome.Nautilus.desktop'
+      ansible.builtin.command: xdg-mime default org.gnome.Nautilus.desktop inode/directory
+
+    # Video and image defaults. Only the mime types listed above are changed; the
+    # rest keep their defaults. Re-runs change nothing once they're set.
+    - name: Check the default video player
+      when: apps | bool
+      ansible.builtin.command: xdg-mime query default {{ item }}
+      loop: "{{ video_mimes }}"
+      register: video_defaults
+      changed_when: false
+
+    - name: Make smplayer the default video player
+      ansible.builtin.command: xdg-mime default {{ video_player }} {{ item.item }}
+      loop: "{{ video_defaults.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - apps | bool
+        - item.stdout != video_player
+
+    - name: Check the default image viewer
+      ansible.builtin.command: xdg-mime query default {{ item }}
+      loop: "{{ image_mimes }}"
+      register: image_defaults
+      changed_when: false
+
+    - name: Make feh the default image viewer
+      ansible.builtin.command: xdg-mime default {{ image_viewer }} {{ item.item }}
+      loop: "{{ image_defaults.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stdout != image_viewer
+
             mode: "0644"
             content: |
               [Desktop Entry]
