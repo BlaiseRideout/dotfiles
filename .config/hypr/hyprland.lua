@@ -268,6 +268,8 @@ yoga_host.refresh_bar = function()
     if bar_primary_name then set_bar_primary(bar_primary_name) end
 end
 
+local ws_target = {}   -- workspace 1-10 -> the monitor it is placed on, as of the last place_workspaces
+
 function place_workspaces(keep_view)
     local mons = hl.get_monitors() or {}
     local externals, tertiaries, laptops = {}, {}, {}
@@ -306,6 +308,7 @@ function place_workspaces(keep_view)
     -- Yoga: while the bottom panel is reserved for the keyboard (yoga_set_reserved),
     -- whatever would live on it lives on the top panel instead
     yoga_hook("retarget", target)
+    ws_target = target
 
     local shown, focused = {}, nil
     if keep_view then
@@ -408,47 +411,59 @@ hl.on("monitor.removed", function() place_workspaces(true) end)
 -- A reload clears the workspace rules; put them back
 hl.on("config.reloaded", function() place_workspaces(true) end)
 
--- Previous/next workspace (swayworkspace.sh). The ring is the workspaces that have windows plus
--- the one you are on, in number order, so the keys never stop on an empty workspace however the
--- numbers are spread (1, 2, 5 and 7 in use: four stops). The number keys still go anywhere.
--- "Next" on the last one, if it has windows, opens the next free number rather than wrapping,
--- so there is no upper limit; a workspace you leave empty disappears, which keeps the ring
--- packed. With several screens 9 and 10 are not handed out that way (they belong to the other
--- screens), so after 8 comes 11. Past either end of a ring that cannot grow it wraps.
--- yoga.ws_skip(ws) leaves a workspace out of the ring (the Yoga's bottom screen while it
--- carries the keyboard); it does nothing on a machine without the module. With move, the
--- focused window goes along and a lone window does not leave its workspace for a new one.
+-- Previous/next workspace (swayworkspace.sh). The stops are the workspaces that have windows,
+-- in number order, and the one you are on. A gap between two of them gets one stop, next to
+-- the side you come from, so no workspace in between is lost and none is walked through: with
+-- windows on 1 and 4, "next" goes 1, 2, 4 and "previous" 4, 3, 1. The number keys go anywhere.
+-- "Next" on the last populated workspace opens the next free number rather than wrapping, so
+-- there is no upper limit; a workspace you leave empty disappears, which keeps things packed.
+-- Where 9 and 10 are placed on another screen than this one they are never stopped on as an
+-- empty one, so after 8 comes 11; with one screen (the Yoga with the keyboard docked too) they
+-- are numbers like the others. Past either end of the stops that cannot grow it wraps.
+-- yoga.ws_skip(ws) leaves a workspace out (the Yoga's bottom screen while it carries the
+-- keyboard); it does nothing on a machine without the module. With move, the focused window
+-- goes along, and a lone window on the last workspace wraps instead of opening a new one.
 local function ws_step(delta, move)
     local cur = hl.get_active_workspace()
     local id = (cur and cur.id and cur.id > 0) and cur.id or 1
-    local ids, have, taken = {}, {}, {}
+    local windows = cur and cur.get_windows and #(cur:get_windows() or {}) or 0
+    local pop, taken = {}, {}   -- the workspaces with windows (sorted), every numbered one that exists
     for _, w in ipairs(hl.get_workspaces() or {}) do
         if w.id and w.id > 0 then
             taken[w.id] = true
-            if not have[w.id] and (w.id == id
-                    or (#(w:get_windows() or {}) > 0 and not yoga_hook("ws_skip", w))) then
-                ids[#ids + 1] = w.id; have[w.id] = true
+            if w.id ~= id and #(w:get_windows() or {}) > 0 and not yoga_hook("ws_skip", w) then
+                pop[#pop + 1] = w.id
             end
         end
     end
-    if not have[id] then ids[#ids + 1] = id end
-    table.sort(ids)
-    local pos = 1
-    for i, v in ipairs(ids) do if v == id then pos = i end end
+    table.sort(pop)
+    local home = cur and cur.monitor and cur.monitor.name
+    local function free(n)
+        local t = ws_target[n]
+        return n > 0 and not taken[n] and not (t and t.name ~= home)
+    end
+    local before, after   -- the nearest populated workspaces either side of this one
+    for _, v in ipairs(pop) do
+        if v < id then before = v elseif v > id and not after then after = v end
+    end
+
     local n
-    if pos + delta > #ids then
-        local windows = cur and cur.get_windows and #(cur:get_windows() or {}) or 0
-        if delta > 0 and windows > (move and 1 or 0) then
-            local shared = #(hl.get_monitors() or {}) > 1
+    if delta > 0 then
+        if after then
+            -- Populated here and a gap ahead: its first workspace, then the next populated one
+            n = (windows > 0 and after > id + 1 and free(id + 1)) and id + 1 or after
+        elseif windows > (move and 1 or 0) then
             n = id + 1
-            while taken[n] or (shared and (n == 9 or n == 10)) do n = n + 1 end
+            while not free(n) do n = n + 1 end
         else
-            n = ids[1]
+            n = pop[1] or id
         end
-    elseif pos + delta < 1 then
-        n = ids[#ids]
     else
-        n = ids[pos + delta]
+        if before then
+            n = (windows > 0 and before < id - 1 and free(id - 1)) and id - 1 or before
+        else
+            n = pop[#pop] or id
+        end
     end
     if n == id then return end
     if move then
