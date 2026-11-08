@@ -594,9 +594,13 @@
             modprobe i2c-dev
           changed_when: false
 
-    # T3 Code runs from its AppImage; the app adds its own menu entry and icon (the
-    # tray icons are in .local/share/icons/hicolor). The release's latest-linux.yml
-    # names the current file. Downloads ~190 MB, so only when missing or asked.
+    # T3 Code runs from its AppImage. The app writes its own com.t3tools.T3Code.desktop
+    # at every start, but only to register the t3code:// links: it is NoDisplay=true with
+    # no StartupWMClass, so it never shows in the menu and Noctalia's dock cannot match
+    # the window to it (generic icon). The entry below is the one to use: visible, with
+    # the window's class, and the icon by name (the dotfiles' .local/share/icons/hicolor).
+    # The release's latest-linux.yml names the current file. Downloads ~190 MB, so only
+    # when missing or asked.
     - name: Install T3 Code
       when: apps | bool and ansible_facts['architecture'] == 'x86_64'
       block:
@@ -625,6 +629,29 @@
             dest: "{{ ansible_facts['env']['HOME'] }}/.local/bin/t3code"
             mode: "0755"
             force: true
+
+        - name: Make sure ~/.local/share/applications exists
+          ansible.builtin.file:
+            path: "{{ ansible_facts['env']['HOME'] }}/.local/share/applications"
+            state: directory
+            mode: "0755"
+
+        # Under another name than the app's own entry, which it rewrites at every start
+        - name: Add the T3 Code menu entry
+          ansible.builtin.copy:
+            dest: "{{ ansible_facts['env']['HOME'] }}/.local/share/applications/t3code.desktop"
+            mode: "0644"
+            content: |
+              [Desktop Entry]
+              Type=Application
+              Name=T3 Code
+              Comment=T3 Code
+              Exec={{ ansible_facts['env']['HOME'] }}/.local/bin/t3code %U
+              Icon=com.t3tools.T3Code
+              Terminal=false
+              Categories=Development;
+              StartupWMClass=com.t3tools.T3Code
+              StartupNotify=false
 
     - name: Use zsh as the login shell
       become: true
