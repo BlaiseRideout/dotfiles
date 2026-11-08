@@ -13,9 +13,9 @@
 #   ansible-playbook setup.yaml -e hyprland=true       # ...plus Hyprland (default on nhuto, nhuto-Mint, yoga-linux)
 #   ansible-playbook setup.yaml -e build_sway=true     # apt: self-built Sway 1.11 + Waybar (default on nhuto-Mint; Waybar is built on pacman too)
 #   ansible-playbook setup.yaml -e llama_update=true   # update llama.cpp (installed by default on nhuto, nhuto-Mint)
+#   ansible-playbook setup.yaml -e t3code_update=true  # update the T3 Code AppImage (installed once, with the desktop apps)
 #
 # It asks for the sudo password once. Safe to re-run; on pacman each run also
-#   ansible-playbook setup.yaml -e t3code_update=true  # update the T3 Code AppImage (installed once, with the desktop apps)
 # upgrades the system (installing after a bare `pacman -Sy` risks a partial
 # upgrade).
 #
@@ -46,12 +46,12 @@
     llama: "{{ ansible_facts['hostname'] in ['nhuto', 'nhuto-Mint'] }}"
     llama_update: false
     llama_version: ""
-    # Bibata Modern Ice, the cursor named in the GTK settings, hyprland.lua and sway's
-    # config; into ~/.local/share/icons like the Orchis and Flatery themes
     # T3 Code's AppImage from GitHub releases into ~/.local/bin/t3code (x86_64, with
     # the desktop apps). Installed once; -e t3code_update=true fetches the latest.
     t3code_update: false
     t3code_releases: https://github.com/pingdotgg/t3code/releases/latest/download
+    # Bibata Modern Ice, the cursor named in the GTK settings, hyprland.lua and sway's
+    # config; into ~/.local/share/icons like the Orchis and Flatery themes
     bibata_version: v2.0.7
     bibata_url: "https://github.com/ful1e5/Bibata_Cursor/releases/download/{{ bibata_version }}/Bibata-Modern-Ice.tar.xz"
     hm_config: "{{ ansible_facts['user_id'] }}@{{ ansible_facts['hostname'] }}"
@@ -110,17 +110,15 @@
         - sassc             # builds the Orchis GTK theme
         - qt5-style-kvantum # the Orchis Qt theme's engine
         - qt6-style-kvantum
-      pacman:
-        - git
       # Tailscale isn't in Ubuntu's repos: its install script adds Tailscale's
       # apt repository (below)
+      pacman:
+        - git
         - curl
         - openssh           # shared ssh-agent.service
         - xz
         - base-devel
         - neovim
-      # Tailscale isn't in Ubuntu's repos: its install script adds Tailscale's
-      # apt repository (below)
         - tree-sitter-cli   # nvim-treesitter needs the CLI, not just libtree-sitter
         - unzip             # Mason unpacks lua-language-server with it
         - zsh
@@ -148,7 +146,6 @@
         - xwayland
         - kanshi
         - mako-notifier
-        - tailscale
         - wofi
         - swayidle
         - swaylock
@@ -169,8 +166,8 @@
         - kitty
         - python3-i3ipc     # sway/autotiling.py, center_single.py
         - xdg-desktop-portal-wlr
-        - nautilus          # the default file manager (inode/directory)
         - xdg-desktop-portal-gtk
+        - nautilus          # the default file manager (inode/directory)
       pacman:
         - sway
         - waybar            # self-built on Mint
@@ -178,11 +175,9 @@
         - kanshi
         - mako
         - wofi
-        - nautilus          # the default file manager (inode/directory)
         - swayidle
         - swaylock
         - grim
-        - nautilus          # the default file manager (inode/directory)
         - slurp
         - sway-contrib      # grimshot
         - wl-clipboard
@@ -197,22 +192,20 @@
         - copyq
         - gsimplecal
         - kitty
-        - nautilus          # the default file manager (inode/directory)
         - python-i3ipc
         - xdg-desktop-portal-wlr
         - xdg-desktop-portal-gtk
+        - nautilus          # the default file manager (inode/directory)
         - ttf-ubuntu-font-family   # the font in the hypr, fuzzel and GTK settings (Mint has it)
 
     # pacman only (apt gets Hyprland from Nix)
     hyprland_packages:
       - hyprland
       - hyprland-guiutils
-        - nautilus          # the default file manager (inode/directory)
       - hyprpaper
       - hypridle
       - hyprlock
       - hyprpolkitagent
-        - nautilus          # the default file manager (inode/directory)
       - xdg-desktop-portal-hyprland
       - grimblast-git       # CachyOS's repo (AUR elsewhere)
       - fuzzel
@@ -234,6 +227,8 @@
       pacman:
         - openbox
         - tint2
+        - copyq
+
     # Default apps by MIME type, set with xdg-mime (~/.config/mimeapps.list).
     # smplayer comes from app_packages (apps=true); feh from base_packages.
     video_player: smplayer.desktop
@@ -257,8 +252,6 @@
       - image/bmp
       - image/tiff
       - image/avif
-
-        - copyq
 
     # The tray applet for NetworkManager; uhnet doesn't use it (nm_applet: false)
     nm_applet_packages:
@@ -268,68 +261,17 @@
         - network-manager-applet
 
     # Desktop apps (apps=true). FSearch and OpenRGB come from Flathub on both
-    # Default apps by MIME type, set with xdg-mime (~/.config/mimeapps.list).
-    # smplayer comes from app_packages (apps=true); feh from base_packages.
-    video_player: smplayer.desktop
-    video_mimes:
-      - video/mp4
-      - video/x-matroska
-      - video/webm
-      - video/quicktime
-        - smplayer          # the default video player (video_mimes)
-      - video/x-msvideo
-      - video/mpeg
-      - video/x-flv
-      - video/x-ms-wmv
-      - video/ogg
-      - video/3gpp
-    image_viewer: feh.desktop
-        - smplayer          # the default video player (video_mimes)
-    image_mimes:
-      - image/jpeg
-      - image/png
-      - image/gif
-      - image/webp
-      - image/bmp
-      - image/tiff
-      - image/avif
-
     # (hyprland.lua and the FSearch stylesheet expect the Flatpak).
     # apt: Spotify from its own repo, Dropbox from Mint's "import" repo; VS Code
     # and Discord are .debs (VS Code's adds its own apt repo for updates).
     # pacman: the rest from the repos, Dropbox and Microsoft's VS Code from the
     # AUR (with paru, from CachyOS's repo).
-    # Default apps by MIME type, set with xdg-mime (~/.config/mimeapps.list).
-    # smplayer comes from app_packages (apps=true); feh from base_packages.
-    video_player: smplayer.desktop
-    video_mimes:
-      - video/mp4
-      - video/x-matroska
-      - video/webm
-      - video/quicktime
-      - video/x-msvideo
-      - video/mpeg
-      - video/x-flv
-      - video/x-ms-wmv
-      - video/ogg
-        - smplayer          # the default video player (video_mimes)
-      - video/3gpp
-    image_viewer: feh.desktop
-    image_mimes:
-      - image/jpeg
-      - image/png
-      - image/gif
-      - image/webp
-        - smplayer          # the default video player (video_mimes)
-      - image/bmp
-      - image/tiff
-      - image/avif
-
     app_packages:
       apt:
         - gimp
         - audacity
         - keepassxc
+        - smplayer          # the default video player (video_mimes)
         - dropbox
         - spotify-client
         - flatpak
@@ -337,13 +279,13 @@
         - gimp
         - audacity
         - keepassxc
+        - smplayer          # the default video player (video_mimes)
         - spotify-launcher
         - discord
         - flatpak
         - paru
     app_debs:
       - { name: code,    url: "https://update.code.visualstudio.com/latest/linux-deb-x64/stable" }
-        - smplayer          # the default video player (video_mimes)
       - { name: discord, url: "https://discord.com/api/download?platform=linux&format=deb" }
     app_aur:
       - dropbox
@@ -351,7 +293,6 @@
     app_flatpaks:
       - io.github.cboxdoerfer.FSearch
       - org.openrgb.OpenRGB
-        - smplayer          # the default video player (video_mimes)
     # Spotify rotates its signing key about yearly; get the new id from
     # https://www.spotify.com/download/linux/ when apt reports NO_PUBKEY
     spotify_key: https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.gpg
@@ -421,26 +362,6 @@
   tasks:
     - name: Check the variables
       ansible.builtin.assert:
-    # --- Tailscale ----------------------------------------------------------------
-    # pacman: the package is in base_packages. apt: Tailscale's own script adds
-    # their apt repository (it knows Mint's Ubuntu base) and installs the package.
-    # Logging in is interactive: `sudo tailscale up` once per machine.
-
-    - name: Install Tailscale (apt)
-      when: pkg_mgr == 'apt'
-      become: true
-      ansible.builtin.shell: set -o pipefail; curl -fsSL https://tailscale.com/install.sh | sh
-      args:
-        executable: /bin/bash
-        creates: /usr/bin/tailscale
-
-    - name: Start Tailscale at boot
-      become: true
-      ansible.builtin.systemd:
-        name: tailscaled.service
-        enabled: true
-        state: started
-
         that:
           - desktop in ['sway', 'openbox']
           - pkg_mgr in ['apt', 'pacman']
@@ -477,6 +398,24 @@
 
     # CachyOS installs Vim by default; vi and vim open Neovim instead. The links
     # are in /usr/local/bin, ahead of /usr/bin, so they still win if a package
+    # brings Vim back.
+    - name: Remove Vim (pacman)
+      when: pkg_mgr == 'pacman'
+      become: true
+      community.general.pacman:
+        name: [ vim, gvim, vi, cachyos-zsh-config ]
+        state: absent
+
+    - name: Point vi and vim at Neovim (pacman)
+      when: pkg_mgr == 'pacman'
+      become: true
+      ansible.builtin.file:
+        src: /usr/bin/nvim
+        dest: "/usr/local/bin/{{ item }}"
+        state: link
+        force: true
+      loop: [ vi, vim ]
+
     # --- Tailscale ----------------------------------------------------------------
     # pacman: the package is in base_packages. apt: Tailscale's own script adds
     # their apt repository (it knows Mint's Ubuntu base) and installs the package.
@@ -496,24 +435,6 @@
         name: tailscaled.service
         enabled: true
         state: started
-
-    # brings Vim back.
-    - name: Remove Vim (pacman)
-      when: pkg_mgr == 'pacman'
-      become: true
-      community.general.pacman:
-        name: [ vim, gvim, vi, cachyos-zsh-config ]
-        state: absent
-
-    - name: Point vi and vim at Neovim (pacman)
-      when: pkg_mgr == 'pacman'
-      become: true
-      ansible.builtin.file:
-        src: /usr/bin/nvim
-        dest: "/usr/local/bin/{{ item }}"
-        state: link
-        force: true
-      loop: [ vi, vim ]
 
     - name: Install Neovim's Python provider
       community.general.pipx:
@@ -586,59 +507,41 @@
           community.general.pacman:
             name: "{{ app_packages.pacman }}"
 
-        # paru builds as the user and runs pacman through sudo, which can't ask
-        # for the password here: let it run pacman without one, just for this
-        - name: Let paru run pacman without a password
-          become: true
-          ansible.builtin.copy:
-            dest: /etc/sudoers.d/ansible-paru
-            content: "{{ ansible_facts['user_id'] }} ALL=(root) NOPASSWD: /usr/bin/pacman\n"
-            mode: "0440"
-            validate: visudo -cf %s
+        # Only touch paru when an app is missing or has a newer AUR version (paru -Qua
+        # just asks the AUR; it builds nothing), like Waybar's build stamp
+        - name: Check which AUR apps need building
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              {
+                pacman -T {{ app_aur | join(' ') }} || true   # missing
+                paru -Qua 2>/dev/null | cut -d' ' -f1 | grep -Fx -f <(printf '%s\n' {{ app_aur | join(' ') }}) || true   # outdated
+              } | sort -u
+          register: aur_todo
+          changed_when: false
 
-        - name: Install apps from the AUR
-          ansible.builtin.command: paru -S --needed --noconfirm --skipreview {{ app_aur | join(' ') }}
-    # T3 Code runs from its AppImage; the app adds its own menu entry and icon (the
-    # tray icons are in .local/share/icons/hicolor). The release's latest-linux.yml
-    # names the current file. Downloads ~190 MB, so only when missing or asked.
-    - name: Install T3 Code
-      when: apps | bool and ansible_facts['architecture'] == 'x86_64'
-      block:
-        - name: Check for T3 Code
-          ansible.builtin.stat:
-            path: "{{ ansible_facts['env']['HOME'] }}/.local/bin/t3code"
-          register: t3code_bin
+        - name: Build and install apps from the AUR
+          when: aur_todo.stdout_lines | length > 0
+          block:
+            # paru builds as the user and runs pacman through sudo, which can't ask
+            # for the password here: let it run pacman without one, just for this
+            - name: Let paru run pacman without a password
+              become: true
+              ansible.builtin.copy:
+                dest: /etc/sudoers.d/ansible-paru
+                content: "{{ ansible_facts['user_id'] }} ALL=(root) NOPASSWD: /usr/bin/pacman\n"
+                mode: "0440"
+                validate: visudo -cf %s
 
-        - name: Find the latest T3 Code AppImage
-          when: t3code_update | bool or not t3code_bin.stat.exists
-          ansible.builtin.uri:
-            url: "{{ t3code_releases }}/latest-linux.yml"
-            return_content: true
-          register: t3code_latest
+            - name: Install apps from the AUR
+              ansible.builtin.command: paru -S --needed --noconfirm --skipreview {{ aur_todo.stdout_lines | join(' ') }}
 
-        - name: Make sure ~/.local/bin exists
-          ansible.builtin.file:
-            path: "{{ ansible_facts['env']['HOME'] }}/.local/bin"
-            state: directory
-            mode: "0755"
-
-        - name: Download the T3 Code AppImage
-          when: t3code_latest is not skipped
-          ansible.builtin.get_url:
-            url: "{{ t3code_releases }}/{{ (t3code_latest.content | from_yaml).path }}"
-            dest: "{{ ansible_facts['env']['HOME'] }}/.local/bin/t3code"
-            mode: "0755"
-            force: true
-
-          register: aur
-          changed_when: "'there is nothing to do' not in aur.stdout"
-
-      always:
-        - name: Take paru's pacman permission back
-          become: true
-          ansible.builtin.file:
-            path: /etc/sudoers.d/ansible-paru
-            state: absent
+          always:
+            - name: Take paru's pacman permission back
+              become: true
+              ansible.builtin.file:
+                path: /etc/sudoers.d/ansible-paru
+                state: absent
 
     - name: Install apps from Flathub, and OpenRGB's device access
       when: apps | bool
@@ -684,6 +587,38 @@
           ansible.builtin.command: modprobe i2c-dev
           changed_when: false
 
+    # T3 Code runs from its AppImage; the app adds its own menu entry and icon (the
+    # tray icons are in .local/share/icons/hicolor). The release's latest-linux.yml
+    # names the current file. Downloads ~190 MB, so only when missing or asked.
+    - name: Install T3 Code
+      when: apps | bool and ansible_facts['architecture'] == 'x86_64'
+      block:
+        - name: Check for T3 Code
+          ansible.builtin.stat:
+            path: "{{ ansible_facts['env']['HOME'] }}/.local/bin/t3code"
+          register: t3code_bin
+
+        - name: Find the latest T3 Code AppImage
+          when: t3code_update | bool or not t3code_bin.stat.exists
+          ansible.builtin.uri:
+            url: "{{ t3code_releases }}/latest-linux.yml"
+            return_content: true
+          register: t3code_latest
+
+        - name: Make sure ~/.local/bin exists
+          ansible.builtin.file:
+            path: "{{ ansible_facts['env']['HOME'] }}/.local/bin"
+            state: directory
+            mode: "0755"
+
+        - name: Download the T3 Code AppImage
+          when: t3code_latest is not skipped
+          ansible.builtin.get_url:
+            url: "{{ t3code_releases }}/{{ (t3code_latest.content | from_yaml).path }}"
+            dest: "{{ ansible_facts['env']['HOME'] }}/.local/bin/t3code"
+            mode: "0755"
+            force: true
+
     - name: Use zsh as the login shell
       become: true
       ansible.builtin.user:
@@ -704,44 +639,6 @@
         regexp: '^experimental-features\s*='
         line: experimental-features = nix-command flakes
       register: nix_conf
-
-    # Home Manager (xdg.userDirs, home/common.nix) gives the user dirs their own
-    # names. Carry over a distro-made folder (~/Documents) when the new name isn't
-    # there yet; where both exist (or either is a link, as on nhuto's /mnt/files),
-    # leave them alone. Templates and Public are unused, so those are removed if
-    # empty (rmdir refuses a folder with anything in it).
-    - name: Rename the capitalized user dirs to the new names, and drop empty Templates and Public
-      ansible.builtin.shell: |
-        set -eu
-        cd "$HOME"
-        for pair in Desktop:.desktop Documents:documents Downloads:downloads Music:audio \
-                    Pictures:images Projects:prog Videos:videos; do
-          d=${pair%%:*}
-          l=${pair#*:}
-          if [ -d "$d" ] && [ ! -L "$d" ] && [ ! -e "$l" ] && [ ! -L "$l" ]; then
-            mv -- "$d" "$l"
-            echo "renamed $d"
-          fi
-        done
-        for d in Templates Public; do
-          if [ -d "$d" ] && [ ! -L "$d" ] && rmdir -- "$d" 2>/dev/null; then
-            echo "removed $d"
-          fi
-        done
-      args:
-        executable: /bin/bash
-      register: userdirs_rename
-      changed_when: "'renamed' in userdirs_rename.stdout or 'removed' in userdirs_rename.stdout"
-
-    # The Print binds (sway, Hyprland) save to $(xdg-user-dir PICTURES)/screenshots
-    # and neither grim nor grimblast creates it, so without it every save fails.
-    # After the rename above (and after any hand-made link to /mnt/files, which
-    # state=directory follows), so it lands in the real images folder.
-    - name: Create the screenshots folder
-      ansible.builtin.file:
-        path: "{{ ansible_facts['env']['HOME'] }}/images/screenshots"
-        state: directory
-        mode: "0755"
 
     - name: Restart the Nix daemon
       become: true
@@ -797,40 +694,6 @@
         - orchis_gtk_link.stat.islnk | default(false)
         - orchis_gtk_link.stat.lnk_source | default('') == ansible_facts['env']['HOME'] + '/.themes/Orchis-Pink-Dark/gtk-4.0/gtk.css'
 
-    # -b bak: existing files in the way are renamed to <name>.bak, not overwritten
-    - name: Apply the Home Manager config
-      ansible.builtin.command: >-
-        {{ nix }} run home-manager -- switch -b bak --flake {{ dotfiles }}#{{ hm_config }}
-      environment:
-        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_facts['env']['PATH'] }}"
-      register: hm
-      changed_when: "'Activating' in hm.stdout"
-
-    # Home Manager links/enables the unit; start it on this login too.
-    - name: Start the shared SSH agent
-      ansible.builtin.systemd:
-        name: ssh-agent.service
-        scope: user
-        daemon_reload: true
-        state: started
-
-    # Defer graphical services when provisioning over SSH or a TTY.
-    - name: Check for an active graphical session
-      when: noctalia | bool
-      ansible.builtin.command: systemctl --user is-active graphical-session.target
-      register: graphical_session
-      changed_when: false
-      failed_when: graphical_session.rc not in [0, 3]
-
-    - name: Start Noctalia's flat tray adapter
-      when: noctalia | bool and graphical_session.rc == 0
-      ansible.builtin.systemd:
-        name: noctalia-flat-tray.service
-        scope: user
-        state: started
-
-    # The login screen runs its own compositor, so it doesn't see hyprland.lua; this
-    # repeats its monitor layout (same make/model/serial IDs, same positions).
     # Home Manager (xdg.userDirs, home/common.nix) gives the user dirs their own
     # names. Carry over a distro-made folder (~/Documents) when the new name isn't
     # there yet; where both exist (or either is a link, as on nhuto's /mnt/files),
@@ -869,6 +732,40 @@
         state: directory
         mode: "0755"
 
+    # -b bak: existing files in the way are renamed to <name>.bak, not overwritten
+    - name: Apply the Home Manager config
+      ansible.builtin.command: >-
+        {{ nix }} run home-manager -- switch -b bak --flake {{ dotfiles }}#{{ hm_config }}
+      environment:
+        PATH: "/nix/var/nix/profiles/default/bin:{{ ansible_facts['env']['PATH'] }}"
+      register: hm
+      changed_when: "'Activating' in hm.stdout"
+
+    # Home Manager links/enables the unit; start it on this login too.
+    - name: Start the shared SSH agent
+      ansible.builtin.systemd:
+        name: ssh-agent.service
+        scope: user
+        daemon_reload: true
+        state: started
+
+    # Defer graphical services when provisioning over SSH or a TTY.
+    - name: Check for an active graphical session
+      when: noctalia | bool
+      ansible.builtin.command: systemctl --user is-active graphical-session.target
+      register: graphical_session
+      changed_when: false
+      failed_when: graphical_session.rc not in [0, 3]
+
+    - name: Start Noctalia's flat tray adapter
+      when: noctalia | bool and graphical_session.rc == 0
+      ansible.builtin.systemd:
+        name: noctalia-flat-tray.service
+        scope: user
+        state: started
+
+    # The login screen runs its own compositor, so it doesn't see hyprland.lua; this
+    # repeats its monitor layout (same make/model/serial IDs, same positions).
     # greeter.toml is declarative: neither Sync nor the greeter UI rewrites it. Read
     # at greetd start, so it applies at the next boot or `systemctl restart greetd`
     # (which ends the running session; not done here).
@@ -920,44 +817,6 @@
         - name: Link ~/.cache/huggingface to the model cache
           ansible.builtin.file:
             src: "{{ ansible_facts['env']['HOME'] }}/.local/share/huggingface"
-    # Home Manager (xdg.userDirs, home/common.nix) gives the user dirs their own
-    # names. Carry over a distro-made folder (~/Documents) when the new name isn't
-    # there yet; where both exist (or either is a link, as on nhuto's /mnt/files),
-    # leave them alone. Templates and Public are unused, so those are removed if
-    # empty (rmdir refuses a folder with anything in it).
-    - name: Rename the capitalized user dirs to the new names, and drop empty Templates and Public
-      ansible.builtin.shell: |
-        set -eu
-        cd "$HOME"
-        for pair in Desktop:.desktop Documents:documents Downloads:downloads Music:audio \
-                    Pictures:images Projects:prog Videos:videos; do
-          d=${pair%%:*}
-          l=${pair#*:}
-          if [ -d "$d" ] && [ ! -L "$d" ] && [ ! -e "$l" ] && [ ! -L "$l" ]; then
-            mv -- "$d" "$l"
-            echo "renamed $d"
-          fi
-        done
-        for d in Templates Public; do
-          if [ -d "$d" ] && [ ! -L "$d" ] && rmdir -- "$d" 2>/dev/null; then
-            echo "removed $d"
-          fi
-        done
-      args:
-        executable: /bin/bash
-      register: userdirs_rename
-      changed_when: "'renamed' in userdirs_rename.stdout or 'removed' in userdirs_rename.stdout"
-
-    # The Print binds (sway, Hyprland) save to $(xdg-user-dir PICTURES)/screenshots
-    # and neither grim nor grimblast creates it, so without it every save fails.
-    # After the rename above (and after any hand-made link to /mnt/files, which
-    # state=directory follows), so it lands in the real images folder.
-    - name: Create the screenshots folder
-      ansible.builtin.file:
-        path: "{{ ansible_facts['env']['HOME'] }}/images/screenshots"
-        state: directory
-        mode: "0755"
-
             dest: "{{ ansible_facts['env']['HOME'] }}/.cache/huggingface"
             state: link
 
@@ -986,86 +845,6 @@
     # Orchis-Pink-Dark into ~/.themes and Flatery-Pink-Dark into ~/.local/share/icons. The settings
     # files that select them, and the gtk-4.0 links for libadwaita apps, come from
     # Home Manager; nwg-look changes the settings. Qt apps get Orchis-kde's Kvantum theme
-    # Home Manager (xdg.userDirs, home/common.nix) gives the user dirs their own
-    # names. Carry over a distro-made folder (~/Documents) when the new name isn't
-    # there yet; where both exist (or either is a link, as on nhuto's /mnt/files),
-    # leave them alone. Templates and Public are unused, so those are removed if
-    # empty (rmdir refuses a folder with anything in it).
-    - name: Rename the capitalized user dirs to the new names, and drop empty Templates and Public
-      ansible.builtin.shell: |
-        set -eu
-        cd "$HOME"
-        for pair in Desktop:.desktop Documents:documents Downloads:downloads Music:audio \
-                    Pictures:images Projects:prog Videos:videos; do
-          d=${pair%%:*}
-          l=${pair#*:}
-          if [ -d "$d" ] && [ ! -L "$d" ] && [ ! -e "$l" ] && [ ! -L "$l" ]; then
-            mv -- "$d" "$l"
-            echo "renamed $d"
-    # sway.nix's machines open folders with xdg-open (sway's and Hyprland's $mod+e)
-    - name: Check the default file manager
-      when: desktop == 'sway'
-      ansible.builtin.command: xdg-mime query default inode/directory
-      register: file_manager
-      changed_when: false
-
-    - name: Make Nautilus the default file manager
-      when: desktop == 'sway' and file_manager.stdout != 'org.gnome.Nautilus.desktop'
-      ansible.builtin.command: xdg-mime default org.gnome.Nautilus.desktop inode/directory
-
-    # Video and image defaults. Only the mime types listed above are changed; the
-    # rest keep their defaults. Re-runs change nothing once they're set.
-    - name: Check the default video player
-      when: apps | bool
-      ansible.builtin.command: xdg-mime query default {{ item }}
-      loop: "{{ video_mimes }}"
-      register: video_defaults
-      changed_when: false
-
-    - name: Make smplayer the default video player
-      ansible.builtin.command: xdg-mime default {{ video_player }} {{ item.item }}
-      loop: "{{ video_defaults.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-      when:
-        - apps | bool
-        - item.stdout != video_player
-
-    - name: Check the default image viewer
-      ansible.builtin.command: xdg-mime query default {{ item }}
-      loop: "{{ image_mimes }}"
-      register: image_defaults
-      changed_when: false
-
-    - name: Make feh the default image viewer
-      ansible.builtin.command: xdg-mime default {{ image_viewer }} {{ item.item }}
-      loop: "{{ image_defaults.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-      when: item.stdout != image_viewer
-
-          fi
-        done
-        for d in Templates Public; do
-          if [ -d "$d" ] && [ ! -L "$d" ] && rmdir -- "$d" 2>/dev/null; then
-            echo "removed $d"
-          fi
-        done
-      args:
-        executable: /bin/bash
-      register: userdirs_rename
-      changed_when: "'renamed' in userdirs_rename.stdout or 'removed' in userdirs_rename.stdout"
-
-    # The Print binds (sway, Hyprland) save to $(xdg-user-dir PICTURES)/screenshots
-    # and neither grim nor grimblast creates it, so without it every save fails.
-    # After the rename above (and after any hand-made link to /mnt/files, which
-    # state=directory follows), so it lands in the real images folder.
-    - name: Create the screenshots folder
-      ansible.builtin.file:
-        path: "{{ ansible_facts['env']['HOME'] }}/images/screenshots"
-        state: directory
-        mode: "0755"
-
     # recoloured pink (OrchisPinkDark); Home Manager links kvantum.kvconfig that selects it
     # and the environment.d file that makes Qt use Kvantum.
 
@@ -1128,6 +907,48 @@
         remote_src: true
         creates: "{{ ansible_facts['env']['HOME'] }}/.local/share/icons/Bibata-Modern-Ice"
 
+    # sway.nix's machines open folders with xdg-open (sway's and Hyprland's $mod+e)
+    - name: Check the default file manager
+      when: desktop == 'sway'
+      ansible.builtin.command: xdg-mime query default inode/directory
+      register: file_manager
+      changed_when: false
+
+    - name: Make Nautilus the default file manager
+      when: desktop == 'sway' and file_manager.stdout != 'org.gnome.Nautilus.desktop'
+      ansible.builtin.command: xdg-mime default org.gnome.Nautilus.desktop inode/directory
+
+    # Video and image defaults. Only the mime types listed above are changed; the
+    # rest keep their defaults. Re-runs change nothing once they're set.
+    - name: Check the default video player
+      when: apps | bool
+      ansible.builtin.command: xdg-mime query default {{ item }}
+      loop: "{{ video_mimes }}"
+      register: video_defaults
+      changed_when: false
+
+    - name: Make smplayer the default video player
+      ansible.builtin.command: xdg-mime default {{ video_player }} {{ item.item }}
+      loop: "{{ video_defaults.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - apps | bool
+        - item.stdout != video_player
+
+    - name: Check the default image viewer
+      ansible.builtin.command: xdg-mime query default {{ item }}
+      loop: "{{ image_mimes }}"
+      register: image_defaults
+      changed_when: false
+
+    - name: Make feh the default image viewer
+      ansible.builtin.command: xdg-mime default {{ image_viewer }} {{ item.item }}
+      loop: "{{ image_defaults.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stdout != image_viewer
+
     - name: Install sway_auto_floating (floating rules)
       ansible.builtin.command: pipx install git+https://github.com/artemave/sway_auto_floating
       args:
@@ -1170,48 +991,6 @@
           become: true
           ansible.builtin.copy:
             dest: /usr/share/wayland-sessions/sway-1.11-nvidia.desktop
-    # sway.nix's machines open folders with xdg-open (sway's and Hyprland's $mod+e)
-    - name: Check the default file manager
-      when: desktop == 'sway'
-      ansible.builtin.command: xdg-mime query default inode/directory
-      register: file_manager
-      changed_when: false
-
-    - name: Make Nautilus the default file manager
-      when: desktop == 'sway' and file_manager.stdout != 'org.gnome.Nautilus.desktop'
-      ansible.builtin.command: xdg-mime default org.gnome.Nautilus.desktop inode/directory
-
-    # Video and image defaults. Only the mime types listed above are changed; the
-    # rest keep their defaults. Re-runs change nothing once they're set.
-    - name: Check the default video player
-      when: apps | bool
-      ansible.builtin.command: xdg-mime query default {{ item }}
-      loop: "{{ video_mimes }}"
-      register: video_defaults
-      changed_when: false
-
-    - name: Make smplayer the default video player
-      ansible.builtin.command: xdg-mime default {{ video_player }} {{ item.item }}
-      loop: "{{ video_defaults.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-      when:
-        - apps | bool
-        - item.stdout != video_player
-
-    - name: Check the default image viewer
-      ansible.builtin.command: xdg-mime query default {{ item }}
-      loop: "{{ image_mimes }}"
-      register: image_defaults
-      changed_when: false
-
-    - name: Make feh the default image viewer
-      ansible.builtin.command: xdg-mime default {{ image_viewer }} {{ item.item }}
-      loop: "{{ image_defaults.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-      when: item.stdout != image_viewer
-
             mode: "0644"
             content: |
               [Desktop Entry]
@@ -1254,45 +1033,3 @@
             src: "{{ ansible_facts['env']['HOME'] }}/.local/opt/waybar/bin/waybar"
             dest: "{{ ansible_facts['env']['HOME'] }}/.local/bin/waybar"
             state: link
-    # sway.nix's machines open folders with xdg-open (sway's and Hyprland's $mod+e)
-    - name: Check the default file manager
-      when: desktop == 'sway'
-      ansible.builtin.command: xdg-mime query default inode/directory
-      register: file_manager
-      changed_when: false
-
-    - name: Make Nautilus the default file manager
-      when: desktop == 'sway' and file_manager.stdout != 'org.gnome.Nautilus.desktop'
-      ansible.builtin.command: xdg-mime default org.gnome.Nautilus.desktop inode/directory
-
-    # Video and image defaults. Only the mime types listed above are changed; the
-    # rest keep their defaults. Re-runs change nothing once they're set.
-    - name: Check the default video player
-      when: apps | bool
-      ansible.builtin.command: xdg-mime query default {{ item }}
-      loop: "{{ video_mimes }}"
-      register: video_defaults
-      changed_when: false
-
-    - name: Make smplayer the default video player
-      ansible.builtin.command: xdg-mime default {{ video_player }} {{ item.item }}
-      loop: "{{ video_defaults.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-      when:
-        - apps | bool
-        - item.stdout != video_player
-
-    - name: Check the default image viewer
-      ansible.builtin.command: xdg-mime query default {{ item }}
-      loop: "{{ image_mimes }}"
-      register: image_defaults
-      changed_when: false
-
-    - name: Make feh the default image viewer
-      ansible.builtin.command: xdg-mime default {{ image_viewer }} {{ item.item }}
-      loop: "{{ image_defaults.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-      when: item.stdout != image_viewer
-
