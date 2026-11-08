@@ -70,6 +70,12 @@
   xdg.configFile."gtk-4.0/assets".source =
     config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/.themes/Orchis-Pink-Dark/gtk-4.0/assets";
 
+  # Qt apps use the Orchis Kvantum theme that ansible/setup.yaml installs (OrchisPinkDark);
+  # just this file, since the theme folders next to it come from the playbook.
+  xdg.configFile."Kvantum/kvantum.kvconfig".source = dotfilesLink ".config/Kvantum/kvantum.kvconfig";
+  xdg.configFile."environment.d/qt-theme.conf".source =
+    dotfilesLink ".config/environment.d/qt-theme.conf";
+
   # git's global ignore list. Just the file: ~/.config/git/config stays local
   xdg.configFile."git/ignore".source = dotfilesLink ".config/git/ignore";
 

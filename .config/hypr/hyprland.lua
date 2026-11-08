@@ -428,6 +428,10 @@ if runtime_dir then
     hl.env("SSH_AUTH_SOCK", runtime_dir .. "/ssh-agent.socket")
 end
 
+-- Qt apps draw with Kvantum (the OrchisPinkDark theme in ~/.config/Kvantum), as
+-- .config/environment.d/qt-theme.conf says, for the same reason as above.
+hl.env("QT_STYLE_OVERRIDE", "kvantum")
+
 local function exec(cmd) hl.exec_cmd(cmd) end
 
 hl.on("hyprland.start", function()

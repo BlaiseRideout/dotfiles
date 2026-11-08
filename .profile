@@ -62,3 +62,6 @@ unset -f path_prepend path_append
 if [ -z "$SSH_AUTH_SOCK" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
     export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/ssh-agent.socket"
 fi
+
+# Qt apps draw with Kvantum (the OrchisPinkDark theme), the match for the GTK theme.
+export QT_STYLE_OVERRIDE=kvantum

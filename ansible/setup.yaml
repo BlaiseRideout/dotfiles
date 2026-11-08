@@ -45,6 +45,10 @@
     llama: "{{ ansible_facts['hostname'] in ['nhuto', 'nhuto-Mint'] }}"
     llama_update: false
     llama_version: ""
+    # Bibata Modern Ice, the cursor named in the GTK settings, hyprland.lua and sway's
+    # config; into ~/.local/share/icons like the Orchis and Flatery themes
+    bibata_version: v2.0.7
+    bibata_url: "https://github.com/ful1e5/Bibata_Cursor/releases/download/{{ bibata_version }}/Bibata-Modern-Ice.tar.xz"
     hm_config: "{{ ansible_facts['user_id'] }}@{{ ansible_facts['hostname'] }}"
     dotfiles: "{{ ansible_facts['env']['HOME'] }}/.dotfiles"
     dotfiles_repo: https://github.com/BlaiseRideout/dotfiles.git
@@ -70,6 +74,11 @@
     orchis_src: "{{ ansible_facts['env']['HOME'] }}/.local/src/orchis-theme"
     flatery_repo: https://github.com/cbrnix/Flatery.git
     flatery_src: "{{ ansible_facts['env']['HOME'] }}/.local/src/flatery"
+    # Its Kvantum theme, recoloured to Orchis-Pink-Dark's pink, is the Qt counterpart
+    # of the GTK theme (.config/Kvantum, .config/environment.d/qt-theme.conf)
+    orchis_kde_repo: https://github.com/vinceliuice/Orchis-kde.git
+    orchis_kde_src: "{{ ansible_facts['env']['HOME'] }}/.local/src/orchis-kde"
+    orchis_pink: "#F06292"
 
     # Package lists per package manager, same order in both
     base_packages:
@@ -94,6 +103,8 @@
         - x11-xserver-utils # xrdb, xmodmap
         - feh
         - sassc             # builds the Orchis GTK theme
+        - qt5-style-kvantum # the Orchis Qt theme's engine
+        - qt6-style-kvantum
       pacman:
         - git
         - curl
@@ -118,6 +129,8 @@
         - xorg-xmodmap
         - feh
         - sassc             # builds the Orchis GTK theme
+        - kvantum           # the Orchis Qt theme's engine (Qt 6)
+        - kvantum-qt5
 
     sway_packages:
       apt:
@@ -691,7 +704,9 @@
     # --- GTK theme and icons ----------------------------------------------------------
     # Orchis-Pink-Dark into ~/.themes and Flatery-Pink-Dark into ~/.local/share/icons. The settings
     # files that select them, and the gtk-4.0 links for libadwaita apps, come from
-    # Home Manager; nwg-look changes the settings.
+    # Home Manager; nwg-look changes the settings. Qt apps get Orchis-kde's Kvantum theme
+    # recoloured pink (OrchisPinkDark); Home Manager links kvantum.kvconfig that selects it
+    # and the environment.d file that makes Qt use Kvantum.
 
     - name: Fetch the GTK theme and icon sources
       ansible.builtin.git:
@@ -702,6 +717,7 @@
       loop:
         - { repo: "{{ orchis_repo }}", dest: "{{ orchis_src }}" }
         - { repo: "{{ flatery_repo }}", dest: "{{ flatery_src }}" }
+        - { repo: "{{ orchis_kde_repo }}", dest: "{{ orchis_kde_src }}" }
       loop_control:
         label: "{{ item.dest }}"
 
@@ -717,6 +733,39 @@
       args:
         chdir: "{{ flatery_src }}"
         creates: "{{ ansible_facts['env']['HOME'] }}/.local/share/icons/Flatery-Pink-Dark"
+
+    # Only the Kvantum theme of Orchis-kde (its install.sh also unpacks Plasma themes and
+    # wallpapers). The dark variant has two blues, the focus colour and the selection
+    # colour, and both become Orchis-Pink-Dark's pink. A Kvantum theme is a folder with
+    # NAME.kvconfig and NAME.svg.
+    - name: Install the OrchisPinkDark Kvantum theme
+      ansible.builtin.shell: |
+        set -eu
+        dest="$HOME/.config/Kvantum/OrchisPinkDark"
+        mkdir -p "$dest"
+        for ext in kvconfig svg; do
+          sed -e 's/#4285f4/{{ orchis_pink }}/Ig' -e 's/#3daee6/{{ orchis_pink }}/Ig' \
+            "{{ orchis_kde_src }}/Kvantum/Orchis/OrchisDark.$ext" > "$dest/OrchisPinkDark.$ext"
+        done
+      args:
+        creates: "{{ ansible_facts['env']['HOME'] }}/.config/Kvantum/OrchisPinkDark/OrchisPinkDark.svg"
+
+    # Bibata Modern Ice, the cursor in gtk-{3,4}.0/settings.ini, the dconf values and
+    # ~/.icons/default (Home Manager, home/hyprland.nix), hyprland.lua and sway's
+    # config. The release is Xcursor only; Hyprland falls back to it from
+    # hyprcursor. An existing copy (e.g. one with hyprcursor files) is kept.
+    - name: Make sure ~/.local/share/icons exists
+      ansible.builtin.file:
+        path: "{{ ansible_facts['env']['HOME'] }}/.local/share/icons"
+        state: directory
+        mode: "0755"
+
+    - name: Install the Bibata-Modern-Ice cursor
+      ansible.builtin.unarchive:
+        src: "{{ bibata_url }}"
+        dest: "{{ ansible_facts['env']['HOME'] }}/.local/share/icons"
+        remote_src: true
+        creates: "{{ ansible_facts['env']['HOME'] }}/.local/share/icons/Bibata-Modern-Ice"
 
     - name: Install sway_auto_floating (floating rules)
       ansible.builtin.command: pipx install git+https://github.com/artemave/sway_auto_floating

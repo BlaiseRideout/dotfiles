@@ -19,6 +19,10 @@ set $term kitty
 
 include /etc/sway/config-vars.d/*
 
+# Cursor theme (installed by ansible/setup.yaml; GTK apps use the same, see
+# gtk-3.0/settings.ini)
+seat seat0 xcursor_theme Bibata-Modern-Ice 24
+
 ### Output configuration
 #
 # Default wallpaper (more resolutions are available in /usr/share/backgrounds/sway/)
