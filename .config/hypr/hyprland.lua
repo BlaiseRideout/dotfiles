@@ -220,8 +220,8 @@ yoga_host.focus_ws = focus_ws
 -- Noctalia uses workspace names for its icon labels; numeric IDs and binds stay the same.
 local workspace_icons = { "", "", "", "", "", "", "", "", "", "" }
 
--- Workspaces past 10 (opened by the workspace keys, or by Hyprland for a bare monitor) have no
--- icon above and would show their number in the bar; they get the same dot as 4-8
+-- Workspaces past 10 (opened by stepping past the last workspace, or by Hyprland for a bare
+-- monitor) have no icon above and would show their number in the bar; they get the same dot as 4-8
 local function name_extra_workspaces()
     for _, ws in ipairs(hl.get_workspaces() or {}) do
         if ws.id and ws.id > 10 and ws.name ~= workspace_icons[4] then
@@ -230,10 +230,9 @@ local function name_extra_workspaces()
     end
 end
 -- (events fire before the state changes: look again once it has settled)
--- Yoga only: other machines keep Hyprland's own names
 local name_timer
-for _, ev in ipairs(yoga and { "workspace.active", "window.open", "window.move_to_workspace", "monitor.focused",
-                               "workspace.move_to_monitor" } or {}) do
+for _, ev in ipairs({ "workspace.active", "window.open", "window.move_to_workspace", "monitor.focused",
+                      "workspace.move_to_monitor" }) do
     hl.on(ev, function()
         if name_timer then return end
         name_timer = hl.timer(function() name_timer = nil; name_extra_workspaces() end,
@@ -358,7 +357,11 @@ local function workspace_gaps(id)
 end
 
 local function update_lone_windows()
-    for id = 1, 10 do
+    local top = 10   -- the workspaces past 10 that stepping opens get the same treatment
+    for _, w in ipairs(hl.get_workspaces() or {}) do
+        if w.id and w.id > top then top = w.id end
+    end
+    for id = 1, top do
         local ws = hl.get_workspace(id)
         local m = ws and ws.monitor
         local want = GAP
@@ -405,35 +408,27 @@ hl.on("monitor.removed", function() place_workspaces(true) end)
 -- A reload clears the workspace rules; put them back
 hl.on("config.reloaded", function() place_workspaces(true) end)
 
--- Previous/next workspace by number (swayworkspace.sh). The numbers 1-10 are always in the
--- ring, plus any higher workspace that exists (Hyprland names a screen with no workspace
--- rule of its own the next free number, 11, 12, ...: with only 1-10 in the ring those were
--- out of reach of the keys). Going past the last one wraps to 1. yoga.ws_skip(ws) leaves a
--- workspace out of the ring (the Yoga's bottom screen while it carries the keyboard) and
--- yoga.ws_grow() lets "next" on the last populated workspace open the next number instead
--- of wrapping, so there is no upper limit; neither does anything on a machine without
--- the module.
+-- Previous/next workspace (swayworkspace.sh). The ring is the workspaces that have windows plus
+-- the one you are on, in number order, so the keys never stop on an empty workspace however the
+-- numbers are spread (1, 2, 5 and 7 in use: four stops). The number keys still go anywhere.
+-- "Next" on the last one, if it has windows, opens the next free number rather than wrapping,
+-- so there is no upper limit; a workspace you leave empty disappears, which keeps the ring
+-- packed. With several screens 9 and 10 are not handed out that way (they belong to the other
+-- screens), so after 8 comes 11. Past either end of a ring that cannot grow it wraps.
+-- yoga.ws_skip(ws) leaves a workspace out of the ring (the Yoga's bottom screen while it
+-- carries the keyboard); it does nothing on a machine without the module. With move, the
+-- focused window goes along and a lone window does not leave its workspace for a new one.
 local function ws_step(delta, move)
-    if not yoga then   -- no module: workspaces 1-10 only, wrapping, as always
-        local ws = hl.get_active_workspace()
-        local id = (ws and ws.id and ws.id > 0) and ws.id or 1
-        local n = (id - 1 + delta) % 10 + 1
-        if move then
-            hl.dispatch(hl.dsp.window.move({ workspace = n }))   -- and follow it
-        else
-            focus_ws(n)
-        end
-        return
-    end
     local cur = hl.get_active_workspace()
     local id = (cur and cur.id and cur.id > 0) and cur.id or 1
-    local ids, have = {}, {}
-    local top = 10   -- the highest number in use anywhere, left-out workspaces included
-    for i = 1, 10 do ids[#ids + 1] = i; have[i] = true end
+    local ids, have, taken = {}, {}, {}
     for _, w in ipairs(hl.get_workspaces() or {}) do
-        if w.id and w.id > top then top = w.id end
-        if w.id and w.id > 10 and not have[w.id] and (w.id == id or not yoga_hook("ws_skip", w)) then
-            ids[#ids + 1] = w.id; have[w.id] = true
+        if w.id and w.id > 0 then
+            taken[w.id] = true
+            if not have[w.id] and (w.id == id
+                    or (#(w:get_windows() or {}) > 0 and not yoga_hook("ws_skip", w))) then
+                ids[#ids + 1] = w.id; have[w.id] = true
+            end
         end
     end
     if not have[id] then ids[#ids + 1] = id end
@@ -442,13 +437,20 @@ local function ws_step(delta, move)
     for i, v in ipairs(ids) do if v == id then pos = i end end
     local n
     if pos + delta > #ids then
-        local busy = cur and cur.get_windows and #(cur:get_windows() or {}) > 0
-        if delta > 0 and busy and yoga_hook("ws_grow") then n = math.max(ids[#ids], top) + 1 else n = ids[1] end
+        local windows = cur and cur.get_windows and #(cur:get_windows() or {}) or 0
+        if delta > 0 and windows > (move and 1 or 0) then
+            local shared = #(hl.get_monitors() or {}) > 1
+            n = id + 1
+            while taken[n] or (shared and (n == 9 or n == 10)) do n = n + 1 end
+        else
+            n = ids[1]
+        end
     elseif pos + delta < 1 then
         n = ids[#ids]
     else
         n = ids[pos + delta]
     end
+    if n == id then return end
     if move then
         hl.dispatch(hl.dsp.window.move({ workspace = n }))   -- and follow it
     else

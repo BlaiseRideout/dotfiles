@@ -106,7 +106,7 @@ runs the app, so apps open on that screen. SUPER+d, SUPER+v, SUPER+Tab and the s
 - The keyboard button is on the laptop panels' bars only (a Noctalia monitor section replaces the whole bar, so
   `yoga.bar_extra` generates `~/.cache/noctalia/primary.toml`).
 - With the bottom screen reserved for the keyboard it holds a named workspace `kbd` (no number), so Hyprland
-  never auto-numbers it; the workspace keys step through 1-10 plus any higher existing ones and can open new.
+  never auto-numbers it; CTRL+left/right step through the workspaces that have windows (plus the current one) and open a new one past the last.
 
 ## Not verified
 

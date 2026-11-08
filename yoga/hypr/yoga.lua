@@ -19,7 +19,7 @@
 --   yoga.before_bind()              start of every keybinding: undo a focus move onto the reserved screen
 --   yoga.rank(m)                    1 top panel, 2 bottom panel, nil any other monitor
 --   yoga.retarget(target)           workspace placement: change target[i] (monitor tables) for the reserved screen
---   yoga.ws_skip(ws), yoga.ws_grow()  workspace stepping: leave the reserved screen's workspace out; no upper limit
+--   yoga.ws_skip(ws)                workspace stepping: leave the reserved screen's workspace out
 --   yoga.bar_extra(primary)         extra text for ~/.cache/noctalia/primary.toml
 --   yoga.lid_changed(closed)        lid switch; true when handled here (else the shared config suspends on close)
 --   yoga.apply_devices()            bind the touch and pen devices to their panels (after hl.config)
@@ -455,13 +455,12 @@ return function(host)
     end
 
     -- Workspace stepping (the shared ws_step): the screen carrying the keyboard is not part of
-    -- the ring, and there is no upper limit on the numbers
+    -- the ring
     function M.ws_skip(w)
         if not yoga_bottom_reserved then return false end
         local _, bottom = yoga_panels()
         return bottom ~= nil and w.monitor ~= nil and w.monitor.name == bottom.name
     end
-    function M.ws_grow() return true end
 
     -- Free the Yoga's bottom screen for the keyboard: its workspace(s) move to the top
     -- panel, which keeps showing the workspace it was showing, and the focus ends up

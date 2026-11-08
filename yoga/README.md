@@ -68,7 +68,7 @@ an erroring one is caught and reported once):
 |---|---|---|
 | `yoga.rank(m)` | `place_workspaces`, sorting the laptop panels | 1 top panel, 2 bottom panel, nil otherwise |
 | `yoga.retarget(target)` | `place_workspaces`, after the roles are assigned | while the bottom screen is reserved for the keyboard, replaces it by the top panel in `target[1..10]` |
-| `yoga.ws_skip(ws)`, `yoga.ws_grow()` | `ws_step` (CTRL+left/right, CTRL+SHIFT+left/right, the five-finger window moves) | skip a workspace that is on the reserved bottom screen; true: "next" on the last populated workspace opens the next number (no limit) |
+| `yoga.ws_skip(ws)` | `ws_step` (CTRL+left/right, CTRL+SHIFT+left/right, the five-finger window moves) | skip a workspace that is on the reserved bottom screen |
 | `yoga.bar_extra(primary)` | `set_bar_primary` | text appended to `~/.cache/noctalia/primary.toml` (the bars' widget lists) |
 | `yoga.lid_changed(closed)` | the lid switch binds | true when handled (panels off/on, nothing in a fold); false: the shared config suspends on close |
 | `yoga.before_bind()` | start of every `bind()` | puts the focus back on the monitor you were on if a touch moved it to the reserved screen |
