@@ -169,6 +169,7 @@
         - swayidle
         - swaylock
         - grim
+        - nautilus          # the default file manager (inode/directory)
         - slurp
         - sway-contrib      # grimshot
         - wl-clipboard
@@ -196,6 +197,7 @@
       - hypridle
       - hyprlock
       - hyprpolkitagent
+        - nautilus          # the default file manager (inode/directory)
       - xdg-desktop-portal-hyprland
       - grimblast-git       # CachyOS's repo (AUR elsewhere)
       - fuzzel
@@ -232,6 +234,30 @@
     # and Discord are .debs (VS Code's adds its own apt repo for updates).
     # pacman: the rest from the repos, Dropbox and Microsoft's VS Code from the
     # AUR (with paru, from CachyOS's repo).
+    # Default apps by MIME type, set with xdg-mime (~/.config/mimeapps.list).
+    # smplayer comes from app_packages (apps=true); feh from base_packages.
+    video_player: smplayer.desktop
+    video_mimes:
+      - video/mp4
+      - video/x-matroska
+      - video/webm
+      - video/quicktime
+      - video/x-msvideo
+      - video/mpeg
+      - video/x-flv
+      - video/x-ms-wmv
+      - video/ogg
+      - video/3gpp
+    image_viewer: feh.desktop
+    image_mimes:
+      - image/jpeg
+      - image/png
+      - image/gif
+      - image/webp
+      - image/bmp
+      - image/tiff
+      - image/avif
+
     app_packages:
       apt:
         - gimp
@@ -250,6 +276,7 @@
         - paru
     app_debs:
       - { name: code,    url: "https://update.code.visualstudio.com/latest/linux-deb-x64/stable" }
+        - smplayer          # the default video player (video_mimes)
       - { name: discord, url: "https://discord.com/api/download?platform=linux&format=deb" }
     app_aur:
       - dropbox
@@ -257,6 +284,7 @@
     app_flatpaks:
       - io.github.cboxdoerfer.FSearch
       - org.openrgb.OpenRGB
+        - smplayer          # the default video player (video_mimes)
     # Spotify rotates its signing key about yearly; get the new id from
     # https://www.spotify.com/download/linux/ when apt reports NO_PUBKEY
     spotify_key: https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.gpg
@@ -677,6 +705,44 @@
         - name: Link ~/.cache/huggingface to the model cache
           ansible.builtin.file:
             src: "{{ ansible_facts['env']['HOME'] }}/.local/share/huggingface"
+    # Home Manager (xdg.userDirs, home/common.nix) gives the user dirs their own
+    # names. Carry over a distro-made folder (~/Documents) when the new name isn't
+    # there yet; where both exist (or either is a link, as on nhuto's /mnt/files),
+    # leave them alone. Templates and Public are unused, so those are removed if
+    # empty (rmdir refuses a folder with anything in it).
+    - name: Rename the capitalized user dirs to the new names, and drop empty Templates and Public
+      ansible.builtin.shell: |
+        set -eu
+        cd "$HOME"
+        for pair in Desktop:.desktop Documents:documents Downloads:downloads Music:audio \
+                    Pictures:images Projects:prog Videos:videos; do
+          d=${pair%%:*}
+          l=${pair#*:}
+          if [ -d "$d" ] && [ ! -L "$d" ] && [ ! -e "$l" ] && [ ! -L "$l" ]; then
+            mv -- "$d" "$l"
+            echo "renamed $d"
+          fi
+        done
+        for d in Templates Public; do
+          if [ -d "$d" ] && [ ! -L "$d" ] && rmdir -- "$d" 2>/dev/null; then
+            echo "removed $d"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: userdirs_rename
+      changed_when: "'renamed' in userdirs_rename.stdout or 'removed' in userdirs_rename.stdout"
+
+    # The Print binds (sway, Hyprland) save to $(xdg-user-dir PICTURES)/screenshots
+    # and neither grim nor grimblast creates it, so without it every save fails.
+    # After the rename above (and after any hand-made link to /mnt/files, which
+    # state=directory follows), so it lands in the real images folder.
+    - name: Create the screenshots folder
+      ansible.builtin.file:
+        path: "{{ ansible_facts['env']['HOME'] }}/images/screenshots"
+        state: directory
+        mode: "0755"
+
             dest: "{{ ansible_facts['env']['HOME'] }}/.cache/huggingface"
             state: link
 
@@ -889,3 +955,45 @@
             src: "{{ ansible_facts['env']['HOME'] }}/.local/opt/waybar/bin/waybar"
             dest: "{{ ansible_facts['env']['HOME'] }}/.local/bin/waybar"
             state: link
+    # sway.nix's machines open folders with xdg-open (sway's and Hyprland's $mod+e)
+    - name: Check the default file manager
+      when: desktop == 'sway'
+      ansible.builtin.command: xdg-mime query default inode/directory
+      register: file_manager
+      changed_when: false
+
+    - name: Make Nautilus the default file manager
+      when: desktop == 'sway' and file_manager.stdout != 'org.gnome.Nautilus.desktop'
+      ansible.builtin.command: xdg-mime default org.gnome.Nautilus.desktop inode/directory
+
+    # Video and image defaults. Only the mime types listed above are changed; the
+    # rest keep their defaults. Re-runs change nothing once they're set.
+    - name: Check the default video player
+      when: apps | bool
+      ansible.builtin.command: xdg-mime query default {{ item }}
+      loop: "{{ video_mimes }}"
+      register: video_defaults
+      changed_when: false
+
+    - name: Make smplayer the default video player
+      ansible.builtin.command: xdg-mime default {{ video_player }} {{ item.item }}
+      loop: "{{ video_defaults.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - apps | bool
+        - item.stdout != video_player
+
+    - name: Check the default image viewer
+      ansible.builtin.command: xdg-mime query default {{ item }}
+      loop: "{{ image_mimes }}"
+      register: image_defaults
+      changed_when: false
+
+    - name: Make feh the default image viewer
+      ansible.builtin.command: xdg-mime default {{ image_viewer }} {{ item.item }}
+      loop: "{{ image_defaults.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stdout != image_viewer
+
