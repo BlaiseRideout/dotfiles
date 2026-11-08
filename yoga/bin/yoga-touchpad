@@ -596,6 +596,8 @@ class Active:
         self.rect = None
         self.start = time.monotonic()
         self.n_events = 0
+        self.lost_at = None     # set while the real touchscreen is away (lose_source)
+        self.drops = 0
 
     def open(self, wait_hypr=True):
         cfg = self.cfg
@@ -657,6 +659,50 @@ class Active:
         self.router.set_rect(rect)
         log(f"strip -> {key} {rect}")
 
+    def lose_source(self):
+        """The real touchscreen went away (the controller re-enumerates three times in the
+        first minute after boot). Keep everything else: the virtual devices (so Hyprland keeps
+        its bindings), the strip and the outline on screen. Lift whatever was held and wait
+        for the node to come back; reacquire() takes the grab again."""
+        try:
+            self.router.release_all()
+        except Exception:
+            pass
+        if self.dev is not None:
+            try:
+                self.dev.close()
+            except Exception:
+                pass
+        self.dev = None
+        self.lost_at = time.monotonic()
+        self.drops += 1
+
+    def reacquire(self):
+        """Grab the touchscreen again after lose_source(): True when it is back. Raises
+        ValueError if the device that came back has other ranges (a full restart is needed)."""
+        if not os.path.exists(self.cfg["source"]["device"]):
+            return False
+        try:
+            dev, info = source_info(self.cfg["source"]["device"])
+        except (OSError, KeyError):      # node there, not usable yet (ACL, capabilities)
+            return False
+        if any(info[k] != self.src[k] for k in ("x_max", "y_max", "slots")):
+            dev.close()
+            raise ValueError(f"the touchscreen came back with other ranges ({info})")
+        _, e = ev()
+        try:
+            t0 = time.monotonic()
+            while e.BTN_TOUCH in dev.active_keys() and time.monotonic() - t0 < 2.0:
+                time.sleep(0.02)
+            os.set_blocking(dev.fd, False)
+            dev.grab()
+        except OSError:
+            dev.close()
+            return False
+        self.dev = dev
+        log(f"grabbed {dev.path} again after {time.monotonic() - self.lost_at:.1f} s")
+        return True
+
     def pump(self):
         """Read what the touchscreen has to say and route it."""
         try:
@@ -691,7 +737,8 @@ class Active:
                     pass
         secs = time.monotonic() - self.start
         log(f"released the touchscreen after {secs:.0f} s: {self.n_events} events in, "
-            f"{self.pad.frames} touchpad frames, {self.screen.frames} touchscreen frames out")
+            f"{self.pad.frames} touchpad frames, {self.screen.frames} touchscreen frames out"
+            + (f", {self.drops} USB drops survived" if self.drops else ""))
 
 
 class Daemon:
@@ -831,6 +878,24 @@ class Daemon:
         if not self.dry and (self.cfg["activation"]["notify"] or verbose()) and not self.stop:
             notify("off")
 
+    SOURCE_WAIT_S = 30      # how long a vanished touchscreen is waited for before starting over
+
+    def await_source(self):
+        """While the real touchscreen is away, try to take it back (called every loop, ~0.2 s)."""
+        a = self.active
+        if a is None or a.dev is not None or a.dry:
+            return
+        try:
+            if a.reacquire():
+                return
+            why = None if time.monotonic() - a.lost_at < self.SOURCE_WAIT_S else \
+                f"touchscreen did not come back within {self.SOURCE_WAIT_S} s"
+        except ValueError as ex:
+            why = str(ex)
+        if why:
+            self.deactivate(why)
+            self.retry_at = time.monotonic() + 3
+
     # -- control socket ---------------------------------------------------------------
     def sock_path(self):
         return runtime_dir() / "yoga-touchpad" / ("ctl-dry.sock" if self.dry else "ctl.sock")
@@ -861,6 +926,8 @@ class Daemon:
         if a:
             lines.append(f"strip     {a.key}: {a.rect} of {a.src['x_max'] + 1}x{a.src['y_max'] + 1} units"
                          + ("   [dry run: nothing grabbed]" if a.dry else ""))
+            if a.lost_at is not None and a.dev is None:
+                lines.append(f"waiting   the touchscreen is away (USB reset), {time.monotonic() - a.lost_at:.0f} s")
             if not a.dry:
                 lines.append(f"traffic   {a.n_events} source events, {a.pad.frames} pad frames, "
                              f"{a.screen.frames} screen frames; up {time.monotonic() - a.start:.0f} s")
@@ -906,7 +973,7 @@ class Daemon:
             f"dock={self.cfg['activation']['dock']} osk={self.cfg['activation']['osk']}, "
             f"dock file {yoga_state.dock_path()}, config {config_path()}"
             f"{'' if config_path().exists() else ' (absent, defaults)'}")
-        registered = None
+        registered = registered_fd = None
         try:
             while not self.stop:
                 now = time.monotonic()
@@ -916,17 +983,19 @@ class Daemon:
                 self.poll_inputs(now)
                 self.apply(now)
                 # keep the source fd registered exactly while active
+                # (by device, not by fd number: a re-opened touchscreen can get the same number)
                 a = self.active
-                fd = a.dev.fd if (a and a.dev) else None
-                if fd != registered:
-                    if registered is not None:
+                dev = a.dev if a else None
+                if dev is not registered:
+                    if registered_fd is not None:
                         try:
-                            sel.unregister(registered)
+                            sel.unregister(registered_fd)
                         except (KeyError, ValueError, OSError):
                             pass
-                    if fd is not None:
-                        sel.register(fd, selectors.EVENT_READ, "src")
-                    registered = fd
+                    registered_fd = dev.fd if dev is not None else None
+                    if dev is not None:
+                        sel.register(registered_fd, selectors.EVENT_READ, "src")
+                    registered = dev
                 for key, _ in sel.select(0.2 if a else 0.25):
                     if key.data == "ctl":
                         try:
@@ -938,9 +1007,9 @@ class Daemon:
                         try:
                             self.active.pump()
                         except OSError as ex:   # the device went away (USB reset)
-                            log(f"touchscreen read failed: {ex}")
-                            self.deactivate("touchscreen vanished")
-                            self.retry_at = time.monotonic() + 3
+                            log(f"touchscreen read failed: {ex}; keeping the touchpad and waiting for it")
+                            self.active.lose_source()
+                self.await_source()
         finally:
             self.stop = True
             if self.active:

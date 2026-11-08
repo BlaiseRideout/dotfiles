@@ -15,6 +15,12 @@ While the keyboard is docked (or the on-screen keyboard is up) the daemon grabs 
 
 A touch stays where it started until it lifts. The kernel releases the grab if the daemon dies.
 
+**The controller drops off USB three times in the first minute after boot** ([hardware.md](hardware.md)). The
+daemon rides that out: it lifts any held touch, closes only the real node, and keeps the virtual devices (so
+Hyprland keeps its bindings), the active strip and the outline on screen, then takes the grab again as soon as
+`/dev/input/yoga-touch-bottom` is back (~1 s; log: `grabbed ... again after N s`). It starts over (deactivate,
+retry) only if the node does not return within 30 s or comes back with other ranges.
+
 Needs `python-evdev`, `/dev/uinput` and the touch node accessible to your user (`yoga/udev/62-yoga-touchpad.rules`).
 
 ## CLI
