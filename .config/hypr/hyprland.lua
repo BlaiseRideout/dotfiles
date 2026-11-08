@@ -416,13 +416,15 @@ hl.on("config.reloaded", function() place_workspaces(true) end)
 -- the side you come from, so no workspace in between is lost and none is walked through: with
 -- windows on 1 and 4, "next" goes 1, 2, 4 and "previous" 4, 3, 1. The number keys go anywhere.
 -- "Next" on the last populated workspace opens the next free number rather than wrapping, so
--- there is no upper limit; a workspace you leave empty disappears, which keeps things packed.
+-- there is no upper limit, and "previous" on the first one steps to the empty workspace before
+-- it, if there is one (a window sent to 2 leaves 1 to go back to); a workspace you leave empty
+-- disappears, which keeps things packed.
 -- Where 9 and 10 are placed on another screen than this one they are never stopped on as an
 -- empty one, so after 8 comes 11; with one screen (the Yoga with the keyboard docked too) they
 -- are numbers like the others. Past either end of the stops that cannot grow it wraps.
 -- yoga.ws_skip(ws) leaves a workspace out (the Yoga's bottom screen while it carries the
 -- keyboard); it does nothing on a machine without the module. With move, the focused window
--- goes along, and a lone window on the last workspace wraps instead of opening a new one.
+-- goes along (even a lone one: the workspace it leaves disappears).
 local function ws_step(delta, move)
     local cur = hl.get_active_workspace()
     local id = (cur and cur.id and cur.id > 0) and cur.id or 1
@@ -452,7 +454,7 @@ local function ws_step(delta, move)
         if after then
             -- Populated here and a gap ahead: its first workspace, then the next populated one
             n = (windows > 0 and after > id + 1 and free(id + 1)) and id + 1 or after
-        elseif windows > (move and 1 or 0) then
+        elseif windows > 0 then
             n = id + 1
             while not free(n) do n = n + 1 end
         else
@@ -461,6 +463,8 @@ local function ws_step(delta, move)
     else
         if before then
             n = (windows > 0 and before < id - 1 and free(id - 1)) and id - 1 or before
+        elseif windows > 0 and free(id - 1) then
+            n = id - 1   -- before the first populated workspace: the empty one next to it
         else
             n = pop[#pop] or id
         end
