@@ -25,6 +25,13 @@
 
   # Waybar icons and the backlight glyphs
   fonts.fontconfig.enable = true;
+  # RGB subpixel antialiasing with slight hinting, as the panels' stripe order
+  # (the Yoga's OLEDs and the desktop's monitors alike) and Fontconfig's
+  # default hinting are. Written to ~/.config/fontconfig/conf.d; GTK 3 gets the
+  # same from its settings.ini, GTK 4 from the dconf values in hyprland.nix.
+  fonts.fontconfig.antialiasing = true;
+  fonts.fontconfig.hinting = "slight";
+  fonts.fontconfig.subpixelRendering = "rgb";
   home.packages = with pkgs; [
     font-awesome_6
     meslo-lgs-nf
