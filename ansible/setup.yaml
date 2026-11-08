@@ -1026,12 +1026,44 @@
             path: "{{ ansible_facts['env']['HOME'] }}/.local/opt/waybar/bin/waybar"
           register: waybar_built
 
+        # The git module's "changed" is not usable here: force: true resets the file
+        # build.sh patches, so it reports a change on every run. Compare the checked-out
+        # commit (and build.sh itself) with what was recorded after the last build instead.
+        - name: Find the checked-out Waybar commit
+          ansible.builtin.command: git -C "{{ waybar_src }}" rev-parse HEAD
+          register: waybar_head
+          changed_when: false
+
+        - name: Check Waybar's build script
+          ansible.builtin.stat:
+            path: "{{ dotfiles }}/build/waybar/build.sh"
+          register: waybar_build_script
+
+        - name: Read what Waybar was last built from
+          ansible.builtin.slurp:
+            src: "{{ ansible_facts['env']['HOME'] }}/.local/opt/waybar/.built-from"
+          register: waybar_stamp
+          failed_when: false
+
         # Rebuilt after a Sway rebuild too on apt: it links the Sway prefix's Wayland
         - name: Build Waybar
           ansible.builtin.command: "{{ dotfiles }}/build/waybar/build.sh"
           environment:
             SRC: "{{ waybar_src }}"
-          when: waybar_git.changed or (sway_git.changed | default(false)) or not waybar_built.stat.exists
+          vars:
+            waybar_want: "{{ waybar_head.stdout }} {{ waybar_build_script.stat.checksum }}"
+          when: >-
+            not waybar_built.stat.exists
+            or (sway_git.changed | default(false))
+            or (waybar_stamp.content | default('') | b64decode | trim) != waybar_want
+          register: waybar_build
+
+        - name: Record what Waybar was built from
+          ansible.builtin.copy:
+            content: "{{ waybar_head.stdout }} {{ waybar_build_script.stat.checksum }}\n"
+            dest: "{{ ansible_facts['env']['HOME'] }}/.local/opt/waybar/.built-from"
+            mode: "0644"
+          when: waybar_build is changed
 
         # So `waybar` in a terminal runs this one (launch.sh uses the full path)
         - name: Link Waybar into ~/.local/bin
@@ -1039,3 +1071,4 @@
             src: "{{ ansible_facts['env']['HOME'] }}/.local/opt/waybar/bin/waybar"
             dest: "{{ ansible_facts['env']['HOME'] }}/.local/bin/waybar"
             state: link
+
