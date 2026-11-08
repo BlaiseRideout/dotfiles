@@ -16,7 +16,7 @@ generate() {
 case ${1:-} in
   ensure) [[ -s $FILE ]] || generate ;;
   path)   echo "$FILE" ;;
-  show)   cat "$FILE" ;;
+  show)   cat "$FILE"; echo ;;  # the file has no trailing newline; without one zsh draws a "%" right after the key
   rotate) generate ;;
   *) echo "usage: llama-key ensure|path|show|rotate" >&2; exit 2 ;;
 esac

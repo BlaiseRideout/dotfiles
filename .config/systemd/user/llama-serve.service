@@ -2,6 +2,9 @@
 Description=LLaMA Serve Router Server
 After=network.target
 # Models live in ~/.local/share/huggingface (~/.cache/huggingface is a symlink to it)
+# The router listens on loopback only (default --host). The tailnet reaches it over HTTPS through Tailscale, set once
+# (it persists in tailscaled, not here): sudo tailscale serve --bg --https=443 http://127.0.0.1:9931
+# Undo with: sudo tailscale serve --https=443 off. The API key is still required.
 
 [Service]
 Type=simple
