@@ -1,0 +1,38 @@
+#!/bin/bash
+# Fetch Howdy Next's two face models, verified against the same pinned SHA-256 sums its
+# own `howdy download-models` uses (howdy/include/model_assets/opencv_model_manifest.hpp).
+#
+# Why this exists: `howdy download-models` fetches github.com/<repo>/raw/..., which
+# redirects git-LFS files to media.githubusercontent.com, and on this network that host
+# fails the TLS handshake ("wrong version number", IPv4 and IPv6). The git-LFS batch API
+# hands out a github-cloud.githubusercontent.com link instead, which works. Any source is
+# fine because the hash is checked.
+#
+#   sudo yoga-howdy-models [DEST]      # DEST defaults to /usr/share/howdy/models
+# Prints "ok <file>" for each file it fetched, "have <file>" for one already correct.
+set -eu
+dest=${1:-/usr/share/howdy/models}
+
+fetch() {   # REPO COMMIT PATH SHA256 NAME
+  local repo=$1 commit=$2 path=$3 want=$4 name=$5 out="$dest/$5" ptr oid size href got
+  if [ -f "$out" ] && [ "$(sha256sum "$out" | cut -d' ' -f1)" = "$want" ]; then echo "have $name"; return; fi
+  ptr=$(curl -fsS -m 30 "https://raw.githubusercontent.com/$repo/$commit/$path")
+  oid=$(printf '%s\n' "$ptr" | sed -n 's/^oid sha256://p'); size=$(printf '%s\n' "$ptr" | sed -n 's/^size //p')
+  [ "$oid" = "$want" ] || { echo "$name: LFS pointer says $oid, expected $want" >&2; exit 1; }
+  href=$(curl -fsS -m 30 -X POST -H 'Accept: application/vnd.git-lfs+json' -H 'Content-Type: application/vnd.git-lfs+json' \
+    -d "{\"operation\":\"download\",\"transfers\":[\"basic\"],\"objects\":[{\"oid\":\"$oid\",\"size\":$size}]}" \
+    "https://github.com/$repo.git/info/lfs/objects/batch" |
+    python3 -I -c 'import sys,json;print(json.load(sys.stdin)["objects"][0]["actions"]["download"]["href"])')
+  curl -fsS -m 300 -o "$out.part" "$href"
+  got=$(sha256sum "$out.part" | cut -d' ' -f1)
+  [ "$got" = "$want" ] || { rm -f "$out.part"; echo "$name: sha256 $got, expected $want" >&2; exit 1; }
+  chmod 0644 "$out.part"; mv "$out.part" "$out"; echo "ok $name"
+}
+
+mkdir -p "$dest"
+fetch opencv/opencv_zoo 26cc381e4d2594bb9f47a26eb8fd96c94a13660d \
+  models/face_detection_yunet/face_detection_yunet_2026may.onnx \
+  ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0 face_detection_yunet_2026may.onnx
+fetch opencv/opencv_zoo 088c3571ec70df15100a5e4c26894d95951e92e9 \
+  models/face_recognition_sface/face_recognition_sface_2021dec_int8.onnx \
+  2b0e941e6f16cc048c20aee0c8e31f569118f65d702914540f7bfdc14048d78a face_recognition_sface_2021dec_int8.onnx

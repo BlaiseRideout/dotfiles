@@ -1,0 +1,20 @@
+#!/bin/sh
+# Pre-flight for the patched (PR #183) greeter, run by greetd as the "greeter" user in place
+# of /usr/bin/noctalia-greeter-session. If NOCTALIA_GREETER_BIN points at something that
+# cannot work for this user, drop it and start the packaged greeter instead, so a bad build
+# can never leave the machine without a login screen (2026-11-07: the first build could not
+# find its assets, crashed on start, and greetd gave up after five restarts).
+bin="${NOCTALIA_GREETER_BIN:-}"
+if [ -n "$bin" ]; then
+  why=""
+  [ -x "$bin" ] || why="$bin is not executable"
+  [ -z "$why" ] && [ ! -r "$(dirname "$bin")/assets/fonts/tabler.json" ] \
+    && why="assets next to $bin are not readable"
+  [ -z "$why" ] && ldd "$bin" 2>/dev/null | grep -q 'not found' \
+    && why="$bin has unresolved libraries"
+  if [ -n "$why" ]; then
+    logger -t yoga-greeter "falling back to the packaged greeter: $why"
+    unset NOCTALIA_GREETER_BIN
+  fi
+fi
+exec /usr/bin/noctalia-greeter-session "$@"
