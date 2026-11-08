@@ -15,6 +15,7 @@
 #   ansible-playbook setup.yaml -e llama_update=true   # update llama.cpp (installed by default on nhuto, nhuto-Mint)
 #
 # It asks for the sudo password once. Safe to re-run; on pacman each run also
+#   ansible-playbook setup.yaml -e t3code_update=true  # update the T3 Code AppImage (installed once, with the desktop apps)
 # upgrades the system (installing after a bare `pacman -Sy` risks a partial
 # upgrade).
 #
@@ -47,6 +48,10 @@
     llama_version: ""
     # Bibata Modern Ice, the cursor named in the GTK settings, hyprland.lua and sway's
     # config; into ~/.local/share/icons like the Orchis and Flatery themes
+    # T3 Code's AppImage from GitHub releases into ~/.local/bin/t3code (x86_64, with
+    # the desktop apps). Installed once; -e t3code_update=true fetches the latest.
+    t3code_update: false
+    t3code_releases: https://github.com/pingdotgg/t3code/releases/latest/download
     bibata_version: v2.0.7
     bibata_url: "https://github.com/ful1e5/Bibata_Cursor/releases/download/{{ bibata_version }}/Bibata-Modern-Ice.tar.xz"
     hm_config: "{{ ansible_facts['user_id'] }}@{{ ansible_facts['hostname'] }}"
@@ -107,6 +112,8 @@
         - qt6-style-kvantum
       pacman:
         - git
+      # Tailscale isn't in Ubuntu's repos: its install script adds Tailscale's
+      # apt repository (below)
         - curl
         - openssh           # shared ssh-agent.service
         - xz
@@ -133,6 +140,7 @@
         - sassc             # builds the Orchis GTK theme
         - kvantum           # the Orchis Qt theme's engine (Qt 6)
         - kvantum-qt5
+        - tailscale
 
     sway_packages:
       apt:
@@ -161,6 +169,7 @@
         - kitty
         - python3-i3ipc     # sway/autotiling.py, center_single.py
         - xdg-desktop-portal-wlr
+        - nautilus          # the default file manager (inode/directory)
         - xdg-desktop-portal-gtk
       pacman:
         - sway
@@ -188,6 +197,7 @@
         - copyq
         - gsimplecal
         - kitty
+        - nautilus          # the default file manager (inode/directory)
         - python-i3ipc
         - xdg-desktop-portal-wlr
         - xdg-desktop-portal-gtk
@@ -224,6 +234,30 @@
       pacman:
         - openbox
         - tint2
+    # Default apps by MIME type, set with xdg-mime (~/.config/mimeapps.list).
+    # smplayer comes from app_packages (apps=true); feh from base_packages.
+    video_player: smplayer.desktop
+    video_mimes:
+      - video/mp4
+      - video/x-matroska
+      - video/webm
+      - video/quicktime
+      - video/x-msvideo
+      - video/mpeg
+      - video/x-flv
+      - video/x-ms-wmv
+      - video/ogg
+      - video/3gpp
+    image_viewer: feh.desktop
+    image_mimes:
+      - image/jpeg
+      - image/png
+      - image/gif
+      - image/webp
+      - image/bmp
+      - image/tiff
+      - image/avif
+
         - copyq
 
     # The tray applet for NetworkManager; uhnet doesn't use it (nm_applet: false)
@@ -242,6 +276,7 @@
       - video/x-matroska
       - video/webm
       - video/quicktime
+        - smplayer          # the default video player (video_mimes)
       - video/x-msvideo
       - video/mpeg
       - video/x-flv
@@ -249,6 +284,7 @@
       - video/ogg
       - video/3gpp
     image_viewer: feh.desktop
+        - smplayer          # the default video player (video_mimes)
     image_mimes:
       - image/jpeg
       - image/png
@@ -385,6 +421,26 @@
   tasks:
     - name: Check the variables
       ansible.builtin.assert:
+    # --- Tailscale ----------------------------------------------------------------
+    # pacman: the package is in base_packages. apt: Tailscale's own script adds
+    # their apt repository (it knows Mint's Ubuntu base) and installs the package.
+    # Logging in is interactive: `sudo tailscale up` once per machine.
+
+    - name: Install Tailscale (apt)
+      when: pkg_mgr == 'apt'
+      become: true
+      ansible.builtin.shell: set -o pipefail; curl -fsSL https://tailscale.com/install.sh | sh
+      args:
+        executable: /bin/bash
+        creates: /usr/bin/tailscale
+
+    - name: Start Tailscale at boot
+      become: true
+      ansible.builtin.systemd:
+        name: tailscaled.service
+        enabled: true
+        state: started
+
         that:
           - desktop in ['sway', 'openbox']
           - pkg_mgr in ['apt', 'pacman']
@@ -542,6 +598,38 @@
 
         - name: Install apps from the AUR
           ansible.builtin.command: paru -S --needed --noconfirm --skipreview {{ app_aur | join(' ') }}
+    # T3 Code runs from its AppImage; the app adds its own menu entry and icon (the
+    # tray icons are in .local/share/icons/hicolor). The release's latest-linux.yml
+    # names the current file. Downloads ~190 MB, so only when missing or asked.
+    - name: Install T3 Code
+      when: apps | bool and ansible_facts['architecture'] == 'x86_64'
+      block:
+        - name: Check for T3 Code
+          ansible.builtin.stat:
+            path: "{{ ansible_facts['env']['HOME'] }}/.local/bin/t3code"
+          register: t3code_bin
+
+        - name: Find the latest T3 Code AppImage
+          when: t3code_update | bool or not t3code_bin.stat.exists
+          ansible.builtin.uri:
+            url: "{{ t3code_releases }}/latest-linux.yml"
+            return_content: true
+          register: t3code_latest
+
+        - name: Make sure ~/.local/bin exists
+          ansible.builtin.file:
+            path: "{{ ansible_facts['env']['HOME'] }}/.local/bin"
+            state: directory
+            mode: "0755"
+
+        - name: Download the T3 Code AppImage
+          when: t3code_latest is not skipped
+          ansible.builtin.get_url:
+            url: "{{ t3code_releases }}/{{ (t3code_latest.content | from_yaml).path }}"
+            dest: "{{ ansible_facts['env']['HOME'] }}/.local/bin/t3code"
+            mode: "0755"
+            force: true
+
           register: aur
           changed_when: "'there is nothing to do' not in aur.stdout"
 
@@ -616,6 +704,44 @@
         regexp: '^experimental-features\s*='
         line: experimental-features = nix-command flakes
       register: nix_conf
+
+    # Home Manager (xdg.userDirs, home/common.nix) gives the user dirs their own
+    # names. Carry over a distro-made folder (~/Documents) when the new name isn't
+    # there yet; where both exist (or either is a link, as on nhuto's /mnt/files),
+    # leave them alone. Templates and Public are unused, so those are removed if
+    # empty (rmdir refuses a folder with anything in it).
+    - name: Rename the capitalized user dirs to the new names, and drop empty Templates and Public
+      ansible.builtin.shell: |
+        set -eu
+        cd "$HOME"
+        for pair in Desktop:.desktop Documents:documents Downloads:downloads Music:audio \
+                    Pictures:images Projects:prog Videos:videos; do
+          d=${pair%%:*}
+          l=${pair#*:}
+          if [ -d "$d" ] && [ ! -L "$d" ] && [ ! -e "$l" ] && [ ! -L "$l" ]; then
+            mv -- "$d" "$l"
+            echo "renamed $d"
+          fi
+        done
+        for d in Templates Public; do
+          if [ -d "$d" ] && [ ! -L "$d" ] && rmdir -- "$d" 2>/dev/null; then
+            echo "removed $d"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: userdirs_rename
+      changed_when: "'renamed' in userdirs_rename.stdout or 'removed' in userdirs_rename.stdout"
+
+    # The Print binds (sway, Hyprland) save to $(xdg-user-dir PICTURES)/screenshots
+    # and neither grim nor grimblast creates it, so without it every save fails.
+    # After the rename above (and after any hand-made link to /mnt/files, which
+    # state=directory follows), so it lands in the real images folder.
+    - name: Create the screenshots folder
+      ansible.builtin.file:
+        path: "{{ ansible_facts['env']['HOME'] }}/images/screenshots"
+        state: directory
+        mode: "0755"
 
     - name: Restart the Nix daemon
       become: true
@@ -876,6 +1002,48 @@
           if [ -d "$d" ] && [ ! -L "$d" ] && [ ! -e "$l" ] && [ ! -L "$l" ]; then
             mv -- "$d" "$l"
             echo "renamed $d"
+    # sway.nix's machines open folders with xdg-open (sway's and Hyprland's $mod+e)
+    - name: Check the default file manager
+      when: desktop == 'sway'
+      ansible.builtin.command: xdg-mime query default inode/directory
+      register: file_manager
+      changed_when: false
+
+    - name: Make Nautilus the default file manager
+      when: desktop == 'sway' and file_manager.stdout != 'org.gnome.Nautilus.desktop'
+      ansible.builtin.command: xdg-mime default org.gnome.Nautilus.desktop inode/directory
+
+    # Video and image defaults. Only the mime types listed above are changed; the
+    # rest keep their defaults. Re-runs change nothing once they're set.
+    - name: Check the default video player
+      when: apps | bool
+      ansible.builtin.command: xdg-mime query default {{ item }}
+      loop: "{{ video_mimes }}"
+      register: video_defaults
+      changed_when: false
+
+    - name: Make smplayer the default video player
+      ansible.builtin.command: xdg-mime default {{ video_player }} {{ item.item }}
+      loop: "{{ video_defaults.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - apps | bool
+        - item.stdout != video_player
+
+    - name: Check the default image viewer
+      ansible.builtin.command: xdg-mime query default {{ item }}
+      loop: "{{ image_mimes }}"
+      register: image_defaults
+      changed_when: false
+
+    - name: Make feh the default image viewer
+      ansible.builtin.command: xdg-mime default {{ image_viewer }} {{ item.item }}
+      loop: "{{ image_defaults.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.stdout != image_viewer
+
           fi
         done
         for d in Templates Public; do
