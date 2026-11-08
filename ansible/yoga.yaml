@@ -176,6 +176,26 @@
       ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=usb --attr-match=idVendor=8087 --attr-match=idProduct=0033 --action=change
       when: yoga_bluetooth_udev.changed
 
+# --- Boot: the graphics chip's GSC proxy -----------------------------------------
+# i915 waits up to 20 s (and logs "GSC proxy component didn't bind") for mei_gsc_proxy
+# to bind, but the initramfs has no mei modules (autodetect leaves them out), so the
+# wait can only end by timing out. It blocked the switch to the real root for 0.6 s to
+# 22 s depending on the boot (journalctl -b -k | grep GSC). With the two modules in the
+# initramfs the proxy binds while i915 is still probing. Takes effect at the next boot.
+- name: Put the GSC proxy modules in the initramfs
+  become: true
+  block:
+    - name: Add mei_me and mei_gsc_proxy to the initramfs modules
+      ansible.builtin.copy:
+        content: "MODULES+=(mei_me mei_gsc_proxy)\n"
+        dest: /etc/mkinitcpio.conf.d/yoga-gsc.conf
+        mode: "0644"
+      register: yoga_gsc_initramfs
+
+    - name: Rebuild the initramfs
+      ansible.builtin.command: mkinitcpio -P
+      when: yoga_gsc_initramfs is changed
+
 # --- Yoga Book 9i touch UX (yoga_touch=true) --------------------------------------
 # hyprpm builds hyprgrass against the installed Hyprland's headers (they ship in
 # the hyprland package); cmake is needed by hyprpm itself and by meson to find

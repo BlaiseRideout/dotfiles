@@ -2,6 +2,12 @@
 
 Symptom, cause, fix. Everything here happened during the first bring-up.
 
+## Boot
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Spinner for up to ~20 s before the logo and greeter; `journalctl -b -k` shows `GSC proxy component didn't bind within the expected timeout` | i915 waits for `mei_gsc_proxy`, which the initramfs lacks, and the wait can only time out; it holds up the switch to the real root | `/etc/mkinitcpio.conf.d/yoga-gsc.conf` adds `mei_me mei_gsc_proxy` (ansible, `yoga.yaml`); `systemd-analyze` should then show an initrd well under 5 s |
+
 ## Display and orientation
 
 | Symptom | Cause | Fix |
