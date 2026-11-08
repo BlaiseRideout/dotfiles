@@ -827,11 +827,15 @@ hl.window_rule({
 -- they'd open under the floating app that asked for them. No size: each
 -- dialog picks its own (GTK remembers the file chooser's); a fixed one also
 -- hit the other portal dialogs, like "Open with", which drew at the wrong size.
+-- The remembered size can come from a bigger screen (dconf's file-chooser
+-- window-size was taller than the Yoga's 900 logical pixels), so cap it: a
+-- maximum leaves smaller dialogs alone.
 hl.window_rule({
     name  = "portal-file-chooser",
     match = { class = "^xdg-desktop-portal-gtk$" },
     float = true,
     center = true,
+    max_size = "1200 760",
 })
 
 -- Zoom runs as a native Wayland client (xwayland=false in zoomus.conf), so
