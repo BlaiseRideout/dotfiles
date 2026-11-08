@@ -17,7 +17,7 @@ BASE=74dd931bf9b8f3bd9c1852a95ed87e70e7317b1e     # upstream main, 2026-11-08 (v
 PR=183
 PR_HEAD=7ff5ae89fbbe5cc8a1c2994ac9500f4d64caf57b
 work=${YOGA_GREETER_BUILD_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/yoga-greeter}
-pins="$BASE+pr$PR@$PR_HEAD"
+pins="$BASE+pr$PR@$PR_HEAD+face-text"
 out=$work/build/noctalia-greeter
 
 if [ -x "$out" ] && [ "$(cat "$work/pins" 2>/dev/null)" = "$pins" ]; then echo "$out"; exit 0; fi
@@ -29,6 +29,9 @@ git fetch -q origin "pull/$PR/head"
 [ "$(git rev-parse FETCH_HEAD)" = "$PR_HEAD" ] || { echo "PR #$PR moved ($(git rev-parse FETCH_HEAD)); review it, then update PR_HEAD in $0" >&2; exit 1; }
 git checkout -q -f -B yoga-autostart "$BASE"
 git -c user.name=yoga -c user.email=yoga@localhost merge -q --no-edit "$PR_HEAD"
+# #183 is written for a fingerprint reader; the Yoga has an IR camera (Howdy), so say so.
+sed -i 's/Waiting for fingerprint reader\.\.\./Looking for your face.../' src/greeter/greeter_surface.cpp
+grep -q 'Looking for your face' src/greeter/greeter_surface.cpp || { echo "status text not found in greeter_surface.cpp; update the sed in $0" >&2; exit 1; }
 rm -rf "$work/build"
 meson setup "$work/build" --prefix=/usr --buildtype=release >&2
 ninja -C "$work/build" noctalia-greeter >&2

@@ -56,7 +56,7 @@ the SHA-256, so the files are the same ones. By hand: `sudo ~/.dotfiles/yoga/bin
   `yoga-greeter` in the journal) if the binary, its assets or its libraries aren't usable as the greeter user.
   If it ever loops again: Ctrl+Alt+F2 or SSH, and `journalctl -b -u greetd -t noctalia-greeter`. Pins are in the script; a moved PR stops the build until you review it. **Once #183 is in the
   packaged greeter: delete the build tasks, the script and the `NOCTALIA_GREETER_BIN` part.**
-  A face login does not unlock the keyring (it needs the password), so apps asking for it prompt
+  The greeter's status line ("Waiting for fingerprint reader..." in #183) is changed to "Looking for your face..." by a `sed` in the build script. A face login does not unlock the keyring (it needs the password), so apps asking for it prompt
   once. The greeter is pinned to the top panel; the camera is on the top bezel.
 - Howdy skips the scan with the lid closed (`abort_if_lid_closed`) and over SSH (`abort_if_ssh`).
 - IR is hard to fool with a photo or screen but it is still weaker than a password. Similar faces can pass.
