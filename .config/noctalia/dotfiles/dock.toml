@@ -1,0 +1,9 @@
+# Noctalia's dock: shown on every monitor, hidden behind windows and back when the
+# pointer reaches the screen edge (smart_auto_hide), floating over the windows
+# instead of reserving space. Machine differences go in the host file (the Yoga
+# Book switches it off on its bottom panel).
+
+[dock]
+enabled = true
+reserve_space = false
+smart_auto_hide = true

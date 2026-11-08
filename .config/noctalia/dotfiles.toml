@@ -1,6 +1,7 @@
 # The dotfiles' Noctalia config, one file per concern in dotfiles/:
 #   theme.toml      palette (palettes/Waybar.json) and which apps it recolours
 #   bar.toml        the bar's layout and look, Waybar style
+#   dock.toml       the dock: smart-hiding, floating over the windows
 #   meters.toml     the stats: sysmon gauges and the media plugin
 #   wallpaper.toml  per-monitor wallpaper rotation
 #   idle.toml       leaves idle and locking to hypridle + hyprlock
