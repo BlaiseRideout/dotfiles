@@ -28,6 +28,17 @@
     ".ssh/authorized_keys"
   ];
 
+  # sshd's StrictModes refuses an authorized_keys that is group/world-writable,
+  # as is any directory above it. The link points into this checkout, which a
+  # umask of 002 leaves 664/775, so drop the write bits on every switch.
+  home.activation.sshStrictModes = lib.hm.dag.entryAfter [ "linkGeneration" ] ''
+    for p in "$HOME/.dotfiles" "$HOME/.dotfiles/.ssh" "$HOME/.dotfiles/.ssh/authorized_keys"; do
+      if [ -e "$p" ]; then
+        run chmod go-w "$p"
+      fi
+    done
+  '';
+
   # Linked per file, so ~/scripts can also hold scripts that aren't in the repo.
   # A new script needs a switch (and `git add`) before it's linked.
   home.file = lib.mapAttrs'
