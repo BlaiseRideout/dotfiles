@@ -1,0 +1,802 @@
+# Everything specific to the Lenovo Yoga Book 9i (hostname yoga-linux), pulled in by
+# setup.yaml's "Set up the Yoga Book 9i" task, which only runs there. Notes for each piece
+# are in docs/yoga-book/*.md. The switches (yoga_kbdock, yoga_touchpad, yoga_platform, ...)
+# are set by the first task below; override them with -e, e.g.
+#   ansible-playbook setup.yaml -e yoga_amp_firmware=$HOME/yoga-audio/TAS2XXX38F8.bin
+#   ansible-playbook setup.yaml -e yoga_charge_limit=true -e yoga_sshd=true
+# Nothing in this file, and nothing Yoga-specific in setup.yaml, runs on any other host.
+
+# --- The switches ---------------------------------------------------------------
+# set_fact, not play vars, so the file stands alone; -e still wins over it.
+- name: Set the Yoga Book switches
+  ansible.builtin.set_fact:
+    # DKMS build of lenovo-yb9-kbdock with the 13IMU9's DMI name (83FF) added, plus the
+    # udev rule that keeps its input device away from libinput (yoga/kbdock-dkms,
+    # yoga/udev; notes in docs/yoga-book/kbdock.md).
+    yoga_kbdock: "{{ pkg_mgr == 'pacman' }}"
+    kbdock_version: "{{ lookup('ansible.builtin.file', playbook_dir + '/../yoga/kbdock-dkms/dkms.conf') | regex_search('PACKAGE_VERSION=\"([^\"]+)\"', '\\1') | first }}"
+    # Virtual touchpad / posture daemon (python, evdev): python-evdev, a uinput module, and
+    # udev rules giving the logged-in user /dev/uinput and the bottom touchscreen's evdev
+    # node (yoga/udev/62-yoga-touchpad.rules).
+    yoga_touchpad: "{{ pkg_mgr == 'pacman' }}"
+    # Platform fixes (notes in docs/yoga-book/platform.md):
+    # yoga_amp_firmware: path of a TAS2XXX38F8.bin for the speaker amp (no public copy
+    #   exists yet; see platform.md), e.g. -e yoga_amp_firmware=$HOME/yoga-audio/TAS2XXX38F8.bin
+    # yoga_charge_limit: Lenovo conservation mode (stop charging early, kinder to a laptop
+    #   that sits on a desk plugged in), -e yoga_charge_limit=true
+    yoga_platform: "{{ pkg_mgr == 'pacman' }}"
+    yoga_amp_firmware: ""
+    yoga_charge_limit: false
+    # keyd home row mods for the Yoga's own Bluetooth keyboard only (17ef:616a), ported from
+    # the ZMK keymap; other keyboards (ZMK boards with the mods in firmware) are not
+    # grabbed (yoga/keyd, docs/yoga-book/homerow-mods.md).
+    yoga_homerow_mods: "{{ pkg_mgr == 'pacman' }}"
+    # Gaming (docs/yoga-book/steam.md) and Clip Studio Paint under Wine
+    # (docs/yoga-book/clip-studio.md): Steam, the CachyOS gaming stack (proton-cachyos,
+    # gamescope, MangoHud, 32-bit Vulkan) and Bottles.
+    yoga_gaming: "{{ pkg_mgr == 'pacman' and apps | bool }}"
+    # Touch UX (docs/yoga-book/touch-ux.md): hyprpm and what it needs to build hyprgrass
+    # (cmake, glm), wvkbd (built from yoga/wvkbd) as the on-screen keyboard.
+    # yoga_sshd (off by default, it opens a port): enable sshd as a way back should a
+    # plugin ever lock the touch screen up, -e yoga_sshd=true
+    yoga_touch: "{{ pkg_mgr == 'pacman' and hyprland | bool }}"
+    yoga_sshd: false
+
+# --- Yoga Book 9i keyboard dock (yoga_kbdock=true) --------------------------------
+# The in-tree lenovo-yb9-kbdock only accepts the Gen 10 (83KJ). This is a copy with
+# 83FF added, built by DKMS for every installed kernel that has headers (dkms's
+# pacman hooks rebuild it on kernel updates). Unverified on the hardware until
+# tested as root: yoga/kbdock-test.sh. The udev rule keeps the dock's
+# SW_TABLET_MODE switch away from libinput, since tablet mode follows the hinge.
+
+- name: Install the Yoga keyboard dock driver and udev rule
+  when: yoga_kbdock | bool
+  become: true
+  block:
+    - name: Install DKMS and the kernel headers
+      community.general.pacman:
+        name: [ dkms, linux-cachyos-headers ]
+
+    - name: Create the DKMS source directory
+      ansible.builtin.file:
+        path: "/usr/src/lenovo-yb9-kbdock-{{ kbdock_version }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy the driver source for DKMS
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/kbdock-dkms/{{ item }}"
+        dest: "/usr/src/lenovo-yb9-kbdock-{{ kbdock_version }}/{{ item }}"
+        mode: "0644"
+      loop: [ dkms.conf, Makefile, lenovo-yb9-kbdock.c ]
+      register: kbdock_src
+
+    - name: Build and install the driver for the installed kernels
+      ansible.builtin.shell: |
+        set -eu
+        m=lenovo-yb9-kbdock
+        v={{ kbdock_version }}
+        # An earlier version string with a hyphen (7.3.1-1) made the pacman dkms hook register
+        # the module as name "lenovo-yb9-kbdock-7.3.1", version "1": take that out first
+        # (it owns updates/dkms/lenovo-yb9-kbdock.ko.zst).
+        dkms status | sed -n 's|^\(lenovo-yb9-kbdock-[^/]*\)/\([^,:]*\)[,:].*|\1 \2|p' | sort -u | while read -r n o; do
+          dkms remove -m "$n" -v "$o" --all
+          echo "REMOVED $n/$o"
+        done
+        # other versions out, and this one too if its source just changed
+        for old in $(dkms status -m $m | sed -n 's|^[^/]*/\([^,:]*\)[,:].*|\1|p' | sort -u); do
+          if [ "$old" != "$v" ] || [ "{{ kbdock_src.changed }}" = True ]; then
+            dkms remove -m $m -v "$old" --all
+            echo "REMOVED $old"
+          fi
+        done
+        # their source directories last: dkms remove reads dkms.conf from there
+        for d in /usr/src/lenovo-yb9-kbdock-*; do
+          [ -e "$d" ] || continue
+          [ "$d" = "/usr/src/$m-$v" ] || { rm -rf "$d"; echo "REMOVED $d"; }
+        done
+        dkms status -m $m -v $v | grep -q . || dkms add -m $m -v $v
+        for b in /usr/lib/modules/*/build; do
+          [ -e "$b" ] || continue
+          k=$(basename "$(dirname "$b")")
+          # the driver needs the 7.3+ WMI API (the 6.18 LTS kernel cannot build it)
+          [ "$(printf '%s\n7.3\n' "${k%%-*}" | sort -V | head -n1)" = 7.3 ] || continue
+          dkms status -m $m -v $v -k "$k" | grep -q ': installed' && continue
+          echo "BUILT $k"
+          dkms install -m $m -v $v -k "$k"
+        done
+      args:
+        executable: /bin/bash
+      register: kbdock_build
+      changed_when: "'BUILT ' in kbdock_build.stdout or 'REMOVED ' in kbdock_build.stdout"
+
+    - name: Keep the Yoga keyboard dock switch away from libinput
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/udev/61-yoga-dock-switch.rules"
+        dest: /etc/udev/rules.d/61-yoga-dock-switch.rules
+        mode: "0644"
+      register: kbdock_udev
+
+    - name: Apply the udev rule
+      ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=input --action=change
+      when: kbdock_udev.changed
+
+# --- Yoga Book 9i virtual touchpad dependencies (yoga_touchpad=true) --------------
+- name: Install the Yoga touchpad and posture daemon dependencies
+  when: yoga_touchpad | bool
+  become: true
+  block:
+    - name: Install python-evdev
+      community.general.pacman:
+        name: python-evdev
+        state: present
+
+    - name: Load the uinput module at boot
+      ansible.builtin.copy:
+        content: "uinput\n"
+        dest: /etc/modules-load.d/uinput.conf
+        mode: "0644"
+      register: yoga_uinput_load
+
+    - name: Load uinput now
+      community.general.modprobe:
+        name: uinput
+        state: present
+
+    - name: Give the logged-in user /dev/uinput and the bottom touchscreen
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/udev/62-yoga-touchpad.rules"
+        dest: /etc/udev/rules.d/62-yoga-touchpad.rules
+        mode: "0644"
+      register: yoga_touchpad_udev
+
+    - name: Apply the udev rule
+      ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=input --subsystem-match=misc --action=change
+      when: yoga_touchpad_udev.changed
+
+    - name: Give the logged-in user the touch controller's raw HID reports (palm rejection)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/udev/64-yoga-palm.rules"
+        dest: /etc/udev/rules.d/64-yoga-palm.rules
+        mode: "0644"
+      register: yoga_palm_udev
+
+    - name: Apply the palm rejection udev rule
+      ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=hidraw --action=change
+      when: yoga_palm_udev.changed
+
+    - name: Keep the Bluetooth controller out of USB autosuspend, so the keyboard can reconnect and wake the screens
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/udev/63-yoga-bluetooth.rules"
+        dest: /etc/udev/rules.d/63-yoga-bluetooth.rules
+        mode: "0644"
+      register: yoga_bluetooth_udev
+
+    - name: Apply the Bluetooth udev rule
+      ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=usb --attr-match=idVendor=8087 --attr-match=idProduct=0033 --action=change
+      when: yoga_bluetooth_udev.changed
+
+# --- Yoga Book 9i touch UX (yoga_touch=true) --------------------------------------
+# hyprpm builds hyprgrass against the installed Hyprland's headers (they ship in
+# the hyprland package); cmake is needed by hyprpm itself and by meson to find
+# glm; meson, ninja, git, cpio and pkgconf come with base-devel/Hyprland's
+# dependencies. The plugin itself is added as the user, not here:
+#   hyprpm update && hyprpm add https://github.com/horriblename/hyprgrass \
+#     && hyprpm enable hyprgrass          (and again after every Hyprland upgrade:
+#     yoga-touch update)
+- name: Install the Yoga touch UX packages
+  when: yoga_touch | bool
+  become: true
+  community.general.pacman:
+    name: [ hyprpm, cmake, glm, meson, ninja, cpio, pkgconf, git, gcc, make, wayland, wayland-protocols, pango, cairo, libxkbcommon ]
+    state: present
+
+# wvkbd is not packaged: build v0.21 plus yoga/wvkbd/yoga.patch (Dvorak, a Hide key,
+# --output so it opens on the bottom panel) into ~/.local/bin/wvkbd-yoga as the
+# user. Rebuilt when the patch or build script changes.
+- name: Build the Yoga on-screen keyboard (wvkbd-yoga)
+  when: yoga_touch | bool
+  ansible.builtin.shell: |
+    set -eu
+    stamp="$HOME/.local/share/wvkbd-yoga.sha"
+    want=$(cat "{{ playbook_dir }}/../yoga/wvkbd/yoga.patch" "{{ playbook_dir }}/../yoga/wvkbd/build.sh" | sha256sum | cut -d' ' -f1)
+    if [ -x "$HOME/.local/bin/wvkbd-yoga" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$want" ]; then exit 0; fi
+    "{{ playbook_dir }}/../yoga/wvkbd/build.sh" >&2
+    mkdir -p "$(dirname "$stamp")"
+    echo "$want" > "$stamp"
+    echo BUILT
+  args:
+    executable: /bin/bash
+  register: wvkbd_build
+  changed_when: "'BUILT' in wvkbd_build.stdout"
+
+# A way back: if a plugin ever freezes the touch screen and the Bluetooth keyboard
+# is out of reach, `ssh yoga-linux yoga-touch recover` fixes it from a phone.
+- name: Keep sshd running on the Yoga
+  when: yoga_touch | bool and yoga_sshd | bool
+  become: true
+  ansible.builtin.systemd:
+    name: sshd
+    enabled: true
+    state: started
+
+# --- Login screen: greetd + noctalia-greeter ---------------------------------------
+# CachyOS's greetd + noctalia-greeter login screen, as the package sets it up
+# (/usr/share/noctalia-greeter/config.toml). Reinstalling greetd replaces
+# /etc/greetd/config.toml with its stock agreety (console) config, so this puts the
+# greeter back whenever the file doesn't run noctalia-greeter-session. A config that
+# already runs it is left alone (the tasks below add env vars to that line). Applies at
+# the next boot or `systemctl restart greetd` (which ends the running session). The
+# desktop (nhuto) keeps only its greeter.toml in setup.yaml; none of this runs there.
+- name: Install greetd and the Noctalia greeter
+  when: noctalia | bool and pkg_mgr == 'pacman'
+  become: true
+  community.general.pacman:
+    name: [greetd, noctalia-greeter]
+
+- name: Noctalia login screen (greetd)
+  when: noctalia | bool and pkg_mgr == 'pacman'
+  become: true
+  block:
+    - name: Check that greetd runs the Noctalia greeter
+      ansible.builtin.command: grep -q noctalia-greeter-session /etc/greetd/config.toml
+      register: greetd_noctalia
+      changed_when: false
+      failed_when: greetd_noctalia.rc not in [0, 1, 2]
+
+    - name: Restore the packaged greetd config
+      when: greetd_noctalia.rc != 0
+      ansible.builtin.copy:
+        dest: /etc/greetd/config.toml
+        backup: true
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [terminal]
+          vt = 1
+
+          [default_session]
+          command = "/usr/bin/noctalia-greeter-session"
+          user = "greeter"
+
+    # setup_greeter_system.sh's ensure_greeter_paths, minus its greeter.toml rewrite
+    # (the tasks below own that file).
+    - name: Create the greeter's state directory
+      ansible.builtin.file:
+        path: /var/lib/noctalia-greeter
+        state: directory
+        owner: greeter
+        group: greeter
+        mode: "0750"
+
+    - name: Enable greetd as the display manager
+      ansible.builtin.systemd:
+        name: greetd.service
+        enabled: true
+
+# The greeter only starts PAM (so Howdy, so the IR emitter) when Enter is pressed. Upstream PR
+# #183 adds [auth].auto_start_pam to start it when the password step appears; until it is in
+# the packaged greeter, yoga/greeter/build-greeter.sh builds the pinned PR on top of main as
+# the user, and it is copied to /usr/local/lib/yoga (pacman upgrades don't touch it). The
+# packaged compositor is unchanged between v1.7.0 and that main, so it pairs fine. Remove
+# these three tasks and the NOCTALIA_GREETER_BIN part below once #183 ships.
+# OFF by default: the patched greeter broke the login screen (2026-11-07), so the packaged
+# one runs. Opt back in with -e yoga_greeter_pr183=true (also needs yoga_faceunlock_pam).
+- name: Greeter auto-start for face unlock (Yoga Book)
+  when: noctalia | bool and ansible_facts['hostname'] == 'yoga-linux' and pkg_mgr == 'pacman' and yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | default(false) | bool
+  block:
+    - name: Install the greeter's extra build dependencies
+      become: true
+      community.general.pacman:
+        name: [nlohmann-json, stb]
+
+    - name: Build the greeter with PR #183
+      ansible.builtin.command: "{{ playbook_dir }}/../yoga/greeter/build-greeter.sh"
+      register: yoga_greeter_build
+      changed_when: false
+
+    - name: Install the built greeter
+      become: true
+      block:
+        - name: Create /usr/local/lib/yoga
+          ansible.builtin.file:
+            path: /usr/local/lib/yoga
+            state: directory
+            mode: "0755"
+
+        - name: Copy the greeter in
+          ansible.builtin.copy:
+            src: "{{ yoga_greeter_build.stdout_lines | last }}"
+            dest: /usr/local/lib/yoga/noctalia-greeter
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+
+        # The greeter looks for its assets (fonts/tabler.json, ...) in <exe dir>/assets and
+        # <exe dir>/../share/noctalia-greeter/assets, then in the build tree it was compiled
+        # in, which is under $HOME and unreadable to the greeter user. Without this link the
+        # first try crashed on start and greetd gave up (2026-11-07). The PR changes no assets.
+        - name: Point the greeter at the packaged assets
+          ansible.builtin.file:
+            src: /usr/share/noctalia-greeter/assets
+            dest: /usr/local/lib/yoga/assets
+            state: link
+
+        - name: Install the pre-flight wrapper (falls back to the packaged greeter)
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../yoga/greeter/noctalia-greeter-session"
+            dest: /usr/local/lib/yoga/noctalia-greeter-session
+            owner: root
+            group: root
+            mode: "0755"
+
+- name: Remove the PR #183 greeter when it's not used
+  when: ansible_facts['hostname'] == 'yoga-linux' and not (yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | default(false) | bool)
+  become: true
+  ansible.builtin.file:
+    path: "/usr/local/lib/yoga/{{ item }}"
+    state: absent
+  loop: [noctalia-greeter, noctalia-greeter-session, assets]
+
+# The Yoga Book's login screen: both panels stacked like the laptop posture
+# (top panel above the bottom one), at scale 2 as Hyprland picks, so the login
+# box is big enough to touch. Connector names are fine here: this file is only
+# written on this machine, and the greeter's own log names the same two (eDP-1,
+# eDP-2). Other outputs (the desk's monitors) are not listed, so the greeter
+# appends them to the right with automatic scale. Which connector is the top
+# panel is unverified (docs/yoga-book/login.md): swap the two vars below, or
+# add yoga_greeter_transforms (e.g. "eDP-1:180"), after the identify step in
+# docs/yoga-book/hardware.md. Applies at the next boot or `systemctl restart
+# greetd` (which ends the running session; not done here).
+- name: Give the Yoga Book's login screen both panels, stacked
+  when: noctalia | bool and ansible_facts['hostname'] == 'yoga-linux'
+  become: true
+  vars:
+    yoga_greeter_top: eDP-1
+    yoga_greeter_bottom: eDP-2
+    # empty on purpose: the kernel flag video=eDP-1:panel_orientation=upside_down already
+    # flips the top panel, and the greeter compositor honours it. A 180 here double-flipped
+    # the login screen (seen). Degrees, as in the nhuto task above, if ever needed again.
+    yoga_greeter_transforms: ""
+    # Pin the login screen to ONE panel (the other stays dark). The greeter compositor
+    # maps every touch device to the whole output layout and has no per-device setting;
+    # only a pinned output maps touch to that output (noctalia-greeter docs/user/displays.md,
+    # "Choose which monitors show the greeter"). With both panels lit, taps landed in the
+    # wrong place. The top panel is pinned because it is the one in view with the keyboard
+    # docked (the docked keyboard covers the hinge side of the bottom panel). "" lights both.
+    yoga_greeter_pin: eDP-1
+  ansible.builtin.copy:
+    dest: /var/lib/noctalia-greeter/greeter.toml
+    owner: greeter
+    group: greeter
+    mode: "0644"
+    content: |
+      [output]
+      {% if yoga_greeter_pin | length > 0 %}
+      name = "{{ yoga_greeter_pin }}"
+      {% else %}
+      layout = "{{ yoga_greeter_top }}:0,0; {{ yoga_greeter_bottom }}:0,900"
+      {% endif %}
+      scales = "{{ yoga_greeter_top }}:2; {{ yoga_greeter_bottom }}:2"
+      {% if yoga_greeter_transforms | length > 0 %}
+      transforms = "{{ yoga_greeter_transforms }}"
+      {% endif %}
+      {% if yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | default(false) | bool %}
+
+      [auth]
+      # start PAM (so Howdy, so the IR emitter) when the password step appears instead of
+      # when Enter is pressed. Needs the greeter built with upstream PR #183 (the build task
+      # above); the packaged v1.7.0 does not know this key.
+      auto_start_pam = true
+      {% endif %}
+
+# The login screen's cursor came up upside down on the top panel: the kernel flag
+# flips the panel, but the hardware cursor plane is not rotated with it (the same
+# thing Hyprland has, solved there with cursor.no_hardware_cursors). The greeter
+# compositor is wlroots, which honours WLR_NO_HARDWARE_CURSORS, so the greetd
+# command line is wrapped in env. With yoga_greeter_pr183 it also runs the greeter built
+# above (NOCTALIA_GREETER_BIN is read by the session script). Applies at the next
+# boot or greetd restart.
+- name: Use a software cursor, and the PR #183 greeter, on the Yoga Book's login screen
+  when: noctalia | bool and ansible_facts['hostname'] == 'yoga-linux'
+  become: true
+  vars:
+    yoga_greeter_env: >-
+      env WLR_NO_HARDWARE_CURSORS=1
+      {{ 'NOCTALIA_GREETER_BIN=/usr/local/lib/yoga/noctalia-greeter' if yoga_greeter_patched | bool else '' }}
+    yoga_greeter_patched: "{{ yoga_faceunlock_pam | default(true) | bool and yoga_greeter_pr183 | default(false) | bool }}"
+    yoga_greeter_session: "{{ '/usr/local/lib/yoga/noctalia-greeter-session' if yoga_greeter_patched | bool else '/usr/bin/noctalia-greeter-session' }}"
+  ansible.builtin.lineinfile:
+    path: /etc/greetd/config.toml
+    regexp: '^command = ".*noctalia-greeter-session"'
+    line: 'command = "{{ yoga_greeter_env | trim | regex_replace(" +", " ") }} {{ yoga_greeter_session }}"'
+    backrefs: true
+
+# The keyboard is Bluetooth-only and the greeter has no on-screen keyboard, so
+# the keyboard has to reconnect by itself at the login screen: Bluetooth must not
+# be soft-blocked (systemd-rfkill restores the saved block state at boot, and it
+# is saved as blocked right now), bluetoothd must start at boot and power the
+# adapter on. Pairing and trusting the keyboard is a one-time manual step
+# (docs/yoga-book/login.md).
+- name: Power the Bluetooth adapter on automatically (Yoga Book)
+  when: ansible_facts['hostname'] == 'yoga-linux' and pkg_mgr == 'pacman'
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/bluetooth/main.conf
+    regexp: '^#?AutoEnable='
+    line: AutoEnable=true
+  register: bluetooth_conf
+
+- name: Check whether Bluetooth is soft-blocked (Yoga Book)
+  when: ansible_facts['hostname'] == 'yoga-linux' and pkg_mgr == 'pacman'
+  ansible.builtin.command: rfkill list bluetooth
+  register: rfkill_bluetooth
+  changed_when: false
+
+# systemd-rfkill saves the new state itself, so this survives a reboot.
+- name: Unblock Bluetooth (Yoga Book)
+  when: "ansible_facts['hostname'] == 'yoga-linux' and pkg_mgr == 'pacman' and 'Soft blocked: yes' in rfkill_bluetooth.stdout"
+  become: true
+  ansible.builtin.command: rfkill unblock bluetooth
+
+- name: Start Bluetooth at boot (Yoga Book)
+  when: ansible_facts['hostname'] == 'yoga-linux' and pkg_mgr == 'pacman'
+  become: true
+  ansible.builtin.systemd:
+    name: bluetooth.service
+    enabled: true
+    state: "{{ 'restarted' if bluetooth_conf is changed else 'started' }}"
+
+# Home row mods on the Bluetooth keyboard, ported from the ZMK keymap
+# (yoga/keyd/yoga-bt-kb.conf, docs/yoga-book/homerow-mods.md). keyd only grabs the
+# keyboard named in the config's [ids] (17ef:616a), so other keyboards (ZMK boards with
+# the mods in firmware) are untouched. Off with -e yoga_homerow_mods=false.
+- name: Install keyd (Yoga Book home row mods)
+  when: yoga_homerow_mods | bool
+  become: true
+  community.general.pacman:
+    name: keyd
+    state: present
+
+- name: Install the Yoga keyboard's home row mods config
+  when: yoga_homerow_mods | bool
+  become: true
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../yoga/keyd/yoga-bt-kb.conf"
+    dest: /etc/keyd/yoga-bt-kb.conf
+    mode: "0644"
+  register: keyd_conf
+
+- name: Run keyd at boot (Yoga Book)
+  when: yoga_homerow_mods | bool
+  become: true
+  ansible.builtin.systemd:
+    name: keyd.service
+    enabled: true
+    state: "{{ 'restarted' if keyd_conf is changed else 'started' }}"
+
+# --- Yoga Book platform (docs/yoga-book/platform.md) ----------------------------
+# The speaker amp (TAS2781, codec SSID 17aa:38f8) wants TAS2XXX38F8.bin, which
+# linux-firmware does not have: without it the speakers play untuned (thin, no
+# bass). Install a copy you extracted/obtained yourself (-e yoga_amp_firmware=...);
+# /usr/lib/firmware/updates is searched first and no package owns it, so
+# linux-firmware upgrades leave it alone. Takes effect at the next boot.
+- name: Install the Yoga Book's speaker amp firmware
+  when: yoga_platform | bool and yoga_amp_firmware | length > 0
+  become: true
+  block:
+    - name: Make sure /usr/lib/firmware/updates exists
+      ansible.builtin.file:
+        path: /usr/lib/firmware/updates
+        state: directory
+        mode: "0755"
+
+    - name: Copy TAS2XXX38F8.bin
+      ansible.builtin.copy:
+        src: "{{ yoga_amp_firmware }}"
+        dest: /usr/lib/firmware/updates/TAS2XXX38F8.bin
+        mode: "0644"
+      register: yoga_amp_fw
+
+    - name: Say when the amp firmware takes effect
+      ansible.builtin.debug:
+        msg: Reboot (or unbind/bind i2c-TIAS2781:00) so the tas2781-hda driver loads the new firmware
+      when: yoga_amp_fw is changed
+
+# The top panel is mounted upside down. The kernel's panel_orientation tells the boot console
+# and framebuffer (before Hyprland) which way up it is. The rEFInd entries that boot now get
+# the same word from yoga/secureboot/setup.sh; this is the GRUB fallback. Not covered: whether
+# Hyprland then flips the panel twice (docs/yoga-book/display.md section 5).
+- name: Tell GRUB the top panel is upside down (Yoga Book)
+  when: yoga_platform | bool
+  become: true
+  block:
+    - name: Add video=eDP-1:panel_orientation=upside_down to GRUB_CMDLINE_LINUX_DEFAULT
+      ansible.builtin.replace:
+        path: /etc/default/grub
+        regexp: "^(GRUB_CMDLINE_LINUX_DEFAULT=(['\"])(?!.*video=eDP-1:))(.*?)(\\2)$"
+        replace: "\\1\\3 video=eDP-1:panel_orientation=upside_down\\4"
+      register: yoga_grub_video
+
+    - name: Regenerate grub.cfg
+      ansible.builtin.command: grub-mkconfig -o /boot/grub/grub.cfg
+      when: yoga_grub_video is changed
+
+# IR face unlock (Howdy Next, AUR; docs/yoga-book/faceunlock.md). The IR camera is
+# /dev/video2 (the "Integrated Camera: Integrated I" node, GREY 640x360); its emitter
+# strobes by itself while the node streams, so linux-enable-ir-emitter is not needed.
+# The camera is addressed by its USB port path (the by-id links only exist for the RGB
+# nodes). Installing and configuring is automatic; ENROLLING A FACE (`sudo howdy add`)
+# is a person in front of the camera. The PAM lines are added by default (enrolled and
+# working on this machine); on a fresh install run with -e yoga_faceunlock_pam=false until
+# `howdy add` is done, or every login waits for a scan that cannot match. The password prompt
+# stays as the fallback in every service (the howdy line is `sufficient`).
+- name: IR face unlock (Yoga Book)
+  when: yoga_platform | bool and pkg_mgr == 'pacman' and yoga_faceunlock | default(true) | bool
+  vars:
+    yoga_ir_camera: /dev/v4l/by-path/pci-0000:00:14.0-usb-0:8:1.2-video-index0
+  block:
+    - name: Check whether Howdy Next is installed
+      ansible.builtin.command: pacman -Qq howdy-next
+      register: yoga_howdy_installed
+      changed_when: false
+      failed_when: false
+
+    # paru builds as the user and runs pacman through sudo, which can't ask for the
+    # password here: let it run pacman without one, just for this (as setup.yaml does)
+    - name: Build and install Howdy Next from the AUR
+      when: yoga_howdy_installed.rc != 0
+      block:
+        - name: Let paru run pacman without a password
+          become: true
+          ansible.builtin.copy:
+            dest: /etc/sudoers.d/ansible-paru
+            content: "{{ ansible_facts['user_id'] }} ALL=(root) NOPASSWD: /usr/bin/pacman\n"
+            mode: "0440"
+            validate: visudo -cf %s
+
+        - name: Install howdy-next
+          ansible.builtin.command: paru -S --needed --noconfirm --skipreview howdy-next
+      always:
+        - name: Take paru's pacman permission back
+          become: true
+          ansible.builtin.file:
+            path: /etc/sudoers.d/ansible-paru
+            state: absent
+
+    # `howdy download-models` fails here (media.githubusercontent.com does not complete a
+    # TLS handshake on this network), so yoga/bin/yoga-howdy-models fetches the same two
+    # files by the same pinned SHA-256 sums through the git-LFS API. Safe to repeat: a file
+    # that is already right is not fetched again.
+    - name: Download the face detection and recognition models
+      become: true
+      ansible.builtin.command: "{{ playbook_dir }}/../yoga/bin/yoga-howdy-models"
+      register: yoga_howdy_models
+      changed_when: "yoga_howdy_models.stdout_lines | select('match', '^ok ') | list | length > 0"
+
+    - name: Point Howdy at the IR camera
+      become: true
+      community.general.ini_file:
+        path: /etc/howdy/config.ini
+        section: video
+        option: device_path
+        value: "{{ yoga_ir_camera }}"
+        mode: "0644"
+        no_extra_spaces: false
+
+    # The emitter strobes: about every 4th frame is lit, the others are black. Howdy rejects a
+    # frame when more than dark_threshold percent of its pixels sit in the darkest of 8
+    # brightness bins. Measured on this camera: black frames 100 %, lit frames 91-98 %
+    # (a face in a dark room), so the default 75 rejects everything ("All frames were too
+    # dark", average darkness 97). 99.5 drops the black frames and keeps the lit ones.
+    - name: Let Howdy keep the lit frames of the strobing IR camera
+      become: true
+      community.general.ini_file:
+        path: /etc/howdy/config.ini
+        section: video
+        option: dark_threshold
+        value: "99.5"
+        mode: "0644"
+        no_extra_spaces: false
+
+    # Yunet (the face finder) scores the dim lit frames of this camera 0.7-0.87 (measured offline on
+    # captured frames: raw 0.74-0.86, CLAHE 0.52-0.85), under Howdy's default cut-off of 0.8845, so
+    # `howdy add` said "No face detected". This only decides "is that a face"; how closely it must
+    # match YOU is [face] sface_threshold, which is left alone.
+    - name: Let Howdy find faces in the dim IR frames
+      become: true
+      community.general.ini_file:
+        path: /etc/howdy/config.ini
+        section: face
+        option: yunet_score_threshold
+        value: "0.65"
+        mode: "0644"
+        no_extra_spaces: false
+
+    # `sufficient`, before the password: a recognised face unlocks, anything else falls
+    # through to the password. hyprlock's own service is /etc/pam.d/hyprlock (it
+    # includes login); the greeter's is /etc/pam.d/greetd.
+    - name: Allow face unlock on the lock screen (hyprlock)
+      when: yoga_faceunlock_pam | default(true) | bool
+      become: true
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/hyprlock
+        insertbefore: '^auth\s+include\s+login'
+        regexp: 'pam_howdy\.so'
+        line: "auth        sufficient  pam_howdy.so"
+
+    - name: Allow face unlock on the login screen (greetd)
+      when: yoga_faceunlock_pam | default(true) | bool
+      become: true
+      ansible.builtin.lineinfile:
+        path: /etc/pam.d/greetd
+        insertbefore: '^auth\s+include\s+system-local-login'
+        regexp: 'pam_howdy\.so'
+        line: "auth       sufficient   pam_howdy.so"
+
+# power-profiles-daemon is installed and works (ideapad platform_profile), but is
+# only D-Bus activated; start it at boot so the saved profile applies right away.
+- name: Start power-profiles-daemon at boot (Yoga Book)
+  when: yoga_platform | bool
+  become: true
+  ansible.builtin.systemd:
+    name: power-profiles-daemon.service
+    enabled: true
+
+# charge_types is ideapad-laptop's battery knob: Long_Life = the EC's conservation
+# mode. Persisted in the EC, but set again at each boot to be sure.
+- name: Cap the Yoga Book's battery charge (conservation mode)
+  when: yoga_platform | bool and yoga_charge_limit | bool
+  become: true
+  block:
+    - name: Install the charge limit service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/yoga-charge-limit.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Cap the battery charge (Lenovo conservation mode)
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          # $$ is systemd's escape for a literal $
+          ExecStart=/bin/sh -c 'f=/sys/class/power_supply/BAT0/charge_types; for i in $$(seq 20); do [ -w $$f ] && break; sleep 1; done; echo Long_Life > $$f'
+
+          [Install]
+          WantedBy=multi-user.target
+      register: yoga_charge_unit
+
+    - name: Enable the charge limit
+      ansible.builtin.systemd:
+        name: yoga-charge-limit.service
+        enabled: true
+        state: started
+        daemon_reload: "{{ yoga_charge_unit is changed }}"
+
+# --- Yoga Book gaming (docs/yoga-book/steam.md, clip-studio.md) -------------------
+# multilib is already on in CachyOS's pacman.conf; Steam and every lib32-* package
+# come from it. cachyos-gaming-meta brings proton-cachyos-slr (Steam compatibility
+# tool), wine-cachyos-opt, umu-launcher, winetricks, protontricks and the 32-bit
+# audio/GTK/OpenCL libraries. lib32-vulkan-intel (Meteor Lake's 32-bit Vulkan driver)
+# is named here because Steam's own dependency is only the virtual lib32-vulkan-driver.
+# gamemode is left out on purpose: CachyOS's `game-performance` wrapper (cachyos-settings)
+# switches power-profiles-daemon to performance for the length of the game instead.
+# xorg-xinput and evtest are for checking pen pressure (clip-studio.md).
+- name: Check that multilib is enabled (Yoga Book gaming)
+  when: yoga_gaming | bool
+  ansible.builtin.command: grep -q '^\[multilib\]' /etc/pacman.conf
+  changed_when: false
+
+- name: Install Steam and the CachyOS gaming stack (Yoga Book)
+  when: yoga_gaming | bool
+  become: true
+  community.general.pacman:
+    name:
+      - steam
+      - cachyos-gaming-meta
+      - gamescope
+      - mangohud
+      - lib32-mangohud
+      - vulkan-intel
+      - lib32-vulkan-intel
+      - xorg-xinput
+      - evtest
+
+# Bottles (Clip Studio Paint's bottle, docs/yoga-book/csp-bottle.sh) as a per-user
+# Flatpak: the AUR "bottles" package pulls in a second Wine/Proton set. The installer
+# folder is the only part of the home directory the sandbox gets (read only).
+- name: Install Bottles (Flatpak, this user only) (Yoga Book)
+  when: yoga_gaming | bool
+  block:
+    - name: Add Flathub for this user
+      ansible.builtin.command: flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      changed_when: false
+
+    - name: Install Bottles
+      ansible.builtin.command: flatpak --user install --noninteractive flathub com.usebottles.bottles
+      args:
+        creates: "{{ ansible_facts['env']['HOME'] }}/.local/share/flatpak/app/com.usebottles.bottles"
+
+    - name: Let Bottles read ~/Downloads (for the installer)
+      ansible.builtin.command: flatpak override --user --filesystem=xdg-download:ro com.usebottles.bottles
+      changed_when: false
+
+# --- Yoga Book Secure Boot (docs/yoga-book/secureboot.md) -------------------------------
+# Only the repeatable, key-free parts. The one-off ESP work (Windows ESP: signed btrfs
+# driver, rEFInd entries) and the MOK/firmware steps are NOT here: they are
+# yoga/secureboot/setup.sh, which a person runs once as root. The private key
+# (/etc/refind.d/keys/refind_local.key) is never in the repo; the hook and the DKMS
+# signing drop-in are only installed once it exists, otherwise they would make every
+# kernel/DKMS update fail on a machine that is not set up for Secure Boot yet.
+#   ansible-playbook setup.yaml -e yoga_secureboot=false     # skip all of this
+- name: Install the Secure Boot tools (Yoga Book)
+  when: yoga_secureboot | default(true) | bool and pkg_mgr == 'pacman'
+  become: true
+  community.general.pacman:
+    # sbsigntools: sbsign/sbverify; mokutil: MOK enrolment; refind: only its btrfs EFI driver
+    # (setup.sh signs and copies it to the Windows ESP). Never run refind-install.
+    name: [ sbsigntools, mokutil, refind, efibootmgr ]
+
+- name: Look for the Secure Boot signing key (Yoga Book)
+  when: yoga_secureboot | default(true) | bool and pkg_mgr == 'pacman'
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: [ /etc/refind.d/keys/refind_local.key, /etc/refind.d/keys/refind_local.crt ]
+  register: yoga_sb_keys
+
+- name: Say why the Secure Boot hook is skipped (Yoga Book)
+  when:
+    - yoga_secureboot | default(true) | bool and pkg_mgr == 'pacman'
+    - not (yoga_sb_keys.results | map(attribute='stat.exists') | list is all)
+  ansible.builtin.debug:
+    msg: >-
+      Secure Boot kernel signing skipped: /etc/refind.d/keys/refind_local.{key,crt} not found.
+      Run yoga/secureboot/setup.sh as root once (docs/yoga-book/secureboot.md); this playbook
+      does not carry the private key.
+
+- name: Install the kernel signing hook and the DKMS signing config (Yoga Book)
+  when:
+    - yoga_secureboot | default(true) | bool and pkg_mgr == 'pacman'
+    - yoga_sb_keys.results | map(attribute='stat.exists') | list is all
+  become: true
+  block:
+    - name: Install yoga-sign-kernels
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/secureboot/yoga-sign-kernels"
+        dest: /usr/local/sbin/yoga-sign-kernels
+        mode: "0755"
+
+    - name: Install the pacman hook that signs /boot/vmlinuz-* after kernel updates
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/secureboot/99-sign-kernel.hook"
+        dest: /etc/pacman.d/hooks/99-sign-kernel.hook
+        mode: "0644"
+
+    - name: Sign the kernels that are in /boot now
+      ansible.builtin.command: /usr/local/sbin/yoga-sign-kernels
+      register: yoga_sb_sign
+      # prints "<file>: signed" for a kernel it just signed, "<file>: signed by our key" for one that was fine
+      changed_when: "yoga_sb_sign.stdout_lines | select('match', '.*: signed$') | list | length > 0"
+
+    - name: Sign DKMS modules with the same key (one MOK entry covers kernel and modules)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/secureboot/dkms-signing.conf"
+        dest: /etc/dkms/framework.conf.d/yoga-secureboot.conf
+        mode: "0644"
+      register: yoga_sb_dkms
+
+    - name: Re-sign the installed DKMS modules with it
+      when: yoga_sb_dkms is changed
+      ansible.builtin.shell: |
+        set -eu
+        dkms status | grep ': installed' | while IFS= read -r l; do
+          m=${l%%/*}; r=${l#*/}; v=${r%%,*}; k=$(echo "$r" | cut -d, -f2 | tr -d ' ')
+          dkms remove -m "$m" -v "$v" -k "$k" >/dev/null
+          dkms install -m "$m" -v "$v" -k "$k"
+        done
+      args:
+        executable: /bin/bash

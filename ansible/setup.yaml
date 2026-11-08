@@ -11,6 +11,7 @@
 #   ansible-playbook setup.yaml -e desktop=openbox     # Openbox + tint2 machine
 #   ansible-playbook setup.yaml -e apps=false          # skip the desktop apps (already the default on uhnet)
 #   ansible-playbook setup.yaml -e hyprland=true       # ...plus Hyprland (default on nhuto, nhuto-Mint, yoga-linux)
+#   (on yoga-linux the Yoga Book 9i extras are in yoga.yaml, which this playbook includes)
 #   ansible-playbook setup.yaml -e build_sway=true     # apt: self-built Sway 1.11 + Waybar (default on nhuto-Mint; Waybar is built on pacman too)
 #   ansible-playbook setup.yaml -e llama_update=true   # update llama.cpp (installed by default on nhuto, nhuto-Mint)
 #   ansible-playbook setup.yaml -e t3code_update=true  # update the T3 Code AppImage (installed once, with the desktop apps)
@@ -791,6 +792,11 @@
           width = 5120
           height = 1440
           refresh_rate = "Samsung Electric Company Odyssey G95C HNTY301994:240; AOC 24G15N AP15338Z04043:180"
+
+    # --- Yoga Book 9i (everything in yoga.yaml) ---------------------------------------
+    - name: Set up the Yoga Book 9i
+      ansible.builtin.include_tasks: yoga.yaml
+      when: ansible_facts['hostname'] == 'yoga-linux'
 
     # --- llama.cpp (llama=true) -----------------------------------------------------
     # The installer replaces ~/.llama-app (what the service runs) and copies the
