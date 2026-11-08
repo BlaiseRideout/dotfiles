@@ -20,14 +20,14 @@ icon_color = "#ffffff"
 # the window title, the scratchpad buttons, tray and clock
 start = [ "workspaces" ]
 center = [ "active_window" ]
-end = [ "fsearch", "t3code", "tray", "clock" ]
+end = [ "fsearch", "tray", "clock" ]
 
 # The primary monitor gets every widget: CachyOS's, without the spacers or the
 # stats capsule. Its `match` (the output's connector) comes from the generated
 # primary.toml (see dotfiles.toml), so it follows the primary at runtime.
 [bar.default.monitor.primary]
 start = [ "launcher", "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "media_player" ]
-end = [ "fsearch", "t3code", "tray", "volume", "network", "bluetooth", "caffeine", "notifications", "clock", "session" ]
+end = [ "fsearch", "tray", "volume", "network", "bluetooth", "caffeine", "notifications", "clock", "session" ]
 
 [widget.launcher]
 custom_image = "/usr/share/pixmaps/archlinux-logo.svg"

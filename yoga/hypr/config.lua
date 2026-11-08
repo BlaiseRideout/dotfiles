@@ -109,9 +109,9 @@ return {
         workspace_dot = "\u{f111}",
         full_start = { "launcher", "workspaces", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3",
                        "laptop_battery", "zmk", "media_player" },
-        full_end = { "fsearch", "t3code", "tray", "bluetooth", "network", "volume",
+        full_end = { "fsearch", "tray", "bluetooth", "network", "volume",
                      "brightness", "caffeine", "notifications", "OSK", "clock", "session" },
         plain = { start = { "workspaces" }, center = { "active_window" },
-                  end_ = { "fsearch", "t3code", "tray", "osk", "clock" } },
+                  end_ = { "fsearch", "tray", "osk", "clock" } },
     },
 }
