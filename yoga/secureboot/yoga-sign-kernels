@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Sign the kernels in /boot for Secure Boot, with the rEFInd "local" key.
+#
+# Installed by yoga/secureboot/setup.sh (or ansible/yoga.yaml) to
+# /usr/local/sbin/yoga-sign-kernels and run by the pacman hook
+# /etc/pacman.d/hooks/99-sign-kernel.hook after every kernel install/upgrade
+# (mkinitcpio's 90-mkinitcpio-install.hook has just copied the fresh, UNSIGNED
+# vmlinuz from /usr/lib/modules/*/vmlinuz to /boot/vmlinuz-<pkgbase>).
+#
+#   yoga-sign-kernels            sign every /boot/vmlinuz-* not yet signed by our key
+#   yoga-sign-kernels --check    only report; exit 1 if any kernel is not signed by our key
+#   yoga-sign-kernels FILE...    same, for the given files instead of /boot/vmlinuz-*
+#
+# Test hooks (used to try this as a normal user on copies): SB_KEY, SB_CRT, SB_BOOT.
+#
+# Design notes
+#  * "Signed" means sbverify --cert <our cert> succeeds, not "has some signature":
+#    a kernel signed by somebody else would not boot through shim + our MOK key.
+#  * sbsign APPENDS when the image already has a signature, so a foreign
+#    signature is stripped (sbattach --remove) from a scratch copy first.
+#  * The signed image is built next to the target (same filesystem) and renamed
+#    into place, so /boot/vmlinuz-* is never half-written. Mode is preserved
+#    (sbsign output would otherwise be 0600).
+#  * Failure is loud and non-zero: an unsigned kernel is unbootable with Secure
+#    Boot on, and pacman only prints a warning for a failed PostTransaction hook.
+set -u
+
+KEY=${SB_KEY:-/etc/refind.d/keys/refind_local.key}
+CRT=${SB_CRT:-/etc/refind.d/keys/refind_local.crt}
+
+check_only=0
+if [ "${1:-}" = "--check" ]; then check_only=1; shift; fi
+if [ "$#" -gt 0 ]; then
+	files=("$@")
+else
+	files=()
+	for f in "${SB_BOOT:-/boot}"/vmlinuz-*; do [ -e "$f" ] && files+=("$f"); done
+fi
+[ "${#files[@]}" -gt 0 ] || { echo "yoga-sign-kernels: no kernels found in /boot" >&2; exit 0; }
+
+for tool in sbsign sbverify sbattach; do
+	command -v "$tool" >/dev/null 2>&1 || { echo "yoga-sign-kernels: $tool not found (pacman -S sbsigntools)" >&2; exit 1; }
+done
+if [ "$check_only" = 1 ] && [ ! -r "$CRT" ] && [ "$(id -u)" != 0 ]; then
+	# /etc/refind.d/keys is root-only, so a normal user cannot verify. Not a failure of the kernels.
+	echo "yoga-sign-kernels: cannot read $CRT as a normal user: run 'sudo yoga-sign-kernels --check' (this says nothing about the kernels)" >&2
+	exit 2
+fi
+if [ ! -r "$CRT" ] || { [ "$check_only" = 0 ] && [ ! -r "$KEY" ]; }; then
+	cat >&2 <<EOF
+yoga-sign-kernels: !! cannot read the signing key/cert ($KEY, $CRT).
+  The kernels in /boot are NOT signed by this run. With Secure Boot ON the machine
+  will not boot them. Put the key pair back (see docs/yoga-book/secureboot.md) and run
+  /usr/local/sbin/yoga-sign-kernels as root.
+EOF
+	exit 1
+fi
+
+rc=0
+tmps=()
+cleanup() { [ "${#tmps[@]}" -eq 0 ] || rm -f -- "${tmps[@]}"; }
+trap cleanup EXIT
+
+for f in "${files[@]}"; do
+	if [ ! -f "$f" ]; then echo "yoga-sign-kernels: $f: not a file, skipped" >&2; continue; fi
+	if sbverify --cert "$CRT" "$f" >/dev/null 2>&1; then
+		echo "yoga-sign-kernels: $f: signed by our key"
+		continue
+	fi
+	if [ "$check_only" = 1 ]; then
+		echo "yoga-sign-kernels: $f: NOT signed by our key" >&2
+		rc=1
+		continue
+	fi
+	stripped=$(mktemp "$f.sbstrip.XXXXXX") && tmps+=("$stripped") &&
+		signed=$(mktemp "$f.sbsign.XXXXXX") && tmps+=("$signed") || { echo "yoga-sign-kernels: $f: cannot create scratch files next to it" >&2; rc=1; continue; }
+	if cp -- "$f" "$stripped" &&
+		{ sbattach --remove "$stripped" >/dev/null 2>&1 || true; } &&
+		sbsign --key "$KEY" --cert "$CRT" --output "$signed" "$stripped" >/dev/null &&
+		sbverify --cert "$CRT" "$signed" >/dev/null 2>&1 &&
+		chmod --reference="$f" -- "$signed" &&
+		mv -f -- "$signed" "$f"; then
+		echo "yoga-sign-kernels: $f: signed"
+	else
+		echo "yoga-sign-kernels: !! $f: SIGNING FAILED, the kernel is left as it was (unsigned: it will not boot with Secure Boot on)" >&2
+		rc=1
+	fi
+	rm -f -- "$stripped" "$signed"
+done
+exit "$rc"

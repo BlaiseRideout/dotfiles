@@ -1,0 +1,22 @@
+# Sign the kernels in /boot after every kernel install/upgrade, for Secure Boot
+# (docs/yoga-book/secureboot.md). Installed to /etc/pacman.d/hooks/.
+#
+# Why this trigger: the kernel packages (linux-cachyos, linux-cachyos-lts, ...) only
+# ship /usr/lib/modules/<ver>/vmlinuz. /boot/vmlinuz-<pkgbase> is a COPY made by
+# mkinitcpio's /usr/share/libalpm/hooks/90-mkinitcpio-install.hook on this same
+# path trigger. Hooks run in file-name order, so this "99-" hook runs after that copy
+# (verified: both are PostTransaction and trigger on usr/lib/modules/*/vmlinuz).
+#
+# The work is in a script rather than an inline Exec: alpm splits Exec on spaces and
+# quotes (no shell), and "find -exec sh -c '... {} ...'" was fragile that way.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/lib/modules/*/vmlinuz
+
+[Action]
+Description = Signing /boot kernels for Secure Boot
+When = PostTransaction
+Exec = /usr/local/sbin/yoga-sign-kernels
+Depends = sbsigntools
