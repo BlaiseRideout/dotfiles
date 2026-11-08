@@ -1,0 +1,68 @@
+From 2738fef454b2122f81da88124a8247ad5e52da86 Mon Sep 17 00:00:00 2001
+From: Blaise Rideout <blaise@blaise.in>
+Date: Thu, 5 Nov 2026 21:48:46 -0800
+Subject: [PATCH] platform/x86: lenovo-yb9-kbdock: Add Yoga Book 9 13IMU9
+ (83FF)
+
+The Yoga Book 9 13IMU9 (DMI product name 83FF) exposes the same WMI
+interfaces the driver uses on the 14IAH10: the LENOVO_BTKBD_EVENT event
+GUID 806BD2A2-177B-481D-BFB5-3BA0BB4A2285 (notify ID 0xEB) and the
+LENOVO_FEATURE_STATUS_DATA block GUID E7F300FA-21CD-4003-ADAC-2696135982E6
+(object ID AF), both on the WM10 ACPI device with _UID "GMZN". Without the
+DMI match the module is auto-loaded from the event GUID alias but its init
+silently returns -ENODEV.
+
+Add 83FF to the DMI table and mention the model in the Kconfig help.
+
+Signed-off-by: Blaise Rideout <blaise@blaise.in>
+---
+NOT TESTED ON HARDWARE YET: do not send until Tested-by is confirmed.
+Still to confirm on a 13IMU9 with the patched module loaded: that the
+block driver probes (wmidev_query_block returns id 0x00060000), that
+keyboard_position reads 0 with the keyboard detached and 1/2 when docked
+in each position, and that event 0xEB fires on dock/undock. Fill this
+section in with the observed results before sending.
+---
+ drivers/platform/x86/lenovo/Kconfig      | 7 ++++---
+ drivers/platform/x86/lenovo/yb9-kbdock.c | 7 +++++++
+ 2 files changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/platform/x86/lenovo/Kconfig b/drivers/platform/x86/lenovo/Kconfig
+index 5165949..2d176c2 100644
+--- a/drivers/platform/x86/lenovo/Kconfig
++++ b/drivers/platform/x86/lenovo/Kconfig
+@@ -50,9 +50,10 @@ config LENOVO_YB9_KBDOCK
+ 	depends on INPUT
+ 	help
+ 	  Say Y here to enable keyboard dock detection on the Lenovo Yoga Book 9
+-	  14IAH10.  The detachable Bluetooth keyboard magnetically attaches to
+-	  either screen; this driver reports SW_TABLET_MODE input events based
+-	  on the attachment state and exposes the raw position in sysfs.
++	  14IAH10 and 13IMU9.  The detachable Bluetooth keyboard magnetically
++	  attaches to either screen; this driver reports SW_TABLET_MODE input
++	  events based on the attachment state and exposes the raw position in
++	  sysfs.
+ 
+ 	  To compile this driver as a module, choose M here: the module will be
+ 	  called lenovo-yb9-kbdock.
+diff --git a/drivers/platform/x86/lenovo/yb9-kbdock.c b/drivers/platform/x86/lenovo/yb9-kbdock.c
+index 70d81f3..7caad14 100644
+--- a/drivers/platform/x86/lenovo/yb9-kbdock.c
++++ b/drivers/platform/x86/lenovo/yb9-kbdock.c
+@@ -287,6 +287,13 @@ static const struct dmi_system_id yb9_kbdock_dmi_table[] __initconst = {
+ 			DMI_MATCH(DMI_PRODUCT_NAME, "83KJ"),
+ 		},
+ 	},
++	{
++		/* Lenovo Yoga Book 9 13IMU9 */
++		.matches = {
++			DMI_MATCH(DMI_SYS_VENDOR,   "LENOVO"),
++			DMI_MATCH(DMI_PRODUCT_NAME, "83FF"),
++		},
++	},
+ 	{ }
+ };
+ 
+-- 
+2.56.0
+
