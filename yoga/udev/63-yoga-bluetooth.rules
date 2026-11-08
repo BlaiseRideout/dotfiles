@@ -1,0 +1,12 @@
+# Yoga Book 9i: keep the Bluetooth controller (Intel 8087:0033, btusb) out of USB
+# runtime suspend.
+#
+# The keyboard is Bluetooth-only and sleeps when idle; a keypress makes it reconnect
+# to the host. With the controller autosuspended (power/control=auto, power/wakeup
+# disabled) it is not listening, so the reconnect never lands, the keyboard never
+# reaches the compositor, and hypridle never sees input to bring the screens back
+# from DPMS off. Keeping the controller always on costs a little idle power.
+#
+# Installed to /etc/udev/rules.d by ansible/yoga.yaml on yoga-linux only.
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="8087", ATTR{idProduct}=="0033", \
+  TEST=="power/control", ATTR{power/control}="on"
