@@ -583,8 +583,14 @@
             content: "i2c-dev\n"
             mode: "0644"
 
+        # The pacman upgrade earlier in the run can replace the running kernel, which
+        # deletes its /lib/modules directory: modprobe then fails until a reboot (the
+        # modules-load.d file above loads it at boot). Nothing to do if it is loaded.
         - name: Load i2c-dev now
-          ansible.builtin.command: modprobe i2c-dev
+          ansible.builtin.shell: |
+            if grep -q '^i2c_dev ' /proc/modules; then exit 0; fi
+            if [ ! -d "/lib/modules/$(uname -r)" ]; then echo "running kernel replaced, i2c-dev loads after a reboot"; exit 0; fi
+            modprobe i2c-dev
           changed_when: false
 
     # T3 Code runs from its AppImage; the app adds its own menu entry and icon (the
