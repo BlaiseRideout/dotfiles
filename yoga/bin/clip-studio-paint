@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Start Clip Studio Paint from its Bottles bottle (docs/yoga-book/clip-studio.md).
+# The launcher menu entry runs this. $CSP_BOTTLE picks another bottle than the
+# default CSP-wine11 (e.g. CSP-baseline).
+set -u
+APP=com.usebottles.bottles
+bottle=${CSP_BOTTLE:-CSP-wine11}
+root=$HOME/.var/app/$APP/data/bottles/bottles/$bottle/drive_c
+
+say() { notify-send -a "Clip Studio Paint" "$1" 2>/dev/null || echo "$1" >&2; }
+
+exe=$(find "$root/Program Files" "$root/Program Files (x86)" -iname 'CLIPStudioPaint.exe' 2>/dev/null | head -n1)
+if [ -z "$exe" ]; then
+  say "Not installed in the $bottle bottle yet. Run: ~/.dotfiles/docs/yoga-book/csp-bottle.sh install ~/Downloads/<CSP installer>.exe $bottle"
+  exit 1
+fi
+exec flatpak run --command=bottles-cli "$APP" run -b "$bottle" -e "$exe" "$@"

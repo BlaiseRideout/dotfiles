@@ -1,0 +1,14 @@
+[Unit]
+Description=Yoga Book: show the on-screen keyboard over the lock screen
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionPathExists=%h/.local/bin/yoga-osk-lockwatch
+
+[Service]
+ExecStart=%h/.local/bin/yoga-osk-lockwatch
+Restart=on-failure
+RestartSec=3
+SyslogIdentifier=yoga-osk-lockwatch
+
+[Install]
+WantedBy=graphical-session.target

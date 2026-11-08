@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# Touch-UX plugin control for the Yoga Book 9i: loads hyprgrass (via hyprpm),
+# and, above all, gets you out of a bad state. Notes: docs/yoga-book/touch-ux.md.
+#
+#   yoga-touch recover   # THE RESCUE: stop loading plugins, unload every plugin,
+#                        # reload the config, hide the OSK, reset the submap.
+#                        # Bound to SUPER+CTRL+SHIFT+Escape. Works from a TTY or
+#                        # over SSH too (finds the running Hyprland itself), and
+#                        # without a running Hyprland it still sets the switch.
+#   yoga-touch enable    # lift the switch and load the plugins now
+#   yoga-touch disable   # set the switch (plugins stay unloaded at every login)
+#   yoga-touch load      # autostart: load the plugins (hyprpm reload -n)
+#   yoga-touch update    # after a Hyprland upgrade: hyprpm update, then load
+#   yoga-touch status
+#
+# Two guards keep a broken plugin from locking you out of the session:
+#   - the switch: $STATE/plugins.off exists -> `load` does nothing. `recover`
+#     and `disable` create it, `enable` removes it. Create it by hand
+#     (touch ~/.local/state/yoga-touch/plugins.off) from a TTY if need be.
+#   - the crash-loop guard: `load` writes $STATE/loading and removes it 20 s
+#     later if Hyprland is still up. If Hyprland dies in those 20 s the file is
+#     still there at the next login and `load` refuses (and says so).
+# yoga/hypr/touch.lua only registers gestures when the plugin is loaded and this switch
+# is off, so with the switch set the session is a plain Hyprland.
+#
+# YOGA_HYPRGRASS_SO=/path/libhyprgrass.so loads that file with `hyprctl plugin
+# load` instead of hyprpm (a hand-built plugin, or testing).
+set -u
+
+state=${XDG_STATE_HOME:-$HOME/.local/state}/yoga-touch
+off=$state/plugins.off loading=$state/loading
+bindir=$(dirname "$(readlink -f "$0")")
+rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+
+say() { echo "yoga-touch: $*" >&2; }
+note() { # a desktop notification when there is one to talk to
+  command -v notify-send >/dev/null && notify-send -a yoga-touch "$1" "${2:-}" 2>/dev/null
+  say "$1${2:+: $2}"
+}
+
+# Pick the Hyprland to talk to: the one in the environment, else the newest
+# whose pid is still alive (a TTY or an SSH login has no environment for it).
+find_instance() {
+  if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && [ -d "$rt/hypr/$HYPRLAND_INSTANCE_SIGNATURE" ]; then
+    return 0
+  fi
+  local d pid
+  for d in $(ls -dt "$rt"/hypr/*/ 2>/dev/null); do
+    pid=$(head -1 "$d/hyprland.lock" 2>/dev/null)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      HYPRLAND_INSTANCE_SIGNATURE=$(basename "$d")
+      export HYPRLAND_INSTANCE_SIGNATURE
+      return 0
+    fi
+  done
+  return 1
+}
+hypr_pid() { head -1 "$rt/hypr/$HYPRLAND_INSTANCE_SIGNATURE/hyprland.lock" 2>/dev/null; }
+# paths of the plugin .so files this Hyprland has mapped (everything outside the
+# system library directories)
+loaded_plugin_files() {
+  local pid; pid=$(hypr_pid) || return 0
+  [ -n "$pid" ] || return 0
+  awk '$6 ~ /\.so$/ {print $6}' "/proc/$pid/maps" 2>/dev/null |
+    grep -vE '^/(usr|lib|lib64|opt|proc|dev|run/host)/' | sort -u
+}
+
+recover() {
+  mkdir -p "$state"; : > "$off"; rm -f "$loading"
+  # the virtual touchpad grabs the bottom touchscreen: stop it first, which
+  # hands the real screen back (the kernel also releases the grab if it dies)
+  systemctl --user stop yoga-touchpad >/dev/null 2>&1 || true
+  pkill -u "$(id -u)" -f 'yoga-touchpad daemon' >/dev/null 2>&1 || true
+  # and the palm daemon, which switches touchscreens off by itself; the reload below
+  # brings them back, and it must not switch them off again (`systemctl --user start yoga-palm`)
+  systemctl --user stop yoga-palm >/dev/null 2>&1 || true
+  pkill -u "$(id -u)" -f 'yoga-palm' >/dev/null 2>&1 || true
+  if ! find_instance; then
+    note "plugins switched off" "no running Hyprland found; the next login starts without plugins"
+    return 0
+  fi
+  local so n=0
+  while read -r so; do
+    [ -n "$so" ] || continue
+    hyprctl plugin unload "$so" >/dev/null 2>&1 && n=$((n + 1))
+  done < <(loaded_plugin_files)
+  # Unloading reloads the config already; do it explicitly for the case that
+  # there was nothing to unload (re-reads input rules, devices come back enabled)
+  hyprctl reload >/dev/null 2>&1
+  hyprctl dispatch 'hl.dsp.submap("reset")' >/dev/null 2>&1
+  "$bindir/yoga-osk" hide >/dev/null 2>&1
+  note "touch plugins off" "unloaded $n plugin file(s), config reloaded; 'yoga-touch enable' turns them back on"
+}
+
+load() {
+  if [ -e "$off" ]; then say "plugins switched off ($off); 'yoga-touch enable' lifts it"; return 0; fi
+  if [ -e "$loading" ]; then
+    note "plugins not loaded" "Hyprland died within 20 s of the last load; check ~/.cache/hyprland/hyprlandCrashReport*.txt, then 'yoga-touch enable'"
+    : > "$off"; rm -f "$loading"
+    return 0
+  fi
+  find_instance || { say "no running Hyprland"; return 1; }
+  mkdir -p "$state"
+  # Only plugin-load when the touch screen is actually there
+  if [ -z "${YOGA_TOUCH_FORCE:-}" ] && ! hyprctl devices 2>/dev/null | grep -q 'ingenic-gadget-serial-and-keyboard-touchscreen'; then
+    say "no Yoga touchscreen, not loading plugins"; return 0
+  fi
+  date +%s > "$loading"
+  ( sleep 20; hyprctl version >/dev/null 2>&1 && rm -f "$loading" ) >/dev/null 2>&1 &
+  disown
+  if [ -n "${YOGA_HYPRGRASS_SO:-}" ]; then
+    hyprctl plugin load "$YOGA_HYPRGRASS_SO"
+  elif command -v hyprpm >/dev/null; then
+    hyprpm reload -n
+  else
+    rm -f "$loading"
+    note "hyprpm is not installed" "see docs/yoga-book/touch-ux.md (sudo pacman -S hyprpm cmake glm)"
+    return 1
+  fi
+  settle_reload
+}
+
+# The touch controller drops off USB and comes back three times, 20 s apart, in the first minute
+# after every boot (hardware.md 3.1). With auto-login Hyprland and this plugin start in the middle
+# of that, and the three-finger (and other) gestures were dead for the whole session until a config
+# reload (seen 2026-11-07, after the 7.3.3 boot). So at boot: wait until the controller has kept
+# the same USB device number for 25 s, then reload the config once so the plugin and the device
+# rules see the final devices. Not at a later `enable`/`update` (uptime over 3 minutes).
+settle_reload() {
+  local up; up=$(cut -d. -f1 /proc/uptime)
+  [ "$up" -lt 180 ] || return 0
+  (
+    cur="" since=$(date +%s) end=$(( $(date +%s) + 150 ))
+    while [ "$(date +%s)" -lt "$end" ]; do
+      n=""
+      for d in /sys/bus/usb/devices/*; do
+        [ "$(cat "$d/idVendor" 2>/dev/null)" = 17ef ] && [ "$(cat "$d/idProduct" 2>/dev/null)" = 6161 ] && n=$(cat "$d/devnum" 2>/dev/null)
+      done
+      if [ "$n" != "$cur" ]; then cur=$n; since=$(date +%s); fi
+      if [ -n "$cur" ] && [ $(( $(date +%s) - since )) -ge 25 ]; then
+        [ -e "$off" ] || hyprctl reload >/dev/null 2>&1
+        exit 0
+      fi
+      sleep 2
+    done
+  ) >/dev/null 2>&1 &
+  disown
+}
+
+case "${1:-status}" in
+  recover) recover ;;
+  disable) mkdir -p "$state"; : > "$off"; say "switched off for every login; 'yoga-touch recover' also unloads what is loaded now" ;;
+  enable)  rm -f "$off" "$loading"; load ;;
+  load)    load ;;
+  update)
+    command -v hyprpm >/dev/null || { say "hyprpm is not installed"; exit 1; }
+    hyprpm update && rm -f "$off" "$loading" && load ;;
+  status)
+    [ -e "$off" ] && echo "switch: OFF (plugins.off exists)" || echo "switch: on"
+    [ -e "$loading" ] && echo "crash guard: loading marker present (set $(date -d @"$(cat "$loading")" +%T))" || echo "crash guard: clear"
+    if find_instance; then
+      echo "hyprland: $HYPRLAND_INSTANCE_SIGNATURE"; hyprctl plugin list
+    else echo "hyprland: not running"; fi
+    command -v hyprpm >/dev/null && { echo "hyprpm:"; hyprpm list 2>&1 | sed 's/^/  /'; } || echo "hyprpm: not installed"
+    echo "osk: $("$bindir/yoga-osk" status 2>&1)" ;;
+  *) sed -n '2,/^set -u/p' "$0" | sed '$d;s/^# \{0,1\}//' >&2; exit 2 ;;
+esac

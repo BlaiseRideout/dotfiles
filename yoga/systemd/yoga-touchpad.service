@@ -1,0 +1,17 @@
+[Unit]
+Description=Yoga Book virtual touchpad (grabs the bottom touchscreen while the keyboard is docked)
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionPathExists=%h/.local/bin/yoga-touchpad
+
+[Service]
+ExecStart=/usr/bin/python3 %h/.local/bin/yoga-touchpad daemon
+Restart=on-failure
+RestartSec=3
+SyslogIdentifier=yoga-touchpad
+# The kernel drops the grab when the process dies; this makes sure of it
+KillMode=control-group
+TimeoutStopSec=5
+
+[Install]
+WantedBy=graphical-session.target

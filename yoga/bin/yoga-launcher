@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# The app launcher, clipboard history and window switcher, chosen so that the on-screen
+# keyboard can type into them.
+#
+#   yoga-launcher [apps|clipboard|windows|winlist]     (default apps)
+#
+# Noctalia's panels hold a hyprland-focus-grab: any touch outside the panel (a tap on the
+# on-screen keyboard on the other screen, say) clears the grab and the panel closes, so
+# nothing can be typed with the virtual keyboard. fuzzel has no grab (it just takes
+# keyboard focus), so while the on-screen keyboard is showing these are fuzzel; otherwise
+# they are Noctalia's panels. The same key/button again closes whichever is open. Used by
+# the shortcuts (hyprland.lua via yoga.launcher_cmd, set by yoga/hypr/touch.lua), the four-finger swipe and the bar's
+# launcher button (yoga/noctalia/host.toml).
+#   apps       fuzzel's application list      | Noctalia's launcher panel
+#   clipboard  cliphist list in fuzzel        | Noctalia's clipboard panel
+#   windows    ~/.config/hypr/window-switcher.sh (fuzzel) | Noctalia's window switcher (SUPER+Tab)
+#   winlist    the same fuzzel list                       | Noctalia's launcher, windows provider (SUPER+minus)
+# YOGA_LAUNCHER=fuzzel uses fuzzel even without the keyboard.
+bin=$(dirname "$(readlink -f "$0")")
+mode=${1:-apps}
+if pgrep -x fuzzel >/dev/null; then pkill -x fuzzel; exit 0; fi
+if "$bin/yoga-osk" status >/dev/null 2>&1 || [ "${YOGA_LAUNCHER:-}" = fuzzel ]; then
+  case $mode in
+    apps) exec fuzzel --launch-prefix="$bin/yoga-launch" ;;
+    clipboard)
+      id=$(cliphist list | fuzzel --dmenu --with-nth=2 --accept-nth=1 --placeholder='Clipboard history') || exit 0
+      [ -n "$id" ] && cliphist decode "$id" | wl-copy
+      exit 0 ;;
+    windows|winlist) exec "$HOME/.config/hypr/window-switcher.sh" ;;
+  esac
+fi
+case $mode in
+  apps)      exec noctalia msg panel-toggle launcher ;;
+  clipboard) exec noctalia msg panel-toggle clipboard ;;
+  windows)   exec noctalia msg window-switcher ;;
+  winlist)   exec noctalia msg panel-toggle launcher /win ;;
+esac
+echo "yoga-launcher: unknown mode '$mode' (apps|clipboard|windows|winlist)" >&2
+exit 2

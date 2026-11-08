@@ -1,0 +1,72 @@
+# The Yoga Book's battery gauges (a fork of the desktop's zmk-battery plugin, so the desktop
+# is not affected by the Yoga's needs): the laptop's own (widget "laptop"), and Bluetooth keyboards, as one small level bar each: per half for a ZMK
+# split keyboard (the Corne), one bar for a single-battery keyboard (the Yoga
+# Book's). Port of ~/.config/waybar/zmk-battery.sh: levels.sh reads BlueZ's GATT Battery Level
+# characteristics (with ZMK's CENTRAL_BATTERY_LEVEL_PROXY the central half exposes one
+# per half, central first); the service polls it and sends the low/critical
+# notifications once, and each bar's widget only draws the snapshot.
+
+id = "blaise/yoga-battery"
+name = "Yoga Battery"
+version = "1.0.0"
+plugin_api = 43
+author = "blaise"
+license = "MIT"
+icon = "keyboard"
+description = "Battery of each half of a ZMK split keyboard, or of a one-battery Bluetooth keyboard, with low-battery notifications."
+tags = ["bar", "hardware", "indicator", "bluetooth"]
+dependencies = ["busctl"]
+
+[[setting]]
+key = "poll_interval"
+type = "int"
+label_key = "settings.poll_interval.label"
+description_key = "settings.poll_interval.description"
+default = 60
+min = 10
+max = 900
+
+[[setting]]
+key = "low_threshold"
+type = "int"
+label_key = "settings.low_threshold.label"
+description_key = "settings.low_threshold.description"
+default = 20
+min = 5
+max = 50
+
+[[setting]]
+key = "critical_threshold"
+type = "int"
+label_key = "settings.critical_threshold.label"
+description_key = "settings.critical_threshold.description"
+default = 10
+min = 1
+max = 30
+
+[[setting]]
+key = "notify"
+type = "bool"
+label_key = "settings.notify.label"
+description_key = "settings.notify.description"
+default = true
+
+[[setting]]
+key = "show_value"
+type = "bool"
+label_key = "settings.show_value.label"
+description_key = "settings.show_value.description"
+default = false
+
+[[widget]]
+id = "meter"
+entry = "widget.luau"
+
+# The laptop's own battery as a gauge (laptop.sh reads /sys/class/power_supply)
+[[widget]]
+id = "laptop"
+entry = "laptop.luau"
+
+[[service]]
+id = "poller"
+entry = "service.luau"

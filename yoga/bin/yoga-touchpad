@@ -1,0 +1,1271 @@
+#!/usr/bin/env python3
+"""yoga-touchpad: a virtual touchpad on the Lenovo Yoga Book 9i's bottom screen.
+
+While the physical keyboard is docked (or, optionally, while the on-screen
+keyboard is up) a strip of the bottom touchscreen -- the part the keyboard does
+not cover -- becomes a real touchpad. The daemon EVIOCGRABs the bottom
+touchscreen, sends touches that START inside the strip to a uinput multitouch
+touchpad ("Yoga Virtual Touchpad", so libinput/Hyprland do acceleration,
+tap-to-click, two-finger scroll and gestures) and every other touch to a uinput
+touchscreen with the real one's ranges ("Yoga Virtual Touchscreen Bottom", bound
+to the bottom panel by yoga/hypr/yoga.lua), so the rest of the screen keeps working.
+A touch stays where it started until it lifts, even if it drifts across the
+boundary. Notes: docs/yoga-book/touchpad.md.
+
+  yoga-touchpad status             # what it is doing and why
+  yoga-touchpad on | off           # force the touchpad on (default front strip) / off
+  yoga-touchpad auto               # follow the keyboard dock again
+  yoga-touchpad toggle             # on <-> off
+  yoga-touchpad log [-f] [-n N]    # the daemon's journal
+  yoga-touchpad daemon [--dry-run] [--exit-after S] [--initial on|off|auto] [--debug]
+  yoga-touchpad selftest           # scripted multitouch scenarios, no hardware touched
+  yoga-touchpad simulate [--live-pad]   # fake fingers through the router
+                                   # (--live-pad: the virtual touchpad is real and moves the cursor)
+
+RECOVERY if touch on the bottom screen ever stops responding:
+    systemctl --user stop yoga-touchpad       (or: yoga-touch recover)
+The grab is also released by the kernel the moment the process dies.
+
+Configuration: ~/.config/yoga-touchpad.toml (see DEFAULTS below for every key).
+"""
+import argparse
+import copy
+import json
+import os
+import selectors
+import signal
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import yoga_state   # noqa: E402  (the dock debounce and the derived state live there, in one place)
+
+try:
+    import tomllib
+except ImportError:  # pragma: no cover
+    tomllib = None
+
+# =============================================================================
+# Configuration. Every tunable lives here; ~/.config/yoga-touchpad.toml
+# overrides any of it (tables merge key by key), e.g.
+#
+#   [strip.dock1]
+#   y = [0.50, 1.0]
+#   [activation]
+#   osk = true
+#
+# Strips are fractions of the bottom touchscreen in its NATIVE touch
+# coordinates: x = 0 left .. 1 right, y = 0 at the HINGE edge .. 1 at the front
+# edge, as seen in the laptop pose (panel transform 0).
+# =============================================================================
+DEFAULTS = {
+    "activation": {
+        "dock": True,            # active while the keyboard is docked
+        "osk": True,             # ALSO active under the on-screen keyboard while undocked (keyboard + touchpad fill the bottom screen)
+        "notify": False,         # desktop notification when the touchpad switches on/off (off: it follows the keyboard dock and the on-screen keyboard, which was noisy); YOGA_VERBOSE=1 or ~/.config/yoga/verbose turns it on too
+    },
+    "strip": {
+        # keyboard near the hinge (keyboard_position 1) covers the upper part:
+        # the strip is the front of the screen. Measured 2026-11-07 with a finger
+        # along the keyboard's edge: the finger centre reads 4535 (0.634); the
+        # uncovered part is 0.615-1.0.
+        "dock1": {"x": [0.0, 1.0], "y": [0.615, 1.0]},
+        # keyboard at the front edge (position 2): the strip is the part near the
+        # hinge, starting below Noctalia's 48-logical-px bar (0.053 of 900)
+        "dock2": {"x": [0.0, 1.0], "y": [0.06, 0.435]},
+        # on-screen keyboard: yoga-bottom-reserve hides the bottom screen's bar while it
+        # shows, so its 420 px of wvkbd sit at the very top and end at 420 of 900 logical
+        # px (0.467); the strip starts just below it, so keyboard and touchpad
+        # together fill the bottom screen
+        "osk": {"x": [0.0, 1.0], "y": [0.475, 1.0]},
+        # `yoga-touchpad on` with no keyboard docked and no OSK
+        "manual": {"x": [0.0, 1.0], "y": [0.615, 1.0]},
+    },
+    "panel": {
+        # if the digitiser's origin is not the top-left of the laptop-pose panel
+        "invert_x": False,
+        "invert_y": False,
+    },
+    "source": {"device": "/dev/input/yoga-touch-bottom"},
+    # The dock position (debounced), the on-screen keyboard and the posture come from the state
+    # yoga-posture publishes ($XDG_RUNTIME_DIR/yoga/state.json; yoga/bin/yoga_state.py), the same
+    # one yoga-bottom-reserve and yoga-osk read; without a fresh one they are computed locally
+    # with the same functions. The touchpad is suspended when the bottom panel is off or rotated
+    # (book mode, tent/tablet): the strip would be in the wrong place and the pointer motion
+    # would not be rotated. Test overrides: YOGA_DOCK_FILE, YOGA_STATE_FILE.
+    "pad": {
+        "name": "Yoga Virtual Touchpad",
+        "slots": 5,
+        "prop_buttonpad": False,     # no physical click here: tap-to-click only
+        "advertise_left_button": False,  # without BTN_LEFT libinput enables tapping by default
+    },
+    "screen": {"name": "Yoga Virtual Touchscreen Bottom"},
+    "hyprland": {"poke": True},  # run yoga_apply_devices() after the devices appear
+}
+
+SOURCE_FALLBACK = {  # used by `simulate`/`selftest` and --dry-run without the device
+    "x_max": 11440, "y_max": 7148, "x_res": 44, "y_res": 41, "slots": 10, "name": "sim",
+}
+
+VENDOR, PRODUCT_PAD, PRODUCT_SCREEN = 0x17EF, 0x6162, 0x6163
+
+
+def deep_merge(base, over):
+    for k, v in over.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            deep_merge(base[k], v)
+        else:
+            base[k] = v
+    return base
+
+
+def config_path():
+    return Path(os.environ.get("YOGA_TOUCHPAD_CONFIG")
+                or Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "yoga-touchpad.toml")
+
+
+def load_config():
+    cfg = copy.deepcopy(DEFAULTS)
+    p = config_path()
+    if p.exists() and tomllib is not None:
+        try:
+            deep_merge(cfg, tomllib.loads(p.read_text()))
+        except Exception as e:  # keep running on defaults, loudly
+            log(f"config {p}: {e}; using defaults")
+    return cfg
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def runtime_dir():
+    return Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+
+
+# =============================================================================
+# Geometry
+# =============================================================================
+class Rect:
+    """A strip in source (native touch) units, x0<=x<x1, y0<=y<y1."""
+
+    def __init__(self, x0, y0, x1, y1):
+        self.x0, self.y0, self.x1, self.y1 = int(x0), int(y0), int(x1), int(y1)
+
+    @property
+    def w(self):
+        return self.x1 - self.x0
+
+    @property
+    def h(self):
+        return self.y1 - self.y0
+
+    def contains(self, x, y):
+        return self.x0 <= x < self.x1 and self.y0 <= y < self.y1
+
+    def __eq__(self, o):
+        return isinstance(o, Rect) and (self.x0, self.y0, self.x1, self.y1) == (o.x0, o.y0, o.x1, o.y1)
+
+    def __repr__(self):
+        return f"Rect(x {self.x0}..{self.x1}, y {self.y0}..{self.y1})"
+
+
+def strip_rect(cfg, key, src):
+    s = cfg["strip"][key]
+    xa, xb = sorted(float(v) for v in s["x"])
+    ya, yb = sorted(float(v) for v in s["y"])
+    xa, xb, ya, yb = (min(max(v, 0.0), 1.0) for v in (xa, xb, ya, yb))
+    if cfg["panel"]["invert_x"]:
+        xa, xb = 1 - xb, 1 - xa
+    if cfg["panel"]["invert_y"]:
+        ya, yb = 1 - yb, 1 - ya
+    xm, ym = src["x_max"] + 1, src["y_max"] + 1
+    r = Rect(xa * xm, ya * ym, xb * xm, yb * ym)
+    if r.w < 100 or r.h < 100:
+        raise ValueError(f"strip {key} is empty: {r}")
+    return r
+
+
+# =============================================================================
+# evdev constants (python-evdev is imported lazily so `status` works without it)
+# =============================================================================
+def ev():
+    import evdev
+    from evdev import ecodes
+    return evdev, ecodes
+
+
+# =============================================================================
+# Sinks: where forwarded contacts go. A sink keeps its own slot numbering and
+# tracking ids and emits complete multitouch type-B frames.
+# =============================================================================
+class MemoryOut:
+    """Stands in for a uinput device in tests: records (type, code, value)."""
+
+    def __init__(self, name="mem"):
+        self.name, self.events = name, []
+
+    def write(self, t, c, v):
+        self.events.append((t, c, v))
+
+    def syn(self):
+        self.events.append((0, 0, 0))
+
+    def close(self):
+        pass
+
+
+class UInputOut:
+    def __init__(self, ui):
+        self.ui = ui
+        self.name = ui.name
+
+    def write(self, t, c, v):
+        self.ui.write(t, c, v)
+
+    def syn(self):
+        self.ui.syn()
+
+    def close(self):
+        try:
+            self.ui.close()
+        except Exception:
+            pass
+
+
+class Sink:
+    """Contacts in, MT type-B frames out. `offset` shifts coordinates into the
+    sink's own range (the touchpad's origin is the strip's corner)."""
+
+    FINGER_BTNS = ("BTN_TOOL_FINGER", "BTN_TOOL_DOUBLETAP", "BTN_TOOL_TRIPLETAP",
+                   "BTN_TOOL_QUADTAP", "BTN_TOOL_QUINTTAP")
+
+    def __init__(self, out, nslots, xmax, ymax, finger_btns):
+        _, e = ev()
+        self.e = e
+        self.out = out
+        self.nslots = nslots
+        self.xmax, self.ymax = xmax, ymax
+        self.finger_btns = finger_btns
+        self.slots = {}        # source slot -> local slot
+        self.pos = {}          # local slot -> (x, y)
+        self.next_tid = 1
+        self.cur_slot = -1
+        self.dirty = False
+        self.btn_state = {}
+        self.frames = 0
+
+    def _w(self, t, c, v):
+        self.out.write(t, c, v)
+
+    def _slot(self, s):
+        if s != self.cur_slot:
+            self._w(self.e.EV_ABS, self.e.ABS_MT_SLOT, s)
+            self.cur_slot = s
+
+    def _clamp(self, x, y):
+        return min(max(x, 0), self.xmax), min(max(y, 0), self.ymax)
+
+    def down(self, src_slot, x, y):
+        used = set(self.slots.values())
+        free = [s for s in range(self.nslots) if s not in used]
+        if not free:
+            return False
+        ls = free[0]
+        self.slots[src_slot] = ls
+        x, y = self._clamp(x, y)
+        e = self.e
+        self._slot(ls)
+        self._w(e.EV_ABS, e.ABS_MT_TRACKING_ID, self.next_tid)
+        self.next_tid = (self.next_tid + 1) % 65536 or 1
+        self._w(e.EV_ABS, e.ABS_MT_POSITION_X, x)
+        self._w(e.EV_ABS, e.ABS_MT_POSITION_Y, y)
+        self.pos[ls] = (x, y)
+        self.dirty = True
+        return True
+
+    def move(self, src_slot, x, y):
+        ls = self.slots.get(src_slot)
+        if ls is None:
+            return
+        x, y = self._clamp(x, y)
+        if self.pos.get(ls) == (x, y):
+            return
+        e = self.e
+        self._slot(ls)
+        if self.pos[ls][0] != x:
+            self._w(e.EV_ABS, e.ABS_MT_POSITION_X, x)
+        if self.pos[ls][1] != y:
+            self._w(e.EV_ABS, e.ABS_MT_POSITION_Y, y)
+        self.pos[ls] = (x, y)
+        self.dirty = True
+
+    def up(self, src_slot):
+        ls = self.slots.pop(src_slot, None)
+        if ls is None:
+            return
+        self._slot(ls)
+        self._w(self.e.EV_ABS, self.e.ABS_MT_TRACKING_ID, -1)
+        self.pos.pop(ls, None)
+        self.dirty = True
+
+    def lift_all(self):
+        for s in list(self.slots):
+            self.up(s)
+        self.sync()
+
+    def count(self):
+        return len(self.slots)
+
+    def sync(self):
+        if not self.dirty:
+            return
+        e = self.e
+        n = self.count()
+        want = {"BTN_TOUCH": 1 if n else 0}
+        if self.finger_btns:
+            for i, name in enumerate(self.FINGER_BTNS):
+                want[name] = 1 if n == i + 1 else 0
+        for name, val in want.items():
+            code = getattr(e, name)
+            if self.btn_state.get(name) != val:
+                self._w(e.EV_KEY, code, val)
+                self.btn_state[name] = val
+        if self.pos:
+            x, y = self.pos[min(self.pos)]
+            self._w(e.EV_ABS, e.ABS_X, x)
+            self._w(e.EV_ABS, e.ABS_Y, y)
+        self.out.syn()
+        self.dirty = False
+        self.frames += 1
+
+    def close(self):
+        self.lift_all()
+        self.out.close()
+
+
+# =============================================================================
+# Router: the logic. Source events in, contacts steered to the pad or the screen.
+# =============================================================================
+class Contact:
+    __slots__ = ("x", "y", "dest", "rect", "new", "dead", "dirty")
+
+    def __init__(self):
+        self.x = self.y = None
+        self.dest = None       # "pad" | "screen" | "none"
+        self.rect = None       # the strip in force when the contact began
+        self.new = True
+        self.dead = False
+        self.dirty = True
+
+
+class Router:
+    def __init__(self, pad, screen, rect, nslots=10):
+        _, e = ev()
+        self.e = e
+        self.pad, self.screen = pad, screen
+        self.rect = rect
+        self.contacts = {}      # source slot -> Contact
+        self.slot = 0
+        self.dropping = False   # inside a SYN_DROPPED burst
+
+    def set_rect(self, rect):
+        """New strip: only contacts that START later use it."""
+        self.rect = rect
+
+    def feed(self, t, c, v):
+        e = self.e
+        if t == e.EV_SYN:
+            if c == e.SYN_DROPPED:
+                self.dropping = True
+            elif c == e.SYN_REPORT:
+                if self.dropping:       # the frame the kernel dropped: forget everything
+                    self.dropping = False
+                    self.release_all()
+                else:
+                    self.flush()
+            return
+        if self.dropping:
+            return
+        if t != e.EV_ABS:
+            return
+        if c == e.ABS_MT_SLOT:
+            self.slot = v
+        elif c == e.ABS_MT_TRACKING_ID:
+            old = self.contacts.get(self.slot)
+            if v == -1:
+                if old is not None:
+                    old.dead = True
+                    old.dirty = True
+            else:
+                if old is not None:      # a lift not yet flushed, or an id change without one
+                    old.dead = True
+                    self._flush_contact(self.slot, old)
+                self.contacts[self.slot] = Contact()
+        elif c == e.ABS_MT_POSITION_X:
+            ct = self.contacts.get(self.slot)
+            if ct is not None and not ct.dead:
+                ct.x, ct.dirty = v, True
+        elif c == e.ABS_MT_POSITION_Y:
+            ct = self.contacts.get(self.slot)
+            if ct is not None and not ct.dead:
+                ct.y, ct.dirty = v, True
+
+    def _sink(self, ct):
+        return self.pad if ct.dest == "pad" else self.screen
+
+    def _flush_contact(self, slot, ct):
+        if ct.dead:
+            if ct.dest in ("pad", "screen"):
+                self._sink(ct).up(slot)
+            if self.contacts.get(slot) is ct:
+                del self.contacts[slot]
+            return
+        if ct.x is None or ct.y is None:
+            return
+        if ct.dest is None:
+            ct.rect = self.rect
+            if ct.rect is not None and ct.rect.contains(ct.x, ct.y):
+                ok = self.pad.down(slot, ct.x - ct.rect.x0, ct.y - ct.rect.y0)
+                ct.dest = "pad" if ok else "none"
+            else:
+                ok = self.screen.down(slot, ct.x, ct.y)
+                ct.dest = "screen" if ok else "none"
+            ct.new = False
+        elif ct.dest == "pad":
+            self.pad.move(slot, ct.x - ct.rect.x0, ct.y - ct.rect.y0)
+        elif ct.dest == "screen":
+            self.screen.move(slot, ct.x, ct.y)
+
+    def flush(self):
+        for slot, ct in list(self.contacts.items()):
+            if ct.dirty:
+                self._flush_contact(slot, ct)
+                ct.dirty = False
+        self.pad.sync()
+        self.screen.sync()
+
+    def release_all(self):
+        self.contacts.clear()
+        self.pad.lift_all()
+        self.screen.lift_all()
+
+
+# =============================================================================
+# Inputs: dock position, posture, on-screen keyboard
+# =============================================================================
+hypr_env = yoga_state.hypr_env
+hypr_json = yoga_state.hypr_json
+osk_visible = yoga_state.osk_visible
+
+
+def hypr_has_devices(names):
+    d = hypr_json("devices")
+    if not isinstance(d, dict):
+        return None
+    have = {x.get("name") for k in ("touch", "mice") for x in d.get(k, [])}
+    return all(n in have for n in names)
+
+
+def hypr_poke():
+    try:
+        subprocess.run(["hyprctl", "repl", "if yoga_apply_devices then yoga_apply_devices() end"],
+                       capture_output=True, timeout=5, env=hypr_env())
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def verbose():
+    """Notifications are opt-in: YOGA_VERBOSE=1 in the environment, or a file ~/.config/yoga/verbose
+    (the service does not see your shell's environment, the file is the way for it)."""
+    return bool(os.environ.get("YOGA_VERBOSE")) or (
+        Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "yoga" / "verbose").exists()
+
+
+def notify(text):
+    try:
+        subprocess.Popen(["notify-send", "-a", "yoga-touchpad", "-t", "2500",
+                          "-h", "string:x-canonical-private-synchronous:yoga-touchpad", "Touchpad", text],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
+def hypr_name(name):
+    return name.lower().replace(" ", "-")
+
+
+# =============================================================================
+# Devices
+# =============================================================================
+def source_info(path):
+    """Open the real touchscreen: -> (InputDevice, info dict)."""
+    evdev, e = ev()
+    dev = evdev.InputDevice(path)
+    caps = dict(dev.capabilities())
+    absd = {c if isinstance(c, int) else c[0]: i for c, i in caps.get(e.EV_ABS, [])}
+    # python-evdev gives [(code, AbsInfo)] without verbose
+    info = {
+        "name": dev.name,
+        "x_max": absd[e.ABS_MT_POSITION_X].max, "y_max": absd[e.ABS_MT_POSITION_Y].max,
+        "x_res": absd[e.ABS_MT_POSITION_X].resolution, "y_res": absd[e.ABS_MT_POSITION_Y].resolution,
+        "slots": absd[e.ABS_MT_SLOT].max + 1,
+    }
+    return dev, info
+
+
+def make_uinput(*args, **kw):
+    """UInput without python-evdev's wait for the new /dev/input node to become
+    openable (it never is for us: root:input, no ACL; the wait cost ~2 s per device)."""
+    evdev, _ = ev()
+
+    class FastUInput(evdev.UInput):
+        def _find_device(self, fd):
+            return None
+    return FastUInput(*args, **kw)
+
+
+def make_pad(cfg, src, rect, memory=False):
+    evdev, e = ev()
+    n = cfg["pad"]["slots"]
+    absl = [
+        (e.ABS_X, evdev.AbsInfo(0, 0, rect.w - 1, 0, 0, src["x_res"])),
+        (e.ABS_Y, evdev.AbsInfo(0, 0, rect.h - 1, 0, 0, src["y_res"])),
+        (e.ABS_MT_SLOT, evdev.AbsInfo(0, 0, n - 1, 0, 0, 0)),
+        (e.ABS_MT_POSITION_X, evdev.AbsInfo(0, 0, rect.w - 1, 0, 0, src["x_res"])),
+        (e.ABS_MT_POSITION_Y, evdev.AbsInfo(0, 0, rect.h - 1, 0, 0, src["y_res"])),
+        (e.ABS_MT_TRACKING_ID, evdev.AbsInfo(0, 0, 65535, 0, 0, 0)),
+    ]
+    keys = [e.BTN_TOUCH, e.BTN_TOOL_FINGER, e.BTN_TOOL_DOUBLETAP, e.BTN_TOOL_TRIPLETAP,
+            e.BTN_TOOL_QUADTAP, e.BTN_TOOL_QUINTTAP]
+    if cfg["pad"]["advertise_left_button"]:
+        keys += [e.BTN_LEFT]
+    props = [e.INPUT_PROP_POINTER]
+    if cfg["pad"]["prop_buttonpad"]:
+        props.append(e.INPUT_PROP_BUTTONPAD)
+    if memory:
+        out = MemoryOut("pad")
+    else:
+        ui = make_uinput({e.EV_KEY: keys, e.EV_ABS: absl}, name=cfg["pad"]["name"], vendor=VENDOR,
+                          product=PRODUCT_PAD, version=1, bustype=e.BUS_VIRTUAL, input_props=props)
+        out = UInputOut(ui)
+    return Sink(out, n, rect.w - 1, rect.h - 1, finger_btns=True)
+
+
+def make_screen(cfg, src, memory=False):
+    evdev, e = ev()
+    n = src["slots"]
+    absl = [
+        (e.ABS_X, evdev.AbsInfo(0, 0, src["x_max"], 0, 0, src["x_res"])),
+        (e.ABS_Y, evdev.AbsInfo(0, 0, src["y_max"], 0, 0, src["y_res"])),
+        (e.ABS_MT_SLOT, evdev.AbsInfo(0, 0, n - 1, 0, 0, 0)),
+        (e.ABS_MT_POSITION_X, evdev.AbsInfo(0, 0, src["x_max"], 0, 0, src["x_res"])),
+        (e.ABS_MT_POSITION_Y, evdev.AbsInfo(0, 0, src["y_max"], 0, 0, src["y_res"])),
+        (e.ABS_MT_TRACKING_ID, evdev.AbsInfo(0, 0, 65535, 0, 0, 0)),
+    ]
+    if memory:
+        out = MemoryOut("screen")
+    else:
+        ui = make_uinput({e.EV_KEY: [e.BTN_TOUCH], e.EV_ABS: absl}, name=cfg["screen"]["name"], vendor=VENDOR,
+                          product=PRODUCT_SCREEN, version=1, bustype=e.BUS_VIRTUAL,
+                          input_props=[e.INPUT_PROP_DIRECT])
+        out = UInputOut(ui)
+    return Sink(out, n, src["x_max"], src["y_max"], finger_btns=False)
+
+
+# =============================================================================
+# The daemon
+# =============================================================================
+STRIP_LABEL = {
+    "dock1": "keyboard docked near the hinge, strip at the front",
+    "dock2": "keyboard docked at the front edge, strip near the hinge",
+    "osk": "on-screen keyboard, strip under it",
+    "manual": "forced on",
+}
+
+
+class Active:
+    """The grab and the virtual devices of one activation."""
+
+    def __init__(self, cfg, key, dry):
+        self.cfg, self.key, self.dry = cfg, key, dry
+        self.src = self.dev = self.pad = self.screen = self.router = None
+        self.rect = None
+        self.start = time.monotonic()
+        self.n_events = 0
+
+    def open(self, wait_hypr=True):
+        cfg = self.cfg
+        if self.dry:
+            try:
+                self.dev, self.src = source_info(cfg["source"]["device"])
+                self.dev.close()
+                self.dev = None
+            except Exception as ex:
+                self.src = dict(SOURCE_FALLBACK)
+                log(f"[dry-run] cannot open the touchscreen ({ex}); assuming the default ranges")
+            self.rect = strip_rect(cfg, self.key, self.src)
+            log(f"[dry-run] would grab {cfg['source']['device']}, create {cfg['pad']['name']!r} "
+                f"({self.rect.w}x{self.rect.h} units) and {cfg['screen']['name']!r}; strip {self.rect}")
+            return
+        self.dev, self.src = source_info(cfg["source"]["device"])
+        self.rect = strip_rect(cfg, self.key, self.src)
+        self.pad = make_pad(cfg, self.src, self.rect)
+        self.screen = make_screen(cfg, self.src)
+        self.router = Router(self.pad, self.screen, self.rect)
+        # let Hyprland find the new devices and bind the touchscreen before it receives touches
+        if wait_hypr:
+            names = [hypr_name(cfg["pad"]["name"]), hypr_name(cfg["screen"]["name"])]
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < 2.0:
+                r = hypr_has_devices(names)
+                if r is None or r:
+                    break
+                time.sleep(0.05)
+            log(f"virtual devices {'seen by Hyprland' if r else 'NOT seen by Hyprland' if r is False else 'unchecked (no Hyprland socket)'}"
+                f" after {time.monotonic() - t0:.2f} s")
+            if cfg["hyprland"]["poke"]:
+                hypr_poke()
+        # never grab in the middle of a touch: the compositor would be left
+        # holding a contact it never sees lifted
+        _, e = ev()
+        t0 = time.monotonic()
+        while e.BTN_TOUCH in self.dev.active_keys() and time.monotonic() - t0 < 2.0:
+            time.sleep(0.02)
+        os.set_blocking(self.dev.fd, False)
+        self.dev.grab()
+        log(f"grabbed {self.dev.path} ({self.dev.name}); strip {self.rect} "
+            f"[{self.key}: {STRIP_LABEL.get(self.key, '')}]")
+
+    def set_key(self, key):
+        """A different strip while active."""
+        rect = strip_rect(self.cfg, key, self.src)
+        self.key = key
+        if self.dry:
+            self.rect = rect
+            log(f"[dry-run] strip -> {key} {rect}")
+            return
+        if (rect.w, rect.h) != (self.rect.w, self.rect.h):   # different size: a new pad
+            self.router.contacts = {s: c for s, c in self.router.contacts.items() if c.dest != "pad"}
+            self.pad.close()
+            self.pad = make_pad(self.cfg, self.src, rect)
+            self.router.pad = self.pad
+        self.rect = rect
+        self.router.set_rect(rect)
+        log(f"strip -> {key} {rect}")
+
+    def pump(self):
+        """Read what the touchscreen has to say and route it."""
+        try:
+            for ev_ in self.dev.read():
+                self.n_events += 1
+                self.router.feed(ev_.type, ev_.code, ev_.value)
+        except BlockingIOError:
+            pass
+
+    def close(self):
+        if self.dry:
+            return
+        try:
+            if self.router:
+                self.router.release_all()
+        except Exception:
+            pass
+        if self.dev is not None:
+            try:
+                self.dev.ungrab()
+            except Exception:
+                pass
+            try:
+                self.dev.close()
+            except Exception:
+                pass
+        for s in (self.pad, self.screen):
+            if s:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+        secs = time.monotonic() - self.start
+        log(f"released the touchscreen after {secs:.0f} s: {self.n_events} events in, "
+            f"{self.pad.frames} touchpad frames, {self.screen.frames} touchscreen frames out")
+
+
+class Daemon:
+    def __init__(self, cfg, dry=False, initial="auto", exit_after=None, debug=False):
+        self.cfg, self.dry, self.debug = cfg, dry, debug
+        self.override = initial            # "auto" | "on" | "off"
+        self.exit_after = exit_after
+        self.active = None
+        self.stop = False
+        self.retry_at = 0.0
+        self.dock_raw = self.dock_eff = None
+        self.next_poll = 0.0
+        self.osk = False
+        self.posture = (True, 0, None)
+        self.touchpad_ok = True
+        self.consumer = yoga_state.Consumer()
+        self.source = "none"
+        self.reason = "starting"
+        self.t0 = time.monotonic()
+        self.sock = None
+
+    # -- inputs -----------------------------------------------------------------
+    def poll_inputs(self, now):
+        """Everything comes from the one state (yoga_state.Consumer): the daemon's file when it
+        is fresh, else the same values computed locally. The dock position is already debounced
+        there (DOCK_DEBOUNCE_S), and the posture and the dock are read together, so a posture
+        change and a dock change never reach this process out of step."""
+        if now < self.next_poll:
+            return
+        self.next_poll = now + 0.1
+        a = self.cfg["activation"]
+        st = self.consumer.get(now)
+        if self.consumer.source != self.source:
+            self.source = self.consumer.source
+            log(f"state from {self.source}")
+        raw, eff = st["dock"]["raw"], st["dock"]["eff"]
+        if raw != self.dock_raw and (self.debug or self.dock_raw is not None):
+            log(f"keyboard_position {self.dock_raw} -> {raw}")
+        if eff != self.dock_eff and self.dock_eff is not None and eff == 0:
+            log(f"keyboard detached (0 for {yoga_state.DOCK_DEBOUNCE_S} s)")
+        self.dock_raw, self.dock_eff = raw, eff
+        b = st["panels"]["bottom"]
+        self.posture = (bool(b["on"]), int(b["transform"]), st.get("posture"))
+        self.touchpad_ok = bool(st["want"]["touchpad_ok"])
+        # the keyboard strip only while undocked (a docked keyboard is hidden by yoga-posture
+        # first; the dock strip wins in desired() whatever the on-screen keyboard still shows)
+        self.osk = bool(a["osk"]) and (self.dock_eff == 0) and bool(st["osk"]["held"])
+
+    def desired(self):
+        """-> (strip key or None, reason)."""
+        on, transform, post = self.posture
+        a = self.cfg["activation"]
+        if self.override == "off":
+            return None, "forced off"
+        if not on:
+            return None, f"suspended: bottom panel is off (posture {post})"
+        if post in ("tablet", "tent"):
+            # one screen: no touchpad (the keyboard floats over the screen and the whole
+            # screen is the app's), even if the lit panel is the bottom one
+            return None, f"suspended: single-screen mode (posture {post})"
+        if transform != 0:
+            return None, f"suspended: bottom panel rotated (transform {transform}, posture {post})"
+        if not self.touchpad_ok:
+            return None, f"suspended: not a two-screen layout (posture {post})"
+        pos = self.dock_eff or 0
+        if self.override == "on":
+            return {1: "dock1", 2: "dock2"}.get(pos, "manual"), "forced on"
+        if a["dock"] and pos in (1, 2):
+            return f"dock{pos}", f"keyboard docked (position {pos})"
+        if a["osk"] and pos == 0 and self.osk:
+            return "osk", "on-screen keyboard visible"
+        return None, "keyboard detached" if pos == 0 else "dock mode off"
+
+    # -- state changes ------------------------------------------------------------
+    def apply(self, now):
+        key, why = self.desired()
+        self.reason = why
+        if self.active is None:
+            if key is not None and now >= self.retry_at:
+                self.activate(key, why)
+        elif key is None:
+            self.deactivate(why)
+        elif key != self.active.key:
+            try:
+                self.active.set_key(key)
+                self.publish()
+            except Exception as ex:
+                log(f"strip change failed: {ex}; restarting")
+                self.deactivate("strip change failed")
+
+    def publish(self):
+        """Write the strip in force for yoga-touchpad-indicator (the outline on screen):
+        screen fractions of the bottom panel, y = 0 at the hinge edge, as configured
+        (panel.invert_* only mirrors the digitiser, not where the strip is on screen)."""
+        if self.dry:
+            return
+        a = self.active
+        data = {"active": bool(a)}
+        if a:
+            st = self.cfg["strip"][a.key]
+            data.update(key=a.key, label=STRIP_LABEL.get(a.key, a.key),
+                        x=sorted(float(v) for v in st["x"]), y=sorted(float(v) for v in st["y"]))
+        try:
+            p = runtime_dir() / "yoga-touchpad" / "strip.json"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data))
+            os.replace(tmp, p)
+        except OSError as ex:
+            log(f"cannot write strip.json: {ex}")
+
+    def activate(self, key, why):
+        a = Active(self.cfg, key, self.dry)
+        try:
+            a.open()
+        except Exception as ex:
+            log(f"cannot activate ({ex!r}); retrying in 10 s")
+            try:
+                a.close()
+            except Exception:
+                pass
+            self.retry_at = time.monotonic() + 10
+            return
+        self.active = a
+        log(f"touchpad ON: {why}; strip {key}")
+        self.publish()
+        if not self.dry and (self.cfg["activation"]["notify"] or verbose()):
+            notify(f"on ({STRIP_LABEL.get(key, key)})")
+
+    def deactivate(self, why):
+        a, self.active = self.active, None
+        if a is None:
+            return
+        a.close()
+        log(f"touchpad OFF: {why}")
+        self.publish()
+        if not self.dry and (self.cfg["activation"]["notify"] or verbose()) and not self.stop:
+            notify("off")
+
+    # -- control socket ---------------------------------------------------------------
+    def sock_path(self):
+        return runtime_dir() / "yoga-touchpad" / ("ctl-dry.sock" if self.dry else "ctl.sock")
+
+    def open_socket(self):
+        p = self.sock_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(str(p))
+        s.listen(4)
+        s.setblocking(False)
+        self.sock = s
+
+    def status_text(self):
+        a = self.active
+        pos = {None: "unknown", 0: "detached", 1: "docked near the hinge", 2: "docked at the front edge"}
+        lines = [
+            f"touchpad  {'ON' if a else 'off'}   mode {self.override}   ({self.reason})",
+            f"keyboard  position {self.dock_raw} raw / {self.dock_eff} debounced ({pos.get(self.dock_eff)}); state from {self.source}",
+            f"posture   bottom panel on={self.posture[0]} transform={self.posture[1]} ({self.posture[2]})",
+            f"osk       {'visible' if self.osk else 'not visible / not checked'}"
+            f"   activation: dock={self.cfg['activation']['dock']} osk={self.cfg['activation']['osk']}",
+        ]
+        if a:
+            lines.append(f"strip     {a.key}: {a.rect} of {a.src['x_max'] + 1}x{a.src['y_max'] + 1} units"
+                         + ("   [dry run: nothing grabbed]" if a.dry else ""))
+            if not a.dry:
+                lines.append(f"traffic   {a.n_events} source events, {a.pad.frames} pad frames, "
+                             f"{a.screen.frames} screen frames; up {time.monotonic() - a.start:.0f} s")
+        return "\n".join(lines)
+
+    def handle_ctl(self, conn):
+        try:
+            conn.settimeout(1.0)
+            req = json.loads(conn.makefile().readline() or "{}")
+            cmd = req.get("cmd")
+            if cmd == "toggle":
+                cmd = "off" if self.active else "on"
+            if cmd in ("on", "off", "auto"):
+                self.override = cmd
+                log(f"mode -> {cmd}")
+                self.retry_at = 0
+                self.apply(time.monotonic())
+                reply = {"ok": True, "text": self.status_text()}
+            elif cmd == "status":
+                reply = {"ok": True, "text": self.status_text()}
+            else:
+                reply = {"ok": False, "text": f"unknown command {cmd!r}"}
+            conn.sendall((json.dumps(reply) + "\n").encode())
+        except Exception as ex:
+            try:
+                conn.sendall((json.dumps({"ok": False, "text": str(ex)}) + "\n").encode())
+            except OSError:
+                pass
+        finally:
+            conn.close()
+
+    # -- main loop ---------------------------------------------------------------------------
+    def run(self):
+        sel = selectors.DefaultSelector()
+        self.open_socket()
+        sel.register(self.sock, selectors.EVENT_READ, "ctl")
+
+        def on_signal(signum, frame):
+            self.stop = True
+        signal.signal(signal.SIGTERM, on_signal)
+        signal.signal(signal.SIGINT, on_signal)
+        log(f"yoga-touchpad started{' (dry run)' if self.dry else ''}: mode {self.override}, "
+            f"dock={self.cfg['activation']['dock']} osk={self.cfg['activation']['osk']}, "
+            f"dock file {yoga_state.dock_path()}, config {config_path()}"
+            f"{'' if config_path().exists() else ' (absent, defaults)'}")
+        registered = None
+        try:
+            while not self.stop:
+                now = time.monotonic()
+                if self.exit_after is not None and now - self.t0 >= self.exit_after:
+                    log(f"--exit-after {self.exit_after} s reached")
+                    break
+                self.poll_inputs(now)
+                self.apply(now)
+                # keep the source fd registered exactly while active
+                a = self.active
+                fd = a.dev.fd if (a and a.dev) else None
+                if fd != registered:
+                    if registered is not None:
+                        try:
+                            sel.unregister(registered)
+                        except (KeyError, ValueError, OSError):
+                            pass
+                    if fd is not None:
+                        sel.register(fd, selectors.EVENT_READ, "src")
+                    registered = fd
+                for key, _ in sel.select(0.2 if a else 0.25):
+                    if key.data == "ctl":
+                        try:
+                            conn, _ = self.sock.accept()
+                            self.handle_ctl(conn)
+                        except OSError:
+                            pass
+                    elif key.data == "src" and self.active:
+                        try:
+                            self.active.pump()
+                        except OSError as ex:   # the device went away (USB reset)
+                            log(f"touchscreen read failed: {ex}")
+                            self.deactivate("touchscreen vanished")
+                            self.retry_at = time.monotonic() + 3
+        finally:
+            self.stop = True
+            if self.active:
+                self.deactivate("exiting")
+            try:
+                self.sock_path().unlink()
+            except OSError:
+                pass
+            log("yoga-touchpad stopped")
+
+
+# =============================================================================
+# Scripted scenarios: `selftest` (memory sinks, asserts) and `simulate`
+# =============================================================================
+class Script:
+    """Builds a stream of source events for a fake multitouch screen."""
+
+    def __init__(self, router):
+        _, self.e = ev()
+        self.r = router
+        self.tid = 100
+        self.cur = None
+
+    def _slot(self, s):
+        if s != self.cur:
+            self.r.feed(self.e.EV_ABS, self.e.ABS_MT_SLOT, s)
+            self.cur = s
+
+    def down(self, slot, x, y):
+        self._slot(slot)
+        self.r.feed(self.e.EV_ABS, self.e.ABS_MT_TRACKING_ID, self.tid)
+        self.tid += 1
+        self.r.feed(self.e.EV_ABS, self.e.ABS_MT_POSITION_X, x)
+        self.r.feed(self.e.EV_ABS, self.e.ABS_MT_POSITION_Y, y)
+
+    def move(self, slot, x, y):
+        self._slot(slot)
+        self.r.feed(self.e.EV_ABS, self.e.ABS_MT_POSITION_X, x)
+        self.r.feed(self.e.EV_ABS, self.e.ABS_MT_POSITION_Y, y)
+
+    def up(self, slot):
+        self._slot(slot)
+        self.r.feed(self.e.EV_ABS, self.e.ABS_MT_TRACKING_ID, -1)
+
+    def syn(self):
+        self.r.feed(self.e.EV_SYN, self.e.SYN_REPORT, 0)
+
+    def dropped(self):
+        self.r.feed(self.e.EV_SYN, self.e.SYN_DROPPED, 0)
+
+
+def decode(events, e):
+    """Memory events -> readable frames."""
+    names = {e.ABS_MT_SLOT: "slot", e.ABS_MT_TRACKING_ID: "id", e.ABS_MT_POSITION_X: "x",
+             e.ABS_MT_POSITION_Y: "y", e.ABS_X: "X", e.ABS_Y: "Y", e.BTN_TOUCH: "touch",
+             e.BTN_TOOL_FINGER: "t1", e.BTN_TOOL_DOUBLETAP: "t2", e.BTN_TOOL_TRIPLETAP: "t3",
+             e.BTN_TOOL_QUADTAP: "t4", e.BTN_TOOL_QUINTTAP: "t5"}
+    frames, cur = [], []
+    for t, c, v in events:
+        if t == e.EV_SYN:
+            frames.append(" ".join(cur))
+            cur = []
+        else:
+            cur.append(f"{names.get(c, c)}={v}")
+    return frames
+
+
+def selftest():
+    evdev, e = ev()
+    src = dict(SOURCE_FALLBACK)
+    cfg = copy.deepcopy(DEFAULTS)
+    rect = strip_rect(cfg, "dock1", src)     # y from 0.615 * 7149
+    failures = []
+
+    def check(name, cond, detail=""):
+        log(f"  {'ok  ' if cond else 'FAIL'} {name}{(' -- ' + detail) if (detail and not cond) else ''}")
+        if not cond:
+            failures.append(name)
+
+    def fresh():
+        pad = make_pad(cfg, src, rect, memory=True)
+        scr = make_screen(cfg, src, memory=True)
+        r = Router(pad, scr, rect)
+        return pad, scr, r, Script(r)
+
+    def vals(sink, code, ty=None):
+        return [v for (t, c, v) in sink.out.events if c == code and (ty is None or t == ty)]
+
+    log(f"strip {rect} (source {src['x_max'] + 1}x{src['y_max'] + 1}); pad range {rect.w}x{rect.h}")
+    fy = rect.y0 + 500   # a y inside the strip
+    oy = 1000            # a y outside
+
+    # 1. a tap in the strip: pad only, offsets removed, BTN_TOOL_FINGER on then off
+    pad, scr, r, s = fresh()
+    s.down(0, 5000, fy); s.syn()
+    s.up(0); s.syn()
+    check("tap in strip reaches the pad", len(vals(pad, e.ABS_MT_TRACKING_ID)) == 2)
+    check("tap in strip does not reach the screen", not scr.out.events)
+    check("pad x is 5000, y is offset by the strip", vals(pad, e.ABS_MT_POSITION_X) == [5000]
+          and vals(pad, e.ABS_MT_POSITION_Y) == [500], str(pad.out.events))
+    check("BTN_TOOL_FINGER 1 then 0", vals(pad, e.BTN_TOOL_FINGER) == [1, 0] and vals(pad, e.BTN_TOUCH) == [1, 0])
+    check("tracking id lift is -1", vals(pad, e.ABS_MT_TRACKING_ID)[-1] == -1)
+
+    # 2. a tap outside: screen only, coordinates untouched
+    pad, scr, r, s = fresh()
+    s.down(0, 5000, oy); s.syn(); s.up(0); s.syn()
+    check("tap outside reaches the screen unchanged", vals(scr, e.ABS_MT_POSITION_X) == [5000]
+          and vals(scr, e.ABS_MT_POSITION_Y) == [oy])
+    check("tap outside does not reach the pad", not pad.out.events)
+    check("screen has no BTN_TOOL_*", not [1 for (t, c, v) in scr.out.events if c == e.BTN_TOOL_FINGER])
+
+    # 3. starts in the strip, drifts out: stays in the pad, clamped to the pad
+    pad, scr, r, s = fresh()
+    s.down(0, 5000, fy); s.syn()
+    s.move(0, 5000, oy); s.syn()           # far above the strip
+    s.move(0, 99999, fy); s.syn()          # beyond the right edge
+    s.up(0); s.syn()
+    ys = vals(pad, e.ABS_MT_POSITION_Y)
+    xs = vals(pad, e.ABS_MT_POSITION_X)
+    check("drift out of the strip stays on the pad", not scr.out.events)
+    check("... clamped at the pad's top edge", 0 in ys, str(ys))
+    check("... clamped at the pad's right edge", rect.w - 1 in xs, str(xs))
+
+    # 4. starts outside, drifts into the strip: stays on the screen
+    pad, scr, r, s = fresh()
+    s.down(0, 5000, oy); s.syn()
+    s.move(0, 5000, fy); s.syn()
+    s.up(0); s.syn()
+    check("drift into the strip stays on the screen", not pad.out.events and vals(scr, e.ABS_MT_POSITION_Y) == [oy, fy])
+
+    # 5. two fingers in the strip: DOUBLETAP; one in each: both sinks see a finger
+    pad, scr, r, s = fresh()
+    s.down(0, 4000, fy); s.down(1, 4500, fy + 20); s.syn()
+    check("two fingers in the strip -> BTN_TOOL_DOUBLETAP", vals(pad, e.BTN_TOOL_DOUBLETAP)[-1:] == [1]
+          and vals(pad, e.BTN_TOOL_FINGER)[-1:] == [0], str(decode(pad.out.events, e)))
+    s.move(0, 4000, fy + 50); s.move(1, 4500, fy + 70); s.syn()
+    s.up(0); s.up(1); s.syn()
+    check("two-finger lift clears all tool buttons", vals(pad, e.BTN_TOOL_DOUBLETAP)[-1] == 0
+          and vals(pad, e.BTN_TOUCH)[-1] == 0)
+    pad, scr, r, s = fresh()
+    s.down(0, 4000, fy); s.down(1, 4500, oy); s.syn()
+    check("one finger each side: pad has 1, screen has 1", pad.count() == 1 and scr.count() == 1)
+    check("... pad sees a single finger (not a double tap)", 1 not in vals(pad, e.BTN_TOOL_DOUBLETAP)
+          and vals(pad, e.BTN_TOOL_FINGER)[-1:] == [1])
+    s.up(0); s.up(1); s.syn()
+    check("everything lifted", pad.count() == 0 and scr.count() == 0)
+
+    # 6. three fingers on the pad
+    pad, scr, r, s = fresh()
+    s.down(0, 3000, fy); s.down(1, 4000, fy); s.down(2, 5000, fy); s.syn()
+    check("three fingers -> BTN_TOOL_TRIPLETAP", vals(pad, e.BTN_TOOL_TRIPLETAP) == [1])
+    ids = vals(pad, e.ABS_MT_TRACKING_ID)
+    check("three distinct tracking ids", len(set(ids)) == 3, str(ids))
+
+    # 7. slot reuse: a new contact in a freed source slot gets a new tracking id
+    pad, scr, r, s = fresh()
+    s.down(0, 3000, fy); s.syn(); s.up(0); s.syn(); s.down(0, 3100, fy); s.syn()
+    ids = [i for i in vals(pad, e.ABS_MT_TRACKING_ID) if i != -1]
+    check("reused slot, fresh tracking id", len(ids) == 2 and ids[0] != ids[1], str(ids))
+
+    # 8. the strip changes mid-contact: the old contact keeps its origin, new ones use the new strip
+    pad, scr, r, s = fresh()
+    s.down(0, 3000, fy); s.syn()
+    other = strip_rect(cfg, "dock2", src)
+    r.set_rect(other)
+    s.move(0, 3000, fy + 10); s.syn()
+    check("a running contact keeps the strip it started in", vals(pad, e.ABS_MT_POSITION_Y)[-1] == 510)
+    s.down(1, 3000, fy); s.syn()           # fy is now outside the new strip
+    check("a new contact uses the new strip", scr.count() == 1 and pad.count() == 1)
+
+    # 9. SYN_DROPPED: everything is released, ongoing fingers are ignored until they lift
+    pad, scr, r, s = fresh()
+    s.down(0, 3000, fy); s.down(1, 3000, oy); s.syn()
+    s.dropped(); s.move(0, 3010, fy); s.syn()     # the burst is discarded
+    check("SYN_DROPPED releases both sinks", pad.count() == 0 and scr.count() == 0)
+    s.move(0, 3020, fy); s.syn()
+    check("a finger that predates the drop stays ignored", pad.count() == 0)
+    s.down(0, 3000, fy); s.syn()
+    check("... and a new touch works again", pad.count() == 1)
+
+    # 10. more fingers than the pad has slots: the extra ones are ignored, no crash
+    pad, scr, r, s = fresh()
+    for i in range(7):
+        s.down(i, 1000 + 300 * i, fy)
+    s.syn()
+    check("7 fingers on a 5-slot pad: 5 forwarded", pad.count() == 5)
+
+    # 11. coordinates are inside the declared ranges, always
+    pad, scr, r, s = fresh()
+    for x in (-50, 0, rect.w + 500):
+        s.down(0, x, fy); s.syn(); s.up(0); s.syn()
+    check("pad x always in range", all(0 <= v <= rect.w - 1 for v in vals(pad, e.ABS_MT_POSITION_X)))
+
+    # 12. strip maths: inversion and fractions
+    c2 = copy.deepcopy(DEFAULTS)
+    c2["panel"]["invert_y"] = True
+    rr = strip_rect(c2, "dock1", src)
+    check("invert_y mirrors the strip to the hinge side", rr.y0 == 0 and 0.375 < rr.y1 / (src["y_max"] + 1) < 0.395, str(rr))
+
+    log(f"{'ALL PASSED' if not failures else 'FAILED: ' + ', '.join(failures)}")
+    return 1 if failures else 0
+
+
+def simulate(live_pad):
+    """A scripted two-finger drag through the router. With --live-pad the
+    virtual touchpad is a real uinput device and the pointer moves."""
+    evdev, e = ev()
+    cfg = load_config()
+    src = dict(SOURCE_FALLBACK)
+    rect = strip_rect(cfg, "dock1", src)
+    pad = make_pad(cfg, src, rect, memory=not live_pad)
+    scr = make_screen(cfg, src, memory=True)
+    r = Router(pad, scr, rect)
+    s = Script(r)
+    if live_pad:
+        names = [hypr_name(cfg["pad"]["name"])]
+        for _ in range(40):
+            if hypr_has_devices(names) in (None, True):
+                break
+            time.sleep(0.05)
+        time.sleep(0.5)
+        before = hypr_json("cursorpos")
+        log(f"cursor before: {before}")
+    y = rect.y0 + rect.h // 2
+    x = rect.x0 + rect.w // 2
+    # one-finger drag: 600 units right, 300 down, over ~0.5 s
+    s.down(0, x, y); s.syn()
+    for i in range(1, 31):
+        time.sleep(0.016)
+        s.move(0, x + 20 * i, y + 10 * i); s.syn()
+    time.sleep(0.05)
+    s.up(0); s.syn()
+    if live_pad:
+        time.sleep(0.4)
+        after = hypr_json("cursorpos")
+        log(f"cursor after:  {after}")
+        before_xy, after_xy = (before or {}), (after or {})
+        log(f"moved by ({after_xy.get('x', 0) - before_xy.get('x', 0)}, {after_xy.get('y', 0) - before_xy.get('y', 0)})")
+        # put it back
+        if before:
+            subprocess.run(["hyprctl", "dispatch", f"hl.dsp.cursor.move({{x={before['x']}, y={before['y']}}})"],
+                           capture_output=True, env=hypr_env())
+    else:
+        for fr in decode(pad.out.events, e)[:6]:
+            log("pad frame: " + fr)
+        log(f"... {pad.frames} pad frames, {scr.frames} screen frames")
+    pad.close()
+    scr.close()
+    return 0
+
+
+# =============================================================================
+# CLI
+# =============================================================================
+def ctl(cmd, dry=False):
+    p = runtime_dir() / "yoga-touchpad" / ("ctl-dry.sock" if dry else "ctl.sock")
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(5)
+    try:
+        s.connect(str(p))
+    except OSError:
+        return None
+    s.sendall((json.dumps({"cmd": cmd}) + "\n").encode())
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        data += chunk
+    s.close()
+    return json.loads(data or b"{}")
+
+
+def offline_status():
+    st = yoga_state.Consumer().get()
+    print("yoga-touchpad: daemon not running (systemctl --user start yoga-touchpad)")
+    print(f"keyboard  position {st['dock']['raw']} raw / {st['dock']['eff']} effective  [{yoga_state.dock_path()}]")
+    b = st["panels"]["bottom"]
+    print(f"posture   bottom panel on={b['on']} transform={b['transform']} ({st.get('posture')})")
+    print(f"osk       {'visible' if st['osk']['visible'] else 'not visible'}")
+    return 1
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="yoga-touchpad", add_help=True, description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd")
+    for c in ("status", "on", "off", "auto", "toggle"):
+        sp = sub.add_parser(c)
+        sp.add_argument("--dry", action="store_true", help="talk to the dry-run daemon")
+    lg = sub.add_parser("log")
+    lg.add_argument("-f", action="store_true")
+    lg.add_argument("-n", default="40")
+    d = sub.add_parser("daemon")
+    d.add_argument("--dry-run", action="store_true")
+    d.add_argument("--exit-after", type=float)
+    d.add_argument("--initial", choices=("on", "off", "auto"), default="auto")
+    d.add_argument("--debug", action="store_true")
+    sub.add_parser("selftest")
+    sm = sub.add_parser("simulate")
+    sm.add_argument("--live-pad", action="store_true")
+    args = ap.parse_args()
+
+    if args.cmd in (None, "help"):
+        print(__doc__)
+        return 2
+    if args.cmd in ("status", "on", "off", "auto", "toggle"):
+        r = ctl(args.cmd, args.dry)
+        if r is None:
+            return offline_status() if args.cmd == "status" else (print("yoga-touchpad: daemon not running") or 1)
+        print(r.get("text", ""))
+        return 0 if r.get("ok") else 1
+    if args.cmd == "log":
+        cmd = ["journalctl", "--user", "-t", "yoga-touchpad", "-n", args.n, "--no-pager"]
+        if args.f:
+            cmd.append("-f")
+        os.execvp(cmd[0], cmd)
+    if args.cmd == "selftest":
+        return selftest()
+    if args.cmd == "simulate":
+        return simulate(args.live_pad)
+    if args.cmd == "daemon":
+        cfg = load_config()
+        return Daemon(cfg, dry=args.dry_run, initial=args.initial, exit_after=args.exit_after, debug=args.debug).run() or 0
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

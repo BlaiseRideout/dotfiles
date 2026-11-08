@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Show the on-screen keyboard over the lock screen (hyprlock) and put it away again
+# afterwards. Run as a user service (yoga-osk-lockwatch.service).
+#
+# The keyboard can sit above the lock screen because yoga/hypr/touch.lua gives wvkbd's
+# layer an above_lock = 2 rule (drawn above the lock, and it takes input); its keys
+# are sent through the virtual keyboard, which the lock screen receives as ordinary
+# key presses. Nothing here touches the lock itself.
+#
+# Shown only while the physical keyboard is undocked: with it docked there is a keyboard
+# already (yoga-osk refuses to show it then; the published state, docs/yoga-book/state-machine.md,
+# decides). It is shown when the lock appears, and AGAIN while locked when
+#   - the physical keyboard is undocked (it was hidden when it docked), or
+#   - a posture or panel change put it away (yoga-posture hides it on every one: it was laid
+#     out for the screens as they were, and without it a tablet could not be unlocked),
+# but not when you hide it yourself. It is hidden on unlock only if this script showed it and it
+# was not already open before the lock. YOGA_OSK_LOCK=always shows it regardless of the dock,
+# =never turns this off.
+set -u
+mode=${YOGA_OSK_LOCK:-undocked}
+here=$(dirname "$(readlink -f "$0")")
+bin=${YOGA_OSK_BIN:-$HOME/.local/bin}
+[ -x "$bin/yoga-osk" ] || bin=$here   # not linked into ~/.local/bin yet: the checkout (yoga/bin)
+[ "$mode" = never ] && exit 0
+
+state() { python3 -I "$here/yoga_state.py" "$@" 2>/dev/null; }
+show() {
+  if [ "$mode" = always ]; then YOGA_OSK_FORCE=1 "$bin/yoga-osk" show; else "$bin/yoga-osk" show; fi
+}
+
+# Suspend: the machine locks and goes to sleep, and this loop wakes up several seconds "later" than
+# it asked to. A keyboard shown right then (or still up from before) was made for outputs that are
+# still waking up: it appeared, did not take touches and went away again (2026-11-07). So after a
+# resume it is stopped and shown fresh once the panels and the sensors have settled.
+SETTLE=${YOGA_OSK_RESUME_SETTLE:-6}
+now() { printf '%(%s)T' -1; }
+say() { echo "yoga-osk-lockwatch: $*" >&2; }
+last=$(now)
+locked=0 shown=0 was_visible=0 epoch= allowed=
+while sleep 1; do
+  t=$(now); gap=$((t - last)); last=$t
+  if pgrep -x -u "$(id -u)" hyprlock >/dev/null; then
+    if [ $locked = 0 ]; then
+      locked=1
+      "$bin/yoga-osk" status >/dev/null 2>&1 && was_visible=1 || was_visible=0
+      # let hyprlock put its surfaces up before ours goes above them
+      sleep 1
+      if [ $(( $(now) - t )) -gt 4 ]; then       # that second spanned a suspend
+        say "resumed while locking; waiting ${SETTLE}s for the panels"
+        sleep "$SETTLE"; last=$(now)
+      fi
+      say "locked: showing the on-screen keyboard"
+      show && shown=1
+      epoch=$(state get epoch); allowed=$(state get want.osk_allowed)
+    elif [ "$gap" -gt 4 ]; then
+      say "resumed while locked (asleep ${gap}s): restarting the on-screen keyboard"
+      "$bin/yoga-osk" stop >/dev/null 2>&1
+      sleep "$SETTLE"; last=$(now)
+      show && shown=1
+      epoch=$(state get epoch); allowed=$(state get want.osk_allowed)
+    else
+      # still locked: bring it back after a posture/panel change or after the keyboard undocks
+      e=$(state get epoch); a=$(state get want.osk_allowed)
+      if [ -n "$e" ] && { [ "$e" != "$epoch" ] || { [ "$a" = 1 ] && [ "$allowed" = 0 ]; }; }; then
+        "$bin/yoga-osk" status >/dev/null 2>&1 || { say "brought back after a posture/dock change"; show && shown=1; }
+      fi
+      epoch=$e allowed=$a
+    fi
+  elif [ $locked = 1 ]; then
+    say "unlocked"
+    locked=0
+    if [ $shown = 1 ] && [ $was_visible = 0 ]; then "$bin/yoga-osk" hide; fi
+    shown=0
+  fi
+done

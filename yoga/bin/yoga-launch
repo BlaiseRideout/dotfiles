@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# fuzzel --launch-prefix for the Yoga Book (see yoga-launcher): wait for fuzzel to close,
+# then put the focus back on the monitor you were working on (a tap on the on-screen
+# keyboard moved it to the reserved bottom screen, and fuzzel's exclusive keyboard focus
+# kept it there), so the app opens on that monitor's workspace; then run the command.
+for _ in $(seq 20); do pgrep -x fuzzel >/dev/null || break; sleep 0.05; done
+hyprctl eval 'yoga_focus_back()' >/dev/null 2>&1
+exec "$@"

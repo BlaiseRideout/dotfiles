@@ -46,9 +46,15 @@ local TV   = "desc:Samsung Electric Company SAMSUNG "
 
 hl.monitor({ output = G95C, mode = "5120x1440@239.76", position = "0x100", scale = 1 })
 hl.monitor({ output = AOC,  mode = "1920x1080@180",    position = "5120x0", scale = 1, transform = 3 })
--- Anything else (laptop panel, other desks): its preferred mode, placed to the right
-hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })
 
+-- Machine-specific modules. The Lenovo Yoga Book 9i's lives in its own tree, yoga/
+-- (README.md there): the panels' monitor rules, postures, docked layout, lid
+-- handling, the screen reserved for the keyboard, touch mapping, bar lists. It is
+-- loaded only on a Yoga (yoga/hypr/config.lua says how to tell), in a pcall, and
+-- fills the global `yoga`; the shared code below calls its hooks through
+-- yoga_hook() and `yoga`, and works whole without it. It is loaded here, between
+-- the desk's monitor rules above and the catch-all below, so its rules sit where
+-- they always did.
 local function is_tv(m)
     return (m.description or ""):find("^Samsung Electric Company SAMSUNG ") ~= nil
 end
@@ -56,6 +62,96 @@ end
 local function is_laptop(m)
     return (m.name or ""):find("^eDP") ~= nil
 end
+
+-- A monitor with a rule of its own above (the desk's), which layouts leave alone
+local function is_desk_monitor(m)
+    local d = m.description or ""
+    return d == G95C:sub(6) or d == AOC:sub(6) or is_tv(m)
+end
+
+yoga = nil
+local yoga_hook_warned = {}   -- each failing hook says so once, not on every key press
+local function yoga_hook(name, ...)
+    local fn = yoga and yoga[name]
+    if not fn then return end
+    local ok, a, b = pcall(fn, ...)
+    if not ok then
+        if not yoga_hook_warned[name] then
+            yoga_hook_warned[name] = true
+            pcall(hl.notification.create, { text = "yoga." .. name .. ": " .. tostring(a), timeout = 8000 })
+        end
+        return
+    end
+    return a, b
+end
+
+-- Handed to the module (yoga.lua documents it); the functions defined further
+-- down are filled in as they appear.
+local yoga_host = {
+    is_laptop = is_laptop, is_tv = is_tv, is_desk_monitor = is_desk_monitor,
+    place_workspaces = function(keep_view) return place_workspaces(keep_view) end,
+}
+
+do
+    local function warn(text)
+        pcall(hl.notification.create, { text = text, timeout = 8000 })
+    end
+    -- Is this a Yoga Book 9i? The DMI strings work at the first config load, when
+    -- Hyprland has not created its monitors or opened its input devices yet; the
+    -- panels and the digitiser cover later reloads.
+    local function is_yoga(cfg)
+        if os.getenv("YOGA_FORCE") or os.getenv("YOGA_TOUCH_FORCE") then return true end
+        local d = cfg.detect or {}
+        for file, names in pairs(d.dmi or {}) do
+            local f = io.open("/sys/class/dmi/id/" .. file, "r")
+            if f then
+                local v = f:read("*l")
+                f:close()
+                for _, name in ipairs(names) do
+                    if v == name then return true end
+                end
+            end
+        end
+        if d.panels then
+            local seen = 0
+            for _, m in ipairs(hl.get_monitors({ all = true }) or {}) do
+                if m.description == cfg.panels.top.desc or m.description == cfg.panels.bottom.desc then
+                    seen = seen + 1
+                end
+            end
+            if seen == 2 then return true end
+        end
+        if d.touch then
+            local ok, devices = pcall(hl.get_devices)
+            if ok then
+                local want = cfg.touch.device_prefix .. "touchscreen"
+                for _, dev in ipairs(devices or {}) do
+                    if dev.type == "touch" and dev.name and dev.name:sub(1, #want) == want then return true end
+                end
+            end
+        end
+        return false
+    end
+
+    -- The checkout's yoga/ tree (home/lib.nix links the dotfiles from ~/.dotfiles)
+    local dir = os.getenv("YOGA_DIR") or (home .. "/.dotfiles/yoga")
+    local f = io.open(dir .. "/hypr/config.lua", "r")
+    if f then   -- a checkout without the tree: nothing to do, nothing to report
+        f:close()
+        local ok, cfg = pcall(dofile, dir .. "/hypr/config.lua")
+        if not ok or type(cfg) ~= "table" then
+            warn("yoga/hypr/config.lua: " .. tostring(cfg))
+        elseif is_yoga(cfg) then
+            yoga_host.dir, yoga_host.config = dir, cfg
+            local loaded, setup = pcall(dofile, dir .. "/hypr/yoga.lua")
+            if loaded then loaded, setup = pcall(setup, yoga_host) end
+            if loaded then yoga = setup else warn("yoga/hypr/yoga.lua: " .. tostring(setup)) end
+        end
+    end
+end
+
+-- Anything else (other desks): its preferred mode, placed to the right
+hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })
 
 -- The TV starts off so the G95C gets its 240Hz mode first (the driver rejects
 -- 240Hz while the TV is lit); tv-autotoggle.sh turns it on through tv_set()
@@ -93,6 +189,16 @@ function tv_set(on)
     if tv_port then tv_rule(tv_port, on) end
 end
 
+-- Laptop lid: suspend on close, as on any laptop, unless the Yoga module (yoga/)
+-- has the panels to look after: there, with a monitor connected, the lid just turns
+-- the panels off or on, and folded back in a stand it does nothing.
+local function lid_changed(closed)
+    if yoga_hook("lid_changed", closed) then return end
+    if closed then
+        hl.exec_cmd("systemctl suspend")
+    end
+end
+
 
 --------------------
 ---- WORKSPACES ----
@@ -109,18 +215,43 @@ end
 local function focus_ws(id)
     hl.dispatch(hl.dsp.focus({ workspace = id }))
 end
+yoga_host.focus_ws = focus_ws
 
 -- Noctalia uses workspace names for its icon labels; numeric IDs and binds stay the same.
 local workspace_icons = { "", "", "", "", "", "", "", "", "", "" }
+
+-- Workspaces past 10 (opened by the workspace keys, or by Hyprland for a bare monitor) have no
+-- icon above and would show their number in the bar; they get the same dot as 4-8
+local function name_extra_workspaces()
+    for _, ws in ipairs(hl.get_workspaces() or {}) do
+        if ws.id and ws.id > 10 and ws.name ~= workspace_icons[4] then
+            hl.dispatch(hl.dsp.workspace.rename({ workspace = ws.id, name = workspace_icons[4] }))
+        end
+    end
+end
+-- (events fire before the state changes: look again once it has settled)
+-- Yoga only: other machines keep Hyprland's own names
+local name_timer
+for _, ev in ipairs(yoga and { "workspace.active", "window.open", "window.move_to_workspace", "monitor.focused",
+                               "workspace.move_to_monitor" } or {}) do
+    hl.on(ev, function()
+        if name_timer then return end
+        name_timer = hl.timer(function() name_timer = nil; name_extra_workspaces() end,
+                              { timeout = 50, type = "oneshot" })
+    end)
+end
 
 -- Noctalia shows the full bar only on the primary monitor (noctalia/dotfiles/
 -- bar.toml). It includes this file, which names that monitor, and reloads when
 -- it changes, like Waybar's launch.sh following kanshi/primary_output.sh.
 -- Only rewritten when the primary changes, since every write reloads the bar.
 local bar_primary_file = home .. "/.cache/noctalia/primary.toml"
+
+local bar_primary_name   -- the last primary handed to set_bar_primary (yoga_host.refresh_bar)
 local function set_bar_primary(name)
+    bar_primary_name = name
     local text = "# Written by hypr/hyprland.lua: the primary monitor, which gets the full bar\n"
-        .. "[bar.default.monitor.primary]\nmatch = \"" .. name .. "\"\n"
+        .. "[bar.default.monitor.primary]\nmatch = \"" .. name .. "\"\n" .. (yoga_hook("bar_extra", name) or "")
     local f = io.open(bar_primary_file, "r")
     local old = f and f:read("a")
     if f then f:close() end
@@ -132,12 +263,18 @@ local function set_bar_primary(name)
     f:close()
 end
 
+-- Rewrite primary.toml for the current primary (the Yoga module calls this when the
+-- posture changes: the bar lists depend on it); a no-op if nothing changed
+yoga_host.refresh_bar = function()
+    if bar_primary_name then set_bar_primary(bar_primary_name) end
+end
+
 function place_workspaces(keep_view)
     local mons = hl.get_monitors() or {}
-    local externals, tertiaries = {}, {}
+    local externals, tertiaries, laptops = {}, {}, {}
     for _, m in ipairs(mons) do
         if is_laptop(m) then
-            table.insert(tertiaries, 1, m)   -- laptop panel before the TV
+            table.insert(laptops, m)
         elseif is_tv(m) then
             table.insert(tertiaries, m)
         else
@@ -145,19 +282,31 @@ function place_workspaces(keep_view)
         end
     end
     table.sort(externals, function(a, b) return a.width * a.height > b.width * b.height end)
+    -- Laptop panels before the TV, the Yoga's top panel first (its main screen)
+    table.sort(laptops, function(a, b) return (yoga_hook("rank", a) or 0) < (yoga_hook("rank", b) or 0) end)
+    for i, m in ipairs(laptops) do table.insert(tertiaries, i, m) end
 
     local primary = externals[1] or tertiaries[1]
     if not primary then return end
     local secondary = externals[2]
-    local tertiary = tertiaries[1]
-    if tertiary == primary then tertiary = tertiaries[2] end
+    local others = {}   -- laptop panels and TV, minus the primary
+    for _, m in ipairs(tertiaries) do
+        if m ~= primary then table.insert(others, m) end
+    end
+    local tertiary = others[1]
 
     set_bar_primary(primary.name)
 
     local target = {}
     for i = 1, 8 do target[i] = primary end
     target[9]  = secondary or tertiary or primary
-    target[10] = tertiary or secondary or primary
+    -- With one external monitor and both Yoga panels: 9 on the top panel, 10 on
+    -- the bottom one (one more output than there are roles)
+    target[10] = (yoga and not secondary and others[2]) or tertiary or secondary or primary
+
+    -- Yoga: while the bottom panel is reserved for the keyboard (yoga_set_reserved),
+    -- whatever would live on it lives on the top panel instead
+    yoga_hook("retarget", target)
 
     local shown, focused = {}, nil
     if keep_view then
@@ -185,6 +334,7 @@ function place_workspaces(keep_view)
         end
     end
 
+    if keep_view == "none" then return end   -- the caller restores the view itself
     if keep_view then
         for _, id in ipairs(shown) do focus_ws(id) end
         if focused then focus_ws(focused) end
@@ -255,17 +405,57 @@ hl.on("monitor.removed", function() place_workspaces(true) end)
 -- A reload clears the workspace rules; put them back
 hl.on("config.reloaded", function() place_workspaces(true) end)
 
--- Previous/next workspace by number, wrapping 10 <-> 1 (swayworkspace.sh)
+-- Previous/next workspace by number (swayworkspace.sh). The numbers 1-10 are always in the
+-- ring, plus any higher workspace that exists (Hyprland names a screen with no workspace
+-- rule of its own the next free number, 11, 12, ...: with only 1-10 in the ring those were
+-- out of reach of the keys). Going past the last one wraps to 1. yoga.ws_skip(ws) leaves a
+-- workspace out of the ring (the Yoga's bottom screen while it carries the keyboard) and
+-- yoga.ws_grow() lets "next" on the last populated workspace open the next number instead
+-- of wrapping, so there is no upper limit; neither does anything on a machine without
+-- the module.
 local function ws_step(delta, move)
-    local ws = hl.get_active_workspace()
-    local id = (ws and ws.id and ws.id > 0) and ws.id or 1
-    local n = (id - 1 + delta) % 10 + 1
+    if not yoga then   -- no module: workspaces 1-10 only, wrapping, as always
+        local ws = hl.get_active_workspace()
+        local id = (ws and ws.id and ws.id > 0) and ws.id or 1
+        local n = (id - 1 + delta) % 10 + 1
+        if move then
+            hl.dispatch(hl.dsp.window.move({ workspace = n }))   -- and follow it
+        else
+            focus_ws(n)
+        end
+        return
+    end
+    local cur = hl.get_active_workspace()
+    local id = (cur and cur.id and cur.id > 0) and cur.id or 1
+    local ids, have = {}, {}
+    local top = 10   -- the highest number in use anywhere, left-out workspaces included
+    for i = 1, 10 do ids[#ids + 1] = i; have[i] = true end
+    for _, w in ipairs(hl.get_workspaces() or {}) do
+        if w.id and w.id > top then top = w.id end
+        if w.id and w.id > 10 and not have[w.id] and (w.id == id or not yoga_hook("ws_skip", w)) then
+            ids[#ids + 1] = w.id; have[w.id] = true
+        end
+    end
+    if not have[id] then ids[#ids + 1] = id end
+    table.sort(ids)
+    local pos = 1
+    for i, v in ipairs(ids) do if v == id then pos = i end end
+    local n
+    if pos + delta > #ids then
+        local busy = cur and cur.get_windows and #(cur:get_windows() or {}) > 0
+        if delta > 0 and busy and yoga_hook("ws_grow") then n = math.max(ids[#ids], top) + 1 else n = ids[1] end
+    elseif pos + delta < 1 then
+        n = ids[#ids]
+    else
+        n = ids[pos + delta]
+    end
     if move then
         hl.dispatch(hl.dsp.window.move({ workspace = n }))   -- and follow it
     else
         focus_ws(n)
     end
 end
+yoga_host.ws_step = ws_step
 
 
 -------------------
@@ -545,6 +735,12 @@ hl.config({
         -- video...): changing it takes a modeset, and the screens went blank
         -- and came back whenever T3 Code (or anything) went fullscreen
         send_content_type = false,
+        -- Don't switch the output to HDR when a fullscreen window looks like HDR
+        -- content: that, too, is a modeset. With it on (the default), every fullscreen
+        -- enter and leave on the Yoga's top panel redid the mode set (checked by
+        -- counting aquamarine's "Modesetting" lines in `hyprctl rollinglog`: one per
+        -- toggle on, none off), T3 Code's own F11 included
+        cm_auto_hdr = yoga and 0 or nil,   -- Yoga only; Hyprland's default elsewhere
     },
     misc = {
         -- If hyprlock ever dies, a new one can take over the lock (e.g. from a
@@ -566,6 +762,10 @@ hl.config({
         follow_mouse = 1,
     },
 })
+
+-- Yoga Book touch and pen: bind each digitizer node to its panel (the module does
+-- nothing on other machines)
+yoga_hook("apply_devices")
 
 -- Hyprland's default animations
 hl.curve("easeOutQuint",   { type = "bezier", points = { {0.23, 1},    {0.32, 1} } })
@@ -719,7 +919,15 @@ hl.window_rule({
 ---- KEYBINDINGS ----
 ---------------------
 
-local function bind(keys, action, opts) hl.bind(mod .. " + " .. keys, action, opts) end
+local function bind(keys, action, opts)
+    if not yoga then return hl.bind(mod .. " + " .. keys, action, opts) end
+    local act = function()
+        yoga_hook("before_bind")   -- Yoga: act on the monitor you were on, not the reserved bottom screen
+        if type(action) == "function" then return action() end
+        hl.dispatch(action)
+    end
+    hl.bind(mod .. " + " .. keys, act, opts)
+end
 local function run(cmd) return hl.dsp.exec_cmd(cmd) end
 
 -- Basics
@@ -733,7 +941,12 @@ bind("q", hl.dsp.window.close())
 bind("x", hl.dsp.window.close())
 -- Noctalia's launcher panel (apps; the same key again closes it) and run-launcher.sh (fuzzel) for commands
 local function fuzzel(cmd) return run("pkill -x fuzzel || " .. cmd) end
-bind("d", run("noctalia msg panel-toggle launcher"))
+-- yoga.launcher_cmd is set by the Yoga module on the Yoga Book (a launcher the on-screen
+-- keyboard can type into); everywhere else it is Noctalia's panel
+local function launcher_cmd() return yoga and yoga.launcher_cmd end
+bind("d", function()
+    hl.dispatch(run(launcher_cmd() or "noctalia msg panel-toggle launcher"))
+end)
 bind("u", function() scratch_toggle("fsearch") end)   -- search files: show or hide FSearch
 
 -- Escape dismisses FSearch's main window. Disable the binding everywhere
@@ -751,7 +964,9 @@ hl.on("window.class", update_fsearch_escape)
 update_fsearch_escape()
 bind("r", fuzzel(hyprdir .. "/run-launcher.sh"))
 -- Clipboard history: Noctalia's clipboard panel
-bind("v", run("noctalia msg panel-toggle clipboard"))
+bind("v", function()
+    hl.dispatch(run(launcher_cmd() and (launcher_cmd() .. " clipboard") or "noctalia msg panel-toggle clipboard"))
+end)
 -- Noctalia can only dismiss them all
 bind("BackSpace", run("makoctl dismiss || noctalia msg notification-clear-active"))
 bind("SHIFT + BackSpace", run("makoctl dismiss -a || noctalia msg notification-clear-active"))
@@ -833,8 +1048,12 @@ bind("SHIFT + minus", run([[
   fi]]))
 bind("CTRL + minus",  hl.dsp.workspace.toggle_special("scratchpad"))
 -- Pick any window (scratchpad included) from a list
-bind("minus", run("noctalia msg panel-toggle launcher /win"))   -- Noctalia's launcher, windows provider
-bind("Tab", run("noctalia msg window-switcher"))   -- Noctalia's switcher overlay
+bind("minus", function()   -- Noctalia's launcher, windows provider (fuzzel's list on the Yoga while its keyboard is up)
+    hl.dispatch(run(launcher_cmd() and (launcher_cmd() .. " winlist") or "noctalia msg panel-toggle launcher /win"))
+end)
+bind("Tab", function()   -- Noctalia's switcher overlay (fuzzel's list on the Yoga while its keyboard is up)
+    hl.dispatch(run(launcher_cmd() and (launcher_cmd() .. " windows") or "noctalia msg window-switcher"))
+end)
 
 -- Media and brightness keys, also while locked
 local media = {
@@ -842,8 +1061,9 @@ local media = {
     XF86AudioLowerVolume  = "pactl set-sink-volume @DEFAULT_SINK@ -5%",
     XF86AudioMute         = "pactl set-sink-mute @DEFAULT_SINK@ toggle",
     XF86AudioMicMute      = "pactl set-source-mute @DEFAULT_SOURCE@ toggle",
-    XF86MonBrightnessUp   = "brightnessctl set +5%",
-    XF86MonBrightnessDown = "brightnessctl set 5%-",
+    -- On the Yoga: every backlight at once (one per panel), through brightness.sh
+    XF86MonBrightnessUp   = yoga and (hyprdir .. "/brightness.sh up") or "brightnessctl set +5%",
+    XF86MonBrightnessDown = yoga and (hyprdir .. "/brightness.sh down") or "brightnessctl set 5%-",
     XF86AudioPlay         = "playerctl play-pause",
     XF86AudioNext         = "playerctl next",
     XF86AudioPrev         = "playerctl previous",
@@ -859,5 +1079,14 @@ hl.bind("Print",         run(shot:format("area")))
 hl.bind("SHIFT + Print", run(shot:format("active")))
 hl.bind("CTRL + Print",  run(shot:format("output")))
 
--- Laptop lid
-hl.bind("switch:on:Lid Switch", run("systemctl suspend"), { locked = true })
+-- Laptop lid (lid_changed, MONITORS)
+hl.bind("switch:on:Lid Switch",  function() lid_changed(true) end,  { locked = true })
+hl.bind("switch:off:Lid Switch", function() lid_changed(false) end, { locked = true })
+
+-- Yoga Book touch UX: hyprgrass gestures (a plugin built with hyprpm), the
+-- on-screen keyboard and the rescue bind (SUPER+CTRL+SHIFT+Escape unloads
+-- every plugin and reloads). The Yoga module loads yoga/hypr/touch.lua here, last,
+-- once everything it binds to exists, in a pcall so a mistake there can't break
+-- this file; it does nothing without the Yoga's touchscreen. Notes:
+-- docs/yoga-book/touch-ux.md.
+yoga_hook("start")

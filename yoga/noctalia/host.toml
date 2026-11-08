@@ -1,0 +1,78 @@
+# The Yoga Book 9i's bar extras, linked as ~/.config/noctalia/host.toml by
+# yoga/nix/module.nix (yoga.noctalia.linkHost). Lists replace the ones in dotfiles/
+# whole, so these repeat the shared primary-monitor layout with the Yoga's changes:
+#   - no GPU gauges (sysmon_2 is the GPU temperature, sysmon_gpu the GPU usage):
+#     the Meteor Lake iGPU has neither
+#   - the laptop battery as a gauge on the left (blaise/yoga-battery:laptop, reading
+#     /sys/class/power_supply) and a brightness button
+#   - the keyboard battery (blaise/yoga-battery, yoga/noctalia/plugins, a fork of the
+#     desktop's zmk-battery): the Yoga's own Bluetooth keyboard as one bar, the Corne
+#     as one per half. Hidden while no keyboard is connected.
+
+[plugins]
+enabled = [ "blaise/bar-button", "blaise/media", "blaise/yoga-battery" ]
+
+# The bars' widget lists (the primary's full bar, and the laptop panels' plain bars)
+# are written into ~/.cache/noctalia/primary.toml by hypr/hyprland.lua
+# (yoga.bar_extra, yoga/hypr/yoga.lua): the on-screen keyboard button (osk) must be on the laptop panels'
+# bars only, and which bar that is depends on which monitor is primary.
+
+# Workspace dots big enough to hit with a finger (the shared bar draws them at pill_scale 0.9).
+[widget.workspaces]
+pill_scale = 1.5
+
+[widget.zmk]
+scale = 1.0
+type = "blaise/yoga-battery:meter"
+
+# The laptop's own battery as a gauge like the CPU/RAM ones (icon + level bar, the
+# percentage is in the tooltip); replaces the built-in text battery widget.
+[widget.laptop_battery]
+scale = 1.0
+type = "blaise/yoga-battery:laptop"
+
+# Click opens the control center's Power tab (battery, power profile).
+[widget.laptop_battery.actions]
+left = "panel-toggle control-center power"
+
+# Scroll to change the brightness of every panel (hypr/brightness.sh, the same
+# as the brightness keys); click opens the control center's Monitor tab, which has
+# a brightness slider per panel.
+[widget.brightness]
+type = "blaise/bar-button:button"
+glyph = "brightness-high"
+glyph_size = 16
+tooltip = "Brightness (scroll)"
+color = "#ffffff"
+capsule = false
+
+[widget.brightness.actions]
+left = "panel-toggle control-center monitor"
+scroll_up = "exec $HOME/.config/hypr/brightness.sh up"
+scroll_down = "exec $HOME/.config/hypr/brightness.sh down"
+
+# On-screen keyboard (wvkbd, bottom panel): click to show or hide it
+# (yoga/bin/yoga-osk; also an edge swipe from the bottom, hyprland touch UX in
+# docs/yoga-book/touch-ux.md)
+[widget.osk]
+type = "blaise/bar-button:button"
+glyph = "keyboard-show"
+glyph_size = 16
+tooltip = "On-screen keyboard"
+color = "#ffffff"
+capsule = false
+
+[widget.osk.actions]
+left = "exec $HOME/.local/bin/yoga-osk toggle"
+
+# The launcher button: fuzzel while the on-screen keyboard is up, because a tap on the
+# keyboard closes Noctalia's launcher panel (it holds a focus grab) before anything
+# can be typed; the panel otherwise (yoga/bin/yoga-launcher).
+[widget.launcher.actions]
+left = "exec $HOME/.local/bin/yoga-launcher"
+
+# The shared dock (dotfiles/dock.toml) is not wanted on the bottom panel, which carries the
+# on-screen keyboard and the virtual touchpad. Swiping up from a screen's bottom edge shows it
+# for a moment (yoga/bin/yoga-dock-peek).
+[dock.monitor.eDP-2]
+enabled = false

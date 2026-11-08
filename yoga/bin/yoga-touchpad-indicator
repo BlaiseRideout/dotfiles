@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""On-screen outline of the Yoga Book's virtual touchpad.
+
+A click-through layer-shell surface on the bottom panel, drawn over the strip that
+yoga-touchpad is currently forwarding to the virtual touchpad (a rounded outline, a
+faint fill and a small "touchpad" label), and gone when the touchpad is off. It
+only draws: it reads $XDG_RUNTIME_DIR/yoga-touchpad/strip.json, which the daemon
+rewrites whenever the strip changes (fractions of the panel, y = 0 at the hinge
+edge = the top of the bottom screen), and never touches input.
+
+Needs python-gobject, gtk3 and gtk-layer-shell (all installed with Waybar's
+dependencies on CachyOS). Run by yoga-touchpad-indicator.service; the unit
+preloads libgtk-layer-shell, which has to be loaded before libwayland-client.
+
+  YOGA_TOUCHPAD_OUTPUT   connector of the bottom panel (default: auto, eDP-2 then
+                         the monitor whose description contains 0x4182)
+"""
+import json
+import os
+import sys
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import GLib, Gdk, Gtk, GtkLayerShell  # noqa: E402
+import cairo  # noqa: E402
+
+BOTTOM_DESC = os.environ.get("YOGA_TOUCHPAD_DESC", "0x4182")
+STATE = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "yoga-touchpad", "strip.json")
+RADIUS = 18
+# the pad: semi-transparent grey (r, g, b, alpha); the outline and label stay white
+FILL = (0.32, 0.32, 0.34, 0.8)
+LINE = 3.0
+
+
+def find_monitor(display):
+    want = os.environ.get("YOGA_TOUCHPAD_OUTPUT")
+    best = None
+    for i in range(display.get_n_monitors()):
+        m = display.get_monitor(i)
+        model = (m.get_model() or "")
+        if want and model == want:
+            return m
+        if not want and (model == "eDP-2" or BOTTOM_DESC in model):
+            best = best or m
+    return best
+
+
+class Indicator(Gtk.Window):
+    def __init__(self, monitor):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+        self.monitor = monitor
+        self.label = ""
+        self.set_app_paintable(True)
+        self.set_decorated(False)
+        self.set_accept_focus(False)
+        self.set_can_focus(False)
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual is not None:
+            self.set_visual(visual)
+        GtkLayerShell.init_for_window(self)
+        GtkLayerShell.set_monitor(self, monitor)
+        GtkLayerShell.set_layer(self, GtkLayerShell.Layer.TOP)
+        GtkLayerShell.set_namespace(self, "yoga-touchpad-indicator")
+        GtkLayerShell.set_exclusive_zone(self, -1)   # positions are from the panel's own corner
+        GtkLayerShell.set_keyboard_mode(self, GtkLayerShell.KeyboardMode.NONE)
+        for edge in (GtkLayerShell.Edge.TOP, GtkLayerShell.Edge.LEFT):
+            GtkLayerShell.set_anchor(self, edge, True)
+        self.connect("draw", self.on_draw)
+        self.connect("realize", self.on_realize)
+        self.last = None
+
+    def on_realize(self, *_):
+        # click-through: an empty input region
+        self.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
+
+    def on_draw(self, _w, cr):
+        w, h = self.get_allocated_width(), self.get_allocated_height()
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        x, y, rw, rh = LINE / 2, LINE / 2, w - LINE, h - LINE
+        cr.new_sub_path()
+        for cx, cy, a0 in ((x + rw - RADIUS, y + RADIUS, -90), (x + rw - RADIUS, y + rh - RADIUS, 0),
+                           (x + RADIUS, y + rh - RADIUS, 90), (x + RADIUS, y + RADIUS, 180)):
+            cr.arc(cx, cy, RADIUS, a0 * 3.14159265 / 180, (a0 + 90) * 3.14159265 / 180)
+        cr.close_path()
+        cr.set_source_rgba(*FILL)   # semi-transparent grey pad
+        cr.fill_preserve()
+        cr.set_source_rgba(1, 1, 1, 0.45)
+        cr.set_line_width(LINE)
+        cr.stroke()
+        if self.label:
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+            cr.set_font_size(15)
+            ext = cr.text_extents(self.label)
+            cr.set_source_rgba(1, 1, 1, 0.45)
+            cr.move_to((w - ext.width) / 2 - ext.x_bearing, 28)
+            cr.show_text(self.label)
+        return False
+
+    def place(self, fx, fy, label = ""):
+        g = self.monitor.get_geometry()   # logical px
+        x0, x1 = fx
+        y0, y1 = fy
+        left, top = round(g.width * x0), round(g.height * y0)
+        width, height = max(round(g.width * (x1 - x0)), 40), max(round(g.height * (y1 - y0)), 40)
+        key = (left, top, width, height, label)
+        if key == self.last:
+            return
+        self.last = key
+        self.label = label
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, left)
+        GtkLayerShell.set_margin(self, GtkLayerShell.Edge.TOP, top)
+        self.set_size_request(width, height)
+        self.resize(width, height)
+        self.queue_draw()
+
+
+def read_state():
+    try:
+        with open(STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {"active": False}
+
+
+def main():
+    display = Gdk.Display.get_default()
+    if display is None:
+        sys.exit("no display")
+    ind = None
+    mtime = [None]
+
+    def tick():
+        nonlocal ind
+        try:
+            mt = os.stat(STATE).st_mtime_ns
+        except OSError:
+            mt = None
+        if mt == mtime[0] and (ind is None) == (not read_state().get("active")):
+            return True
+        mtime[0] = mt
+        st = read_state()
+        if st.get("active"):
+            mon = find_monitor(display)
+            if mon is None:
+                return True
+            if ind is None:
+                ind = Indicator(mon)
+            ind.place(st["x"], st["y"])
+            ind.show_all()
+        elif ind is not None:
+            ind.destroy()
+            ind = None
+        return True
+
+    GLib.timeout_add(250, tick)
+    tick()
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

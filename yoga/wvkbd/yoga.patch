@@ -1,0 +1,727 @@
+diff --git a/keyboard.c b/keyboard.c
+index ea3be7e..4d46b41 100644
+--- a/keyboard.c
++++ b/keyboard.c
+@@ -5,6 +5,8 @@
+ #include <sys/mman.h>
+ #include <ctype.h>
+ #include <time.h>
++#include <signal.h>
++#include <unistd.h>
+ #include "keyboard.h"
+ #include <linux/input-event-codes.h>
+ 
+@@ -277,6 +279,21 @@ kbd_get_layer_index(struct kbd *kb, struct layout *l)
+     return 0;
+ }
+ 
++/* The system layout is Dvorak, so the compositor (keybindings!) maps a keycode through
++ * Dvorak. The layouts here are written with the natural (QWERTY) keycode of each
++ * character, so send the keycode of the physical key that carries that character in
++ * Dvorak instead. The latin keymap we upload is the matching Dvorak permutation, so
++ * clients that use it see the same character. */
++static uint32_t
++dvorak_pos(uint32_t code)
++{
++    static const uint16_t map[][2] = { {KEY_MINUS, KEY_APOSTROPHE}, {KEY_EQUAL, KEY_RIGHTBRACE}, {KEY_Q, KEY_X}, {KEY_W, KEY_COMMA}, {KEY_E, KEY_D}, {KEY_R, KEY_O}, {KEY_T, KEY_K}, {KEY_Y, KEY_T}, {KEY_U, KEY_F}, {KEY_I, KEY_G}, {KEY_O, KEY_S}, {KEY_P, KEY_R}, {KEY_LEFTBRACE, KEY_MINUS}, {KEY_RIGHTBRACE, KEY_EQUAL}, {KEY_A, KEY_A}, {KEY_S, KEY_SEMICOLON}, {KEY_D, KEY_H}, {KEY_F, KEY_Y}, {KEY_G, KEY_U}, {KEY_H, KEY_J}, {KEY_J, KEY_C}, {KEY_K, KEY_V}, {KEY_L, KEY_P}, {KEY_SEMICOLON, KEY_Z}, {KEY_APOSTROPHE, KEY_Q}, {KEY_Z, KEY_SLASH}, {KEY_X, KEY_B}, {KEY_C, KEY_I}, {KEY_V, KEY_DOT}, {KEY_B, KEY_N}, {KEY_N, KEY_L}, {KEY_M, KEY_M}, {KEY_COMMA, KEY_W}, {KEY_DOT, KEY_E}, {KEY_SLASH, KEY_LEFTBRACE} };
++    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
++        if (map[i][0] == code)
++            return map[i][1];
++    return code;
++}
++
+ void
+ zwp_virtual_keyboard_v1_key_mods(struct zwp_virtual_keyboard_v1 *vkbd, uint32_t time, uint32_t mods, enum wl_keyboard_key_state state)
+ {
+@@ -321,8 +338,8 @@ kbd_unpress_key(struct kbd *kb, uint32_t time)
+                                             WL_KEYBOARD_KEY_STATE_RELEASED);
+             } else {
+                 zwp_virtual_keyboard_v1_key(kb->vkbd, time,
+-                                            unlatch_shift && kb->last_press->shift_code ?
+-                                            kb->last_press->shift_code : kb->last_press->code,
++                                            dvorak_pos(unlatch_shift && kb->last_press->shift_code ?
++                                            kb->last_press->shift_code : kb->last_press->code),
+                                             WL_KEYBOARD_KEY_STATE_RELEASED);
+             }
+         }
+@@ -461,8 +478,8 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
+             zwp_virtual_keyboard_v1_key(kb->vkbd, time, KEY_TAB,
+                                         WL_KEYBOARD_KEY_STATE_PRESSED);
+         } else {
+-            zwp_virtual_keyboard_v1_key(kb->vkbd, time, (kb->mods & Shift) && k->shift_code ?
+-                                        k->shift_code : k->code,
++            zwp_virtual_keyboard_v1_key(kb->vkbd, time, dvorak_pos((kb->mods & Shift) && k->shift_code ?
++                                        k->shift_code : k->code),
+                                         WL_KEYBOARD_KEY_STATE_PRESSED);
+         }
+         if (kb->print || kb->print_intersect)
+@@ -507,6 +524,14 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
+             kb->last_abc_layout = &kb->layouts[kb->layers[0]];
+         }
+         break;
++    case Move:
++        // main.c handles SIGRTMIN+1 as move (blocked and read from a signalfd)
++        kill(getpid(), SIGRTMIN + 1);
++        break;
++    case Hide:
++        // main.c handles SIGUSR1 as hide (it is blocked and read from a signalfd)
++        kill(getpid(), SIGUSR1);
++        break;
+     case Compose:
+         // switch to the associated layout determined by the *next* keypress
+         if (kb->compose == 0) {
+diff --git a/keyboard.h b/keyboard.h
+index f1cf4c0..9f73294 100644
+--- a/keyboard.h
++++ b/keyboard.h
+@@ -24,6 +24,8 @@ enum key_type {
+ 	NextLayer, // Layout switch to the next layout in the layers sequence
+ 	Compose,   // Compose modifier key, switches to a specific associated layout
+ 	           // upon next keypress
++	Move,      // Move the keyboard to the other (top/bottom) edge of the output (SIGRTMIN+1)
++	Hide,      // Hide the keyboard (like SIGUSR1), shown again with SIGUSR2
+ 	EndRow,    // Incidates the end of a key row
+ 	Last,      // Indicated the end of a layout
+ };
+diff --git a/keymap.mobintl.h b/keymap.mobintl.h
+index aae951d..084eef9 100644
+--- a/keymap.mobintl.h
++++ b/keymap.mobintl.h
+@@ -1187,48 +1187,48 @@ xkb_symbols \"(unnamed)\" {\
+         key <AE08>               {	[               8,        asterisk, F8 ] };\
+         key <AE09>               {	[               9,       parenleft, F9 ] };\
+         key <AE10>               {	[               0,      parenright, F10 ] };\
+-        key <AE11>               {	[           minus,      underscore, EuroSign ] };\
+-        key <AE12>               {	[           equal,            plus, sterling ] };\
++        key <AE11>               {	[     bracketleft,       braceleft ] };\
++        key <AE12>               {	[    bracketright,      braceright ] };\
+         key <BKSP>               {	[       BackSpace,       BackSpace ] };\
+         key <TAB>                {	[             Tab,    ISO_Left_Tab ] };\
+-        key <AD01>               {	[               q,               Q, 1 ] };\
+-        key <AD02>               {	[               w,               W, 2 ] };\
+-        key <AD03>               {	[               e,               E, 3 ] };\
+-        key <AD04>               {	[               r,               R, 4 ] };\
+-        key <AD05>               {	[               t,               T, 5 ] };\
+-        key <AD06>               {	[               y,               Y, 6 ] };\
+-        key <AD07>               {	[               u,               U, 7 ] };\
+-        key <AD08>               {	[               i,               I, 8 ] };\
+-        key <AD09>               {	[               o,               O, 9 ] };\
+-        key <AD10>               {	[               p,               P, 0 ] };\
+-        key <AD11>               {	[     bracketleft,       braceleft ] };\
+-        key <AD12>               {	[    bracketright,      braceright ] };\
++        key <AD01>               {	[      apostrophe,        quotedbl ] };\
++        key <AD02>               {	[           comma,            less, less, U00AB] };\
++        key <AD03>               {	[          period,         greater, greater, U00BB] };\
++        key <AD04>               {	[               p,               P, 0 ] };\
++        key <AD05>               {	[               y,               Y, 6 ] };\
++        key <AD06>               {	[               f,               F, asciicircum ] };\
++        key <AD07>               {	[               g,               G, colon ] };\
++        key <AD08>               {	[               c,               C, quotedbl ] };\
++        key <AD09>               {	[               r,               R, 4 ] };\
++        key <AD10>               {	[               l,               L, asciitilde ] };\
++        key <AD11>               {	[           slash,        question] };\
++        key <AD12>               {	[           equal,            plus, sterling ] };\
+         key <RTRN>               {	[          Return ] };\
+         key <LCTL>               {	[       Control_L ] };\
+         key <AC01>               {	[               a,               A, minus ] };\
+-        key <AC02>               {	[               s,               S, at ] };\
+-        key <AC03>               {	[               d,               D, asterisk ] };\
+-        key <AC04>               {	[               f,               F, asciicircum ] };\
+-        key <AC05>               {	[               g,               G, colon ] };\
+-        key <AC06>               {	[               h,               H, semicolon ] };\
+-        key <AC07>               {	[               j,               J, parenleft ] };\
+-        key <AC08>               {	[               k,               K, parenright ] };\
+-        key <AC09>               {	[               l,               L, asciitilde ] };\
+-        key <AC10>               {	[       semicolon,           colon ] };\
+-        key <AC11>               {	[      apostrophe,        quotedbl ] };\
++        key <AC02>               {	[               o,               O, 9 ] };\
++        key <AC03>               {	[               e,               E, 3 ] };\
++        key <AC04>               {	[               u,               U, 7 ] };\
++        key <AC05>               {	[               i,               I, 8 ] };\
++        key <AC06>               {	[               d,               D, asterisk ] };\
++        key <AC07>               {	[               h,               H, semicolon ] };\
++        key <AC08>               {	[               t,               T, 5 ] };\
++        key <AC09>               {	[               n,               N, question ] };\
++        key <AC10>               {	[               s,               S, at ] };\
++        key <AC11>               {	[           minus,      underscore, EuroSign ] };\
+         key <TLDE>               {	[           grave,      asciitilde ] };\
+         key <LFSH>               {	[         Shift_L ] };\
+         key <BKSL>               {	[       backslash,             bar ] };\
+-        key <AB01>               {	[               z,               Z, slash ] };\
+-        key <AB02>               {	[               x,               X, apostrophe ] };\
+-        key <AB03>               {	[               c,               C, quotedbl ] };\
+-        key <AB04>               {	[               v,               V, plus ] };\
+-        key <AB05>               {	[               b,               B, equal ] };\
+-        key <AB06>               {	[               n,               N, question ] };\
++        key <AB01>               {	[       semicolon,           colon ] };\
++        key <AB02>               {	[               q,               Q, 1 ] };\
++        key <AB03>               {	[               j,               J, parenleft ] };\
++        key <AB04>               {	[               k,               K, parenright ] };\
++        key <AB05>               {	[               x,               X, apostrophe ] };\
++        key <AB06>               {	[               b,               B, equal ] };\
+         key <AB07>               {	[               m,               M, exclam ] };\
+-        key <AB08>               {	[           comma,      apostrophe, less, U00AB] };\
+-        key <AB09>               {	[          period,        question, greater, U00BB] };\
+-        key <AB10>               {	[           slash,        greater ] };\
++        key <AB08>               {	[               w,               W, 2 ] };\
++        key <AB09>               {	[               v,               V, plus ] };\
++        key <AB10>               {	[               z,               Z, slash ] };\
+         key <I147>               {  [      exclamdown,   questiondown, exclamdown ] };\
+         key <RTSH>               {	[         Shift_R ] };\
+         key <KPMU>               {\
+diff --git a/layout.mobintl.h b/layout.mobintl.h
+index d42c19f..2458693 100644
+--- a/layout.mobintl.h
++++ b/layout.mobintl.h
+@@ -174,17 +174,6 @@ static struct layout layouts[NumLayouts] = {
+  */
+ static struct key keys_full[] = {
+   {"Esc", "Esc", 1.0, Code, KEY_ESC, .scheme = 1},
+-  {"Ctr", "Ctr", 1.0, Mod, Ctrl, .scheme = 1},
+-  {"↑", "↑", 1.0, Code, KEY_UP, .scheme = 1},
+-  {"↓", "↓", 1.0, Code, KEY_DOWN, .scheme = 1},
+-  {"←", "←", 1.0, Code, KEY_LEFT, .scheme = 1},
+-  {"→", "→", 1.0, Code, KEY_RIGHT, .scheme = 1},
+-  {"'", "\"", 1.0, Code, KEY_APOSTROPHE, &layouts[ComposeBracket] },
+-  {"-", "_", 1.0, Code, KEY_MINUS, &layouts[ComposeMath] },
+-  {"/", ">", 1.0, Code, KEY_SLASH,  &layouts[ComposePunctuation] },
+-  {"Tab", "Ins", 1.0, Code, KEY_TAB, .shift_code = KEY_INSERT, .scheme = 1},
+-  {"", "", 0.0, EndRow},
+-
+   {"1", "!", 1.0, Code, KEY_1},
+   {"2", "@", 1.0, Code, KEY_2},
+   {"3", "#", 1.0, Code, KEY_3},
+@@ -193,52 +182,70 @@ static struct key keys_full[] = {
+   {"6", "^", 1.0, Code, KEY_6},
+   {"7", "&", 1.0, Code, KEY_7},
+   {"8", "*", 1.0, Code, KEY_8},
+-  {"9", "(", 1.0, Code, KEY_9, &layouts[ComposeBracket]},
+-  {"0", ")", 1.0, Code, KEY_0, &layouts[ComposeBracket]},
+-  {"", "", 0.0, EndRow},
+-
+-  {"q", "Q", 1.0, Code, KEY_Q, &layouts[Emoji]},
+-  {"w", "W", 1.0, Code, KEY_W, &layouts[ComposeW]},
+-  {"e", "E", 1.0, Code, KEY_E, &layouts[ComposeE]},
+-  {"r", "R", 1.0, Code, KEY_R, &layouts[ComposeR]},
+-  {"t", "T", 1.0, Code, KEY_T, &layouts[ComposeT]},
+-  {"y", "Y", 1.0, Code, KEY_Y, &layouts[ComposeY]},
+-  {"u", "U", 1.0, Code, KEY_U, &layouts[ComposeU]},
+-  {"i", "I", 1.0, Code, KEY_I, &layouts[ComposeI]},
+-  {"o", "O", 1.0, Code, KEY_O, &layouts[ComposeO]},
+-  {"p", "P", 1.0, Code, KEY_P, &layouts[ComposeP]},
+-  {"", "", 0.0, EndRow},
+-
+-  {"", "", 0.5, Pad},
+-  {"a", "A", 1.0, Code, KEY_A, &layouts[ComposeA]},
+-  {"s", "S", 1.0, Code, KEY_S, &layouts[ComposeS]},
+-  {"d", "D", 1.0, Code, KEY_D, &layouts[ComposeD]},
+-  {"f", "F", 1.0, Code, KEY_F, &layouts[ComposeF]},
+-  {"g", "G", 1.0, Code, KEY_G, &layouts[ComposeG]},
+-  {"h", "H", 1.0, Code, KEY_H, &layouts[ComposeH]},
+-  {"j", "J", 1.0, Code, KEY_J, &layouts[ComposeJ]},
+-  {"k", "K", 1.0, Code, KEY_K, &layouts[ComposeK]},
+-  {"l", "L", 1.0, Code, KEY_L, &layouts[ComposeL]},
+-  {"", "", 0.5, Pad},
++  {"9", "(", 1.0, Code, KEY_9},
++  {"0", ")", 1.0, Code, KEY_0},
++  {"[", "{", 1.0, Code, KEY_LEFTBRACE},
++  {"]", "}", 1.0, Code, KEY_RIGHTBRACE},
++  {"⌫", "⌫", 2.0, Code, KEY_BACKSPACE, .scheme = 1},
+   {"", "", 0.0, EndRow},
+ 
+-  {"⇧", "⇫", 1.5, Mod, Shift, .scheme = 1},
+-  {"z", "Z", 1.0, Code, KEY_Z, &layouts[ComposeZ]},
+-  {"x", "X", 1.0, Code, KEY_X, &layouts[ComposeX]},
+-  {"c", "C", 1.0, Code, KEY_C, &layouts[ComposeC]},
+-  {"v", "V", 1.0, Code, KEY_V, &layouts[ComposeV]},
+-  {"b", "B", 1.0, Code, KEY_B, &layouts[ComposeB]},
+-  {"n", "N", 1.0, Code, KEY_N, &layouts[ComposeN]},
+-  {"m", "M", 1.0, Code, KEY_M, &layouts[ComposeM]},
+-  {"⌫", "⌫", 1.5, Code, KEY_BACKSPACE, .scheme = 1},
++  {"Tab", "Tab", 1.5, Code, KEY_TAB, .shift_code = KEY_INSERT, .scheme = 1},
++  {"'", "\"", 1.0, Code, KEY_APOSTROPHE},
++  {",", "<", 1.0, Code, KEY_COMMA},
++  {".", ">", 1.0, Code, KEY_DOT},
++  {"p", "P", 1.0, Code, KEY_P},
++  {"y", "Y", 1.0, Code, KEY_Y},
++  {"f", "F", 1.0, Code, KEY_F},
++  {"g", "G", 1.0, Code, KEY_G},
++  {"c", "C", 1.0, Code, KEY_C},
++  {"r", "R", 1.0, Code, KEY_R},
++  {"l", "L", 1.0, Code, KEY_L},
++  {"/", "?", 1.0, Code, KEY_SLASH},
++  {"=", "+", 1.0, Code, KEY_EQUAL},
++  {"\\", "|", 1.5, Code, KEY_BACKSLASH},
++  {"", "", 0.0, EndRow},
++
++  {"Caps", "Caps", 1.75, Mod, CapsLock, .scheme = 1},
++  {"a", "A", 1.0, Code, KEY_A},
++  {"o", "O", 1.0, Code, KEY_O},
++  {"e", "E", 1.0, Code, KEY_E},
++  {"u", "U", 1.0, Code, KEY_U},
++  {"i", "I", 1.0, Code, KEY_I},
++  {"d", "D", 1.0, Code, KEY_D},
++  {"h", "H", 1.0, Code, KEY_H},
++  {"t", "T", 1.0, Code, KEY_T},
++  {"n", "N", 1.0, Code, KEY_N},
++  {"s", "S", 1.0, Code, KEY_S},
++  {"-", "_", 1.0, Code, KEY_MINUS},
++  {"Enter", "Enter", 2.25, Code, KEY_ENTER, .scheme = 1},
+   {"", "", 0.0, EndRow},
+ 
+-  {"⌨͕", "⌨͔", 1.5, NextLayer, .scheme = 1},
+-  {"Cmp", "Cmp", 1.0, Compose, .scheme = 1},
+-  {",", "'", 1.0, Code, KEY_COMMA, &layouts[ComposeMath]},
+-  {"", "Tab", 4.0, Code, KEY_SPACE},
+-  {".", "?", 1.0, Code, KEY_DOT, &layouts[ComposePunctuation]},
+-  {"Enter", "Enter", 1.5, Code, KEY_ENTER, .scheme = 1},
++  {"⇧", "⇫", 2.25, Mod, Shift, .scheme = 1},
++  {";", ":", 1.0, Code, KEY_SEMICOLON},
++  {"q", "Q", 1.0, Code, KEY_Q},
++  {"j", "J", 1.0, Code, KEY_J},
++  {"k", "K", 1.0, Code, KEY_K},
++  {"x", "X", 1.0, Code, KEY_X},
++  {"b", "B", 1.0, Code, KEY_B},
++  {"m", "M", 1.0, Code, KEY_M},
++  {"w", "W", 1.0, Code, KEY_W},
++  {"v", "V", 1.0, Code, KEY_V},
++  {"z", "Z", 1.0, Code, KEY_Z},
++  {"⇧", "⇫", 2.75, Mod, Shift, .scheme = 1},
++  {"", "", 0.0, EndRow},
++
++  {"Hide", "Hide", 1.0, Hide, .scheme = 1},
++  {"Move", "Move", 1.0, Move, .scheme = 1},
++  {"Fn", "Fn", 1.0, NextLayer, .scheme = 1},
++  {"Ctrl", "Ctrl", 1.25, Mod, Ctrl, .scheme = 1},
++  {"Super", "Super", 1.25, Mod, Super, .scheme = 1},
++  {"Alt", "Alt", 1.25, Mod, Alt, .scheme = 1},
++  {"", "", 4.25, Code, KEY_SPACE},
++  {"AltGr", "AltGr", 1.0, Mod, AltGr, .scheme = 1},
++  {"←", "←", 0.75, Code, KEY_LEFT, .scheme = 1},
++  {"↓", "↓", 0.75, Code, KEY_DOWN, .scheme = 1},
++  {"↑", "↑", 0.75, Code, KEY_UP, .scheme = 1},
++  {"→", "→", 0.75, Code, KEY_RIGHT, .scheme = 1},
+ 
+   /* end of layout */
+   {"", "", 0.0, Last},
+@@ -319,16 +326,20 @@ static struct key keys_full_wide[] = {
+ };
+ 
+ static struct key keys_special[] = {
+-  {"Esc", "Esc", 1.0, Code, KEY_ESC, .scheme = 1},
+-  {"Alt", "Alt", 1.0, Mod, Alt, .scheme = 1},
+-  {"↑", "↑", 1.0, Code, KEY_UP, .scheme = 1},
+-  {"↓", "↓", 1.0, Code, KEY_DOWN, .scheme = 1},
+-  {"←", "←", 1.0, Code, KEY_LEFT, .scheme = 1},
+-  {"→", "→", 1.0, Code, KEY_RIGHT, .scheme = 1},
+-  {"⇈", "⇈", 1.0, Code, KEY_PAGEUP, .scheme = 1},
+-  {"⇊", "⇊", 1.0, Code, KEY_PAGEDOWN, .scheme = 1},
+-  {"⇤", "⇤", 1.0, Code, KEY_HOME, .scheme = 1},
+-  {"⇥", "⇥", 1.0, Code, KEY_END, .scheme = 1},
++  {"`", "~", 1.0, Code, KEY_GRAVE},
++  {"F1", "F1", 1.0, Code, KEY_F1, .scheme = 1},
++  {"F2", "F2", 1.0, Code, KEY_F2, .scheme = 1},
++  {"F3", "F3", 1.0, Code, KEY_F3, .scheme = 1},
++  {"F4", "F4", 1.0, Code, KEY_F4, .scheme = 1},
++  {"F5", "F5", 1.0, Code, KEY_F5, .scheme = 1},
++  {"F6", "F6", 1.0, Code, KEY_F6, .scheme = 1},
++  {"F7", "F7", 1.0, Code, KEY_F7, .scheme = 1},
++  {"F8", "F8", 1.0, Code, KEY_F8, .scheme = 1},
++  {"F9", "F9", 1.0, Code, KEY_F9, .scheme = 1},
++  {"F10", "F10", 1.0, Code, KEY_F10, .scheme = 1},
++  {"F11", "F11", 1.0, Code, KEY_F11, .scheme = 1},
++  {"F12", "F12", 1.0, Code, KEY_F12, .scheme = 1},
++  {"⌫", "⌫", 2.0, Code, KEY_BACKSPACE, .scheme = 1},
+   {"", "", 0.0, EndRow},
+ 
+   {"1", "!", 1.0, Code, KEY_1},
+@@ -366,6 +377,8 @@ static struct key keys_special[] = {
+   {"⌫", "⌫", 1.0, Code, KEY_BACKSPACE, .scheme = 1},
+   {"", "", 0.0, EndRow},
+ 
++  {"Hide", "Hide", 1.0, Hide, .scheme = 1},
++  {"Move", "Move", 1.0, Move, .scheme = 1},
+   {"Abc", "Abc", 1.0, BackLayer, .scheme = 1},
+   {"⌨͕", "⌨͔", 1.0, NextLayer, .scheme = 1},
+   {",", "'", 1.0, Code, KEY_COMMA, &layouts[ComposeMath]},
+@@ -1103,79 +1116,98 @@ static struct key keys_index[] = {
+ 
+ static struct key keys_landscape[] = {
+   {"Esc", "Esc", 1.0, Code, KEY_ESC, .scheme = 1},
+-  {"", "", 0.5, Pad, .scheme = 1},
+-  {"q", "Q", 1.0, Code, KEY_Q, &layouts[Emoji]},
+-  {"w", "W", 1.0, Code, KEY_W, &layouts[ComposeW]},
+-  {"e", "E", 1.0, Code, KEY_E, &layouts[ComposeE]},
+-  {"r", "R", 1.0, Code, KEY_R, &layouts[ComposeR]},
+-  {"t", "T", 1.0, Code, KEY_T, &layouts[ComposeT]},
+-  {"y", "Y", 1.0, Code, KEY_Y, &layouts[ComposeY]},
+-  {"u", "U", 1.0, Code, KEY_U, &layouts[ComposeU]},
+-  {"i", "I", 1.0, Code, KEY_I, &layouts[ComposeI]},
+-  {"o", "O", 1.0, Code, KEY_O, &layouts[ComposeO]},
+-  {"p", "P", 1.0, Code, KEY_P, &layouts[ComposeP]},
+-  {"", "", 0.5, Pad, .scheme = 1},
+-  {"Tab", "Ins", 1.0, Code, KEY_TAB, .shift_code = KEY_INSERT, .scheme = 1},
++  {"1", "!", 1.0, Code, KEY_1},
++  {"2", "@", 1.0, Code, KEY_2},
++  {"3", "#", 1.0, Code, KEY_3},
++  {"4", "$", 1.0, Code, KEY_4},
++  {"5", "%", 1.0, Code, KEY_5},
++  {"6", "^", 1.0, Code, KEY_6},
++  {"7", "&", 1.0, Code, KEY_7},
++  {"8", "*", 1.0, Code, KEY_8},
++  {"9", "(", 1.0, Code, KEY_9},
++  {"0", ")", 1.0, Code, KEY_0},
++  {"[", "{", 1.0, Code, KEY_LEFTBRACE},
++  {"]", "}", 1.0, Code, KEY_RIGHTBRACE},
++  {"⌫", "⌫", 2.0, Code, KEY_BACKSPACE, .scheme = 1},
+   {"", "", 0.0, EndRow},
+ 
+-  {"↑", "↑", 0.75, Code, KEY_UP, .scheme = 1},
+-  {"↓", "↓", 0.75, Code, KEY_DOWN, .scheme = 1},
+-  {"", "", 0.5, Pad, .scheme = 1},
+-  {"a", "A", 1.0, Code, KEY_A, &layouts[ComposeA]},
+-  {"s", "S", 1.0, Code, KEY_S, &layouts[ComposeS]},
+-  {"d", "D", 1.0, Code, KEY_D, &layouts[ComposeD]},
+-  {"f", "F", 1.0, Code, KEY_F, &layouts[ComposeF]},
+-  {"g", "G", 1.0, Code, KEY_G, &layouts[ComposeG]},
+-  {"h", "H", 1.0, Code, KEY_H, &layouts[ComposeH]},
+-  {"j", "J", 1.0, Code, KEY_J, &layouts[ComposeJ]},
+-  {"k", "K", 1.0, Code, KEY_K, &layouts[ComposeK]},
+-  {"l", "L", 1.0, Code, KEY_L, &layouts[ComposeL]},
+-  {"'", "\"", 1.0, Code, KEY_APOSTROPHE, &layouts[ComposeBracket]},
+-  {"/", ">", 1.0, Code, KEY_SLASH},
++  {"Tab", "Tab", 1.5, Code, KEY_TAB, .shift_code = KEY_INSERT, .scheme = 1},
++  {"'", "\"", 1.0, Code, KEY_APOSTROPHE},
++  {",", "<", 1.0, Code, KEY_COMMA},
++  {".", ">", 1.0, Code, KEY_DOT},
++  {"p", "P", 1.0, Code, KEY_P},
++  {"y", "Y", 1.0, Code, KEY_Y},
++  {"f", "F", 1.0, Code, KEY_F},
++  {"g", "G", 1.0, Code, KEY_G},
++  {"c", "C", 1.0, Code, KEY_C},
++  {"r", "R", 1.0, Code, KEY_R},
++  {"l", "L", 1.0, Code, KEY_L},
++  {"/", "?", 1.0, Code, KEY_SLASH},
++  {"=", "+", 1.0, Code, KEY_EQUAL},
++  {"\\", "|", 1.5, Code, KEY_BACKSLASH},
++  {"", "", 0.0, EndRow},
++
++  {"Caps", "Caps", 1.75, Mod, CapsLock, .scheme = 1},
++  {"a", "A", 1.0, Code, KEY_A},
++  {"o", "O", 1.0, Code, KEY_O},
++  {"e", "E", 1.0, Code, KEY_E},
++  {"u", "U", 1.0, Code, KEY_U},
++  {"i", "I", 1.0, Code, KEY_I},
++  {"d", "D", 1.0, Code, KEY_D},
++  {"h", "H", 1.0, Code, KEY_H},
++  {"t", "T", 1.0, Code, KEY_T},
++  {"n", "N", 1.0, Code, KEY_N},
++  {"s", "S", 1.0, Code, KEY_S},
++  {"-", "_", 1.0, Code, KEY_MINUS},
++  {"Enter", "Enter", 2.25, Code, KEY_ENTER, .scheme = 1},
+   {"", "", 0.0, EndRow},
+ 
++  {"⇧", "⇫", 2.25, Mod, Shift, .scheme = 1},
++  {";", ":", 1.0, Code, KEY_SEMICOLON},
++  {"q", "Q", 1.0, Code, KEY_Q},
++  {"j", "J", 1.0, Code, KEY_J},
++  {"k", "K", 1.0, Code, KEY_K},
++  {"x", "X", 1.0, Code, KEY_X},
++  {"b", "B", 1.0, Code, KEY_B},
++  {"m", "M", 1.0, Code, KEY_M},
++  {"w", "W", 1.0, Code, KEY_W},
++  {"v", "V", 1.0, Code, KEY_V},
++  {"z", "Z", 1.0, Code, KEY_Z},
++  {"⇧", "⇫", 2.75, Mod, Shift, .scheme = 1},
++  {"", "", 0.0, EndRow},
++
++  {"Hide", "Hide", 1.0, Hide, .scheme = 1},
++  {"Move", "Move", 1.0, Move, .scheme = 1},
++  {"Fn", "Fn", 1.0, NextLayer, .scheme = 1},
++  {"Ctrl", "Ctrl", 1.25, Mod, Ctrl, .scheme = 1},
++  {"Super", "Super", 1.25, Mod, Super, .scheme = 1},
++  {"Alt", "Alt", 1.25, Mod, Alt, .scheme = 1},
++  {"", "", 4.25, Code, KEY_SPACE},
++  {"AltGr", "AltGr", 1.0, Mod, AltGr, .scheme = 1},
+   {"←", "←", 0.75, Code, KEY_LEFT, .scheme = 1},
++  {"↓", "↓", 0.75, Code, KEY_DOWN, .scheme = 1},
++  {"↑", "↑", 0.75, Code, KEY_UP, .scheme = 1},
+   {"→", "→", 0.75, Code, KEY_RIGHT, .scheme = 1},
+-  {"⇧", "⇫", 1.5, Mod, Shift, .scheme = 1},
+-  {"z", "Z", 1.0, Code, KEY_Z, &layouts[ComposeZ]},
+-  {"x", "X", 1.0, Code, KEY_X, &layouts[ComposeX]},
+-  {"c", "C", 1.0, Code, KEY_C, &layouts[ComposeC]},
+-  {"v", "V", 1.0, Code, KEY_V, &layouts[ComposeV]},
+-  {"b", "B", 1.0, Code, KEY_B, &layouts[ComposeB]},
+-  {"n", "N", 1.0, Code, KEY_N, &layouts[ComposeN]},
+-  {"m", "M", 1.0, Code, KEY_M, &layouts[ComposeM]},
+-  {"", "", 0.5, Pad, .scheme = 1},
+-  {"-", "_", 1.0, Code, KEY_MINUS, &layouts[ComposeBracket]},
+-  {"⌫", "⌫", 1.5, Code, KEY_BACKSPACE, .scheme = 1},
+-  {"", "", 0.0, EndRow},
+-
+-  {"⌨͕", "⌨͔", 1.0, NextLayer, .scheme = 1},
+-  {"Cmp", "Cmp", 1.0, Compose, .scheme = 1},
+-  {"Ctr", "Ctr", 1.0, Mod, Ctrl, .scheme = 1},
+-  {",", "'", 1.0, Code, KEY_COMMA, &layouts[ComposeMath]},
+-  {"", "Tab", 5.0, Code, KEY_SPACE},
+-  {".", "?", 1.0, Code, KEY_DOT, &layouts[ComposePunctuation]},
+-  {"Enter", "Enter", 2.0, Code, KEY_ENTER, .scheme = 1},
+ 
+   /* end of layout */
+   {"", "", 0.0, Last},
+ };
+ 
+ static struct key keys_landscape_special[] = {
+-  {"Esc", "Esc", 1.0, Code, KEY_ESC, .scheme = 1},
+-  {"", "", 0.5, Pad, .scheme = 1},
+-  {"1", "!", 1.0, Code, KEY_1},
+-  {"2", "@", 1.0, Code, KEY_2},
+-  {"3", "#", 1.0, Code, KEY_3},
+-  {"4", "$", 1.0, Code, KEY_4},
+-  {"5", "%", 1.0, Code, KEY_5},
+-  {"6", "^", 1.0, Code, KEY_6},
+-  {"7", "&", 1.0, Code, KEY_7},
+-  {"8", "*", 1.0, Code, KEY_8},
+-  {"9", "(", 1.0, Code, KEY_9, &layouts[ComposeBracket]},
+-  {"0", ")", 1.0, Code, KEY_0, &layouts[ComposeBracket]},
+-  {"", "", 0.5, Pad, .scheme = 1},
+-  {"Tab", "Ins", 1.0, Code, KEY_TAB, .shift_code = KEY_INSERT, .scheme = 1},
++  {"`", "~", 1.0, Code, KEY_GRAVE},
++  {"F1", "F1", 1.0, Code, KEY_F1, .scheme = 1},
++  {"F2", "F2", 1.0, Code, KEY_F2, .scheme = 1},
++  {"F3", "F3", 1.0, Code, KEY_F3, .scheme = 1},
++  {"F4", "F4", 1.0, Code, KEY_F4, .scheme = 1},
++  {"F5", "F5", 1.0, Code, KEY_F5, .scheme = 1},
++  {"F6", "F6", 1.0, Code, KEY_F6, .scheme = 1},
++  {"F7", "F7", 1.0, Code, KEY_F7, .scheme = 1},
++  {"F8", "F8", 1.0, Code, KEY_F8, .scheme = 1},
++  {"F9", "F9", 1.0, Code, KEY_F9, .scheme = 1},
++  {"F10", "F10", 1.0, Code, KEY_F10, .scheme = 1},
++  {"F11", "F11", 1.0, Code, KEY_F11, .scheme = 1},
++  {"F12", "F12", 1.0, Code, KEY_F12, .scheme = 1},
++  {"⌫", "⌫", 2.0, Code, KEY_BACKSPACE, .scheme = 1},
+   {"", "", 0.0, EndRow},
+ 
+   {"⇈", "⇈", 1.0, Code, KEY_PAGEUP, .scheme = 1},
+@@ -1207,6 +1239,8 @@ static struct key keys_landscape_special[] = {
+   {"⌫", "⌫", 1.5, Code, KEY_BACKSPACE, .scheme = 1},
+   {"", "", 0.0, EndRow},
+ 
++  {"Hide", "Hide", 1.0, Hide, .scheme = 1},
++  {"Move", "Move", 1.0, Move, .scheme = 1},
+   {"Abc", "Abc", 1.0, BackLayer, .scheme = 1},
+   {"⌨͕", "⌨͔", 1.0, NextLayer, .scheme = 1},
+   {"Ctr", "Ctr", 1.0, Mod, Ctrl, .scheme = 1},
+diff --git a/main.c b/main.c
+index be7fb07..147f6ea 100644
+--- a/main.c
++++ b/main.c
+@@ -70,10 +70,39 @@ static bool run_display = true;
+ static int cur_x = -1, cur_y = -1;
+ static bool cur_press = false;
+ static struct kbd keyboard;
++static void release_latched_mods(void);
++void zwp_virtual_keyboard_v1_key_mods(struct zwp_virtual_keyboard_v1 *vkbd, uint32_t time,
++                                      uint32_t mods, enum wl_keyboard_key_state state);
+ static uint32_t height, normal_height, landscape_height;
+ static int rounding = DEFAULT_ROUNDING;
+ static bool hidden = false;
+ static bool im_auto = false;
++
++/* --output NAME (or $WVKBD_OUTPUT): show on the wl_output with this name
++ * (e.g. eDP-2) instead of letting the compositor pick one */
++static char *want_output = NULL;
++static bool fixed_edge = false;  /* --fixed: the Move key / SIGRTMIN+1 do nothing */
++static bool anchor_top = false; /* --top: dock to the top edge instead of the bottom */
++static struct wl_output *target_output = NULL;
++static uint32_t target_output_global = 0;
++struct out_info { struct wl_output *wl; uint32_t global; };
++static void output_geometry(void *d, struct wl_output *o, int32_t x, int32_t y, int32_t pw, int32_t ph, int32_t sp, const char *mk, const char *md, int32_t tr) {}
++static void output_mode(void *d, struct wl_output *o, uint32_t f, int32_t w, int32_t h, int32_t r) {}
++static void output_done(void *d, struct wl_output *o) {}
++static void output_scale(void *d, struct wl_output *o, int32_t f) {}
++static void output_description(void *d, struct wl_output *o, const char *desc) {}
++static void output_name(void *d, struct wl_output *o, const char *name) {
++    struct out_info *oi = d;
++    if (want_output && !strcmp(name, want_output)) {
++        target_output = oi->wl;
++        target_output_global = oi->global;
++    }
++}
++static const struct wl_output_listener output_listener = {
++    .geometry = output_geometry, .mode = output_mode, .done = output_done,
++    .scale = output_scale, .name = output_name, .description = output_description,
++};
++
+ static uint32_t custom_width = 0;
+ static double width_ratio = 1.0;
+ static enum { DOCK_FULL = 0, DOCK_LEFT = 1, DOCK_RIGHT = 2 } dock_mode = DOCK_FULL;
+@@ -471,12 +500,19 @@ handle_global(void *data, struct wl_registry *registry, uint32_t name,
+             registry, name, &zwp_virtual_keyboard_manager_v1_interface, 1);
+     } else if (im_auto && strcmp(interface, zwp_input_method_manager_v2_interface.name) == 0) {
+         im_mgr = wl_registry_bind(registry, name, &zwp_input_method_manager_v2_interface, 1);
++    } else if (want_output && !strcmp(interface, wl_output_interface.name) && version >= 4) {
++        struct out_info *oi = malloc(sizeof(*oi));
++        oi->global = name;
++        oi->wl = wl_registry_bind(registry, name, &wl_output_interface, 4);
++        wl_output_add_listener(oi->wl, &output_listener, oi);
+     }
+ }
+ 
+ void
+ handle_global_remove(void *data, struct wl_registry *registry, uint32_t name)
+ {
++    if (target_output && name == target_output_global)
++        target_output = NULL;
+ }
+ 
+ static void
+@@ -658,6 +694,7 @@ layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *surface,
+ void
+ layer_surface_closed(void *data, struct zwlr_layer_surface_v1 *surface)
+ {
++    release_latched_mods();
+     zwlr_layer_surface_v1_destroy(surface);
+     wl_surface_destroy(draw_surf.surf);
+     run_display = false;
+@@ -680,6 +717,9 @@ usage(char *argv0)
+     fprintf(stderr, "  -R [int]    - Rounding radius in pixels\n");
+     fprintf(stderr, "  --fn [font] - Set font (e.g: DejaVu Sans 20)\n");
+     fprintf(stderr, "  --hidden    - Start hidden (send SIGUSR2 to show)\n");
++    fprintf(stderr, "  --fixed     - Keep the edge: ignore the Move key / SIGRTMIN+1\n");
++    fprintf(stderr, "  --top       - Dock to the top edge of the output (default: bottom)\n");
++    fprintf(stderr, "  --output NAME - Show on this output (e.g. eDP-2); also $WVKBD_OUTPUT\n");
+     fprintf(stderr, "  --no-popup             - Disable the key-press popup\n");
+     fprintf(stderr, "  --no-highlight         - Don't highlight a key while pressed\n");
+     fprintf(stderr, "  --no-feedback          - Disable all key-press feedback "
+@@ -738,6 +778,25 @@ list_layers()
+     }
+ }
+ 
++// Let go of every latched modifier: the key-up for each modifier key that is held down
++// (a latched Shift is KEY_LEFTSHIFT pressed and kept pressed), then an empty modifier state.
++// Used when the keyboard goes away by any road: hide, the compositor closing our surface,
++// SIGTERM/SIGINT/SIGHUP, a normal exit. Without the key-up the compositor can keep the
++// modifier down for the whole session, with nothing on screen to show or clear it.
++static void
++release_latched_mods(void)
++{
++    if (!keyboard.mods || !keyboard.vkbd) {
++        return;
++    }
++    uint32_t time = (uint32_t) (monotime() + keyboard.last_press_offset);
++    zwp_virtual_keyboard_v1_key_mods(keyboard.vkbd, time, keyboard.mods,
++                                     WL_KEYBOARD_KEY_STATE_RELEASED);
++    keyboard.mods = 0;
++    zwp_virtual_keyboard_v1_modifiers(keyboard.vkbd, 0, 0, 0, 0);
++    wl_display_flush(display);
++}
++
+ void
+ hide()
+ {
+@@ -749,6 +808,12 @@ hide()
+     uint32_t time = (uint32_t) (monotime() + keyboard.last_press_offset);
+     kbd_unpress_key(&keyboard, time);
+ 
++    // A latched modifier (Shift tapped, then the keyboard put away: docking the physical
++    // keyboard while this one was up does exactly that) would stay down for the whole
++    // session, with nothing on screen to show or clear it, and it silently broke every
++    // hyprgrass gesture (they bind with no modifier). Release them when the keyboard goes.
++    release_latched_mods();
++
+     if (wfs_draw_surf) {
+         wp_fractional_scale_v1_destroy(wfs_draw_surf);
+         wfs_draw_surf = NULL;
+@@ -812,12 +877,13 @@ show()
+             wp_viewporter_get_viewport(viewporter, draw_surf.surf);
+     }
+ 
+-    struct wl_output *current_output_data = NULL;
++    struct wl_output *current_output_data = target_output;
+ 
+     layer_surface = zwlr_layer_shell_v1_get_layer_surface(
+         layer_shell, draw_surf.surf, current_output_data, layer, namespace);
+ 
+-    anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
++    anchor = anchor_top ? ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP
++                        : ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
+     uint32_t req_w = 0;
+     if (dock_mode == DOCK_LEFT) {
+         anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
+@@ -880,7 +946,7 @@ refresh_available_dimension()
+ {
+     struct wl_surface *surface = wl_compositor_create_surface(compositor);
+     struct zwlr_layer_surface_v1 *layer_surface = zwlr_layer_shell_v1_get_layer_surface(
+-        layer_shell, surface, NULL, layer, namespace);
++        layer_shell, surface, target_output, layer, namespace);
+     zwlr_layer_surface_v1_set_anchor(layer_surface,
+                                      ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+                                      ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+@@ -1084,6 +1150,16 @@ main(int argc, char **argv)
+                 exit(1);
+             }
+             fc_font_pattern = estrdup(argv[++i]);
++        } else if (!strcmp(argv[i], "--fixed")) {
++            fixed_edge = true;
++        } else if (!strcmp(argv[i], "--top")) {
++            anchor_top = true;
++        } else if (!strcmp(argv[i], "--output")) {
++            if (i >= argc - 1) {
++                usage(argv[0]);
++                exit(1);
++            }
++            want_output = estrdup(argv[++i]);
+         } else if (!strcmp(argv[i], "-o")) {
+             keyboard.print = true;
+         } else if (!strcmp(argv[i], "-O")) {
+@@ -1217,6 +1293,8 @@ main(int argc, char **argv)
+     keyboard.surf = &draw_surf;
+     keyboard.popup_surf = &popup_draw_surf;
+ 
++    if (!want_output && getenv("WVKBD_OUTPUT") && *getenv("WVKBD_OUTPUT"))
++        want_output = estrdup(getenv("WVKBD_OUTPUT"));
+     struct wl_registry *registry = wl_display_get_registry(display);
+     wl_registry_add_listener(registry, &registry_listener, NULL);
+     wl_display_roundtrip(display);
+@@ -1287,7 +1365,12 @@ main(int argc, char **argv)
+     sigaddset(&signal_mask, SIGUSR1);
+     sigaddset(&signal_mask, SIGUSR2);
+     sigaddset(&signal_mask, SIGRTMIN);
++    sigaddset(&signal_mask, SIGRTMIN + 1);
+     sigaddset(&signal_mask, SIGPIPE);
++    // end on these like a normal exit (the default action would die with a modifier held)
++    sigaddset(&signal_mask, SIGTERM);
++    sigaddset(&signal_mask, SIGINT);
++    sigaddset(&signal_mask, SIGHUP);
+     if (sigprocmask(SIG_BLOCK, &signal_mask, NULL) == -1) {
+         die("Failed to disable handled signals: %d\n", errno);
+     }
+@@ -1321,11 +1404,26 @@ main(int argc, char **argv)
+                 show();
+             else if (si.ssi_signo == SIGRTMIN)
+                 toggle_visibility();
++            else if (si.ssi_signo == SIGRTMIN + 1) {
++                /* move to the other edge: re-create the surface anchored there */
++                if (!fixed_edge) {
++                    anchor_top = !anchor_top;
++                    if (layer_surface) {
++                        hide();
++                        show();
++                    }
++                }
++            }
+             else if (si.ssi_signo == SIGPIPE)
+                 pipewarn();
++            else if (si.ssi_signo == SIGTERM || si.ssi_signo == SIGINT ||
++                     si.ssi_signo == SIGHUP)
++                run_display = false;
+         }
+     }
+ 
++    release_latched_mods();   // SIGTERM, a closed surface, a lost compositor: nothing stays held
++
+     if (fc_font_pattern) {
+         free((void *)fc_font_pattern);
+         for (i = 0; i < countof(schemes); i++)

@@ -1,0 +1,14 @@
+[Unit]
+Description=Yoga Book: move the bottom screen's workspace to the top screen while the keyboard is docked or shown
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionPathExists=%h/.local/bin/yoga-bottom-reserve
+
+[Service]
+ExecStart=%h/.local/bin/yoga-bottom-reserve
+Restart=on-failure
+RestartSec=3
+SyslogIdentifier=yoga-bottom-reserve
+
+[Install]
+WantedBy=graphical-session.target

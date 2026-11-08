@@ -73,6 +73,70 @@ hyprlock_ready() {
   [[ $(readlink -f "$bin") == /nix/store/* ]] || return 0
   [[ -e /etc/pam.d/hyprlock && -x /run/wrappers/bin/unix_chkpwd ]]
 }
+# Yoga Book 9i, two things hyprlock does not do right by itself. Yoga only (the check is the DMI
+# product version); everything else uses the stock config.
+#  1. Its `path = screenshot` background comes out upside down on the top panel (mounted
+#     rotated 180 degrees, Hyprland transform 2): hyprlock does not undo the screencopy
+#     transform, so the blurred workspace behind the password box was flipped, and flashed
+#     flipped again as the lock faded out. grim captures in the logical (upright)
+#     orientation, so for each rotated panel capture it here and give hyprlock that image for
+#     the monitor, via one extra `background` per panel right after the stock one (the stock
+#     screenshot is then covered).
+#  2. The password box is drawn on every monitor. While the top panel is lit it is the one you
+#     look at, and a second box on the bottom panel (under the on-screen keyboard or the
+#     docked keyboard) is only in the way: with both laptop panels on, the box is drawn on
+#     every monitor except the bottom panel. With only one lit, or none of the laptop panels
+#     on (docked to external monitors), the stock config is untouched in this respect.
+# Both work on a copy of hyprlock.conf in ~/.cache/hyprlock. Prints the config to use (or
+# nothing: use the stock one).
+yoga_lock_conf() {
+  [[ $(< /sys/class/dmi/id/product_version) == *"Yoga Book 9"* ]] || return 0
+  command -v jq >/dev/null || return 0
+  local dir=${XDG_CACHE_HOME:-$HOME/.cache}/hyprlock src=$HOME/.config/hypr/hyprlock.conf
+  local conf=$dir/hyprlock.conf extra="" out png top bottom fields="" mons
+  [[ -r $src ]] || return 0
+  mkdir -p "$dir" || return 0
+  mons=$(hyprctl monitors -j) || return 0
+  if command -v grim >/dev/null; then
+    while read -r out; do
+      png=$dir/$out.png
+      grim -o "$out" "$png" 2>/dev/null || continue
+      extra+=$'\n'"background {
+    monitor = $out
+    path = $png
+    blur_passes = 3
+    blur_size = 8
+    noise = 0.02
+    brightness = 0.6
+}"$'\n'
+    done < <(jq -r '.[] | select(.transform != 0 and (.description | test("Samsung Display Corp"))) | .name' <<<"$mons")
+  fi
+  # the panels' output names, top first (yoga/hypr/yoga.lua)
+  if panels=$(hyprctl repl 'return table.concat({yoga_panel_outputs()}, ",")' 2>/dev/null) \
+      && [[ $panels =~ ^([^,\ ]+),([^,\ ]+)$ ]]; then
+    top=${BASH_REMATCH[1]} bottom=${BASH_REMATCH[2]}
+    if [[ $(jq -r --arg a "$top" --arg b "$bottom" \
+        '[.[] | select((.name == $a or .name == $b) and (.disabled | not))] | length' <<<"$mons") == 2 ]]; then
+      fields=$(jq -r --arg b "$bottom" '.[] | select(.disabled | not) | select(.name != $b) | .name' <<<"$mons" | tr '\n' ' ')
+    fi
+  fi
+  [[ -n $extra || -n $fields ]] || return 0
+  awk -v extra="$extra" -v fields="$fields" '
+    BEGIN { n = split(fields, names, " ") }
+    /^input-field[ ]*\{/ && n > 0 { infield = 1; blk = "" }
+    infield { blk = blk $0 "\n"; if ($0 ~ /^\}/) {
+        infield = 0
+        for (i = 1; i <= n; i++) { b = blk; sub(/monitor =[^\n]*/, "monitor = " names[i], b); printf "%s", b }
+      }
+      next }
+    {print}
+    /^background[ ]*\{/ {inbg=1}
+    inbg && /^\}/ && !done {print extra; done=1; inbg=0}
+  ' "$src" > "$conf.tmp" && mv "$conf.tmp" "$conf" && echo "$conf"
+}
+
+if [[ $1 == "--yoga-lock-conf" ]]; then yoga_lock_conf; exit 0; fi
+
 if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]] && hyprlock_ready; then
   # Already locked: nothing to do. A hyprlock that's been up a while without the
   # session being locked is a hung leftover, which would otherwise swallow every
@@ -85,6 +149,8 @@ if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]] && hyprlock_ready; then
     fi
     pkill -9 -x hyprlock
   fi
+  conf=$(yoga_lock_conf)
+  if [[ -n $conf ]]; then exec hyprlock -c "$conf"; fi
   exec hyprlock
 fi
 

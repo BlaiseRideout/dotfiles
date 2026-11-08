@@ -1,0 +1,17 @@
+# Yoga Book 9i virtual touchpad (and posture daemon): what a user-session daemon needs.
+#
+# - /dev/uinput: to create the virtual touchpad (and the posture daemon's virtual
+#   SW_TABLET_MODE switch). Normally root-only (0600); uaccess gives the logged-in
+#   seat's user an ACL, no "input" group membership needed. static_node makes
+#   systemd-tmpfiles create the node early if the module is loaded later.
+# - the bottom touchscreen's evdev node: read (and EVIOCGRAB) it to forward touches
+#   in the touchpad strip to the virtual touchpad. A stable name too.
+#
+# Installed to /etc/udev/rules.d by ansible/yoga.yaml on yoga-linux only.
+KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"
+
+ACTION=="remove", GOTO="yoga_touchpad_end"
+SUBSYSTEM=="input", KERNEL=="event*", \
+  ATTRS{name}=="INGENIC Gadget Serial and keyboard Touchscreen Bottom", \
+  TAG+="uaccess", SYMLINK+="input/yoga-touch-bottom"
+LABEL="yoga_touchpad_end"

@@ -1,0 +1,1403 @@
+#!/usr/bin/env python3
+"""yoga-posture: posture daemon and control CLI for the Lenovo Yoga Book 9i (13IMU9).
+
+Reads the two accelerometers (/sys/bus/iio), works out the hinge opening angle
+and the orientation, classifies the posture (laptop, flat, book, tent, tablet,
+closed), and applies it: rotation, arrangement and on/off of the two eDP panels
+through Hyprland (yoga_set_posture() in yoga/hypr/yoga.lua, which keeps the docked
+external-monitor layout), a virtual SW_TABLET_MODE switch (uinput), and the
+on-screen keyboard (yoga-osk). Notes: docs/yoga-book/posture-daemon.md.
+
+  yoga-posture daemon [--dry-run] [--no-switch] [--no-osk] [--debug]
+  yoga-posture status                  # what the daemon thinks (or one reading without it)
+  yoga-posture force <posture>         # laptop flat book[-left|-right] tent[-top|-bottom]
+                                       # tablet[-top|-bottom]  (suffix :0-3 sets the rotation)
+  yoga-posture auto                    # back to the sensors
+  yoga-posture flip-tent               # tent/tablet: use the other panel
+  yoga-posture cycle                   # auto -> laptop -> book -> tent -> tablet -> auto
+  yoga-posture log [-f] [-n N]         # the daemon's journal
+  yoga-posture reset                   # panels back to the plain laptop layout, now
+  yoga-posture apply <posture> [--revert SECONDS] [--dry-run]   # try a layout without the daemon
+  yoga-posture once                    # classify one live reading and show the layout
+  yoga-posture replay FILE [--continuous]   # classify a yoga-survey postures.csv
+
+Sensors are found by name and HID instance, never by iio device number. Tablet
+mode follows the hinge, not the keyboard dock. The daemon is also the ONE authority
+for the debounced dock position and everything derived from it (is the on-screen
+keyboard allowed, are the bottom screen's workspaces reserved, is its bar hidden...):
+it publishes $XDG_RUNTIME_DIR/yoga/state.json (yoga/bin/yoga_state.py,
+docs/yoga-book/state-machine.md) and enforces "no on-screen keyboard while docked".
+No third-party Python packages are needed.
+"""
+import argparse
+import collections
+import ctypes
+import csv
+import fcntl
+import glob
+import json
+import math
+import os
+import re
+import selectors
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import yoga_state   # noqa: E402  (the shared dock debounce, derived state, state file)
+
+# =============================================================================
+# TUNABLES. Everything that is a guess or a threshold is here. Override any of
+# them in ~/.config/yoga-posture.json, e.g. {"DEBOUNCE_S": 0.8, "PANEL_OFFSET":
+# {"top": 2, "bottom": 0}}, without editing this file (restart the daemon).
+# =============================================================================
+
+# --- sensors ---------------------------------------------------------------
+IIO_DIR = "/sys/bus/iio/devices"
+# Polling rate. Each sysfs read takes ~13 ms and there are six per sample. Polling faster than
+# about 4 samples a second makes the sensor hub stop updating one of the two accelerometers
+# (measured with the daemon stopped: a full cycle every ~0.16 s froze the bottom one, every
+# ~0.3 s did not); the daemon's own debounce is 0.5 s, so 2.5 Hz is plenty.
+RATE_HZ = 2.5
+CLOSED_RATE_HZ = 2.0     # lid closed: only watch the lid
+EMA = 0.5                # smoothing of the accelerometer vectors (1 = none)
+# The accelerometers are told apart by their HID sensor instance (the number
+# in .../HID-SENSOR-200073.<n>.auto): survey says instance 19 (the lower) is in
+# the lid, 20 is in the base. [verified by posture data: the base reads flat in
+# the laptop pose while the lid tilts]. SWAP_ACCELS flips that if it ever differs.
+SWAP_ACCELS = False
+
+# --- unverified physical assumptions (CHECK ON THE HARDWARE) ----------------
+# Hyprland transform of a panel = (physical rotation of the device + offset) % 4.
+# The top panel is mounted upside-down; the kernel (panel_orientation) and Hyprland already account for it,
+# so its transform is the same as the bottom panel's (yoga/hypr/config.lua, panels.top.transform = 0).
+# [derived from the sensor frames, verified only for the laptop posture]
+PANEL_OFFSET = {"top": 0, "bottom": 0}   # was top 2 until the kernel told Hyprland the panel is mounted upside down (video=eDP-1:panel_orientation=upside_down)
+# Physical rotation (quarter turns, in Hyprland/wl_output transform numbers)
+# for the edge of the device that points up, as the user sees the *bottom* panel
+# in its normal laptop orientation. Same convention as iio-sensor-proxy / iio-sway:
+# right edge up = 1 (90), upside down = 2, left edge up = 3 (270).
+# [derived; the 1 <-> 3 direction is the thing most likely to be backwards]
+QUAD_OF_ORIENTATION = {"normal": 0, "right-up": 1, "bottom-up": 2, "left-up": 3}
+# Book: which side the bottom panel is on when the left edge of the device is up
+# (the device turned clockwise). [derived]: bottom left, top right; the other
+# way round for right-up.
+BOOK_BOTTOM_LEFT_WHEN = "right-up"   # checked on the hardware: with "left-up" the screens were in the wrong order
+# Tent: both screens face outward, gravity cannot say which one the user sees.
+TENT_FACING_DEFAULT = "bottom"   # "bottom" or "top"; flip-tent toggles it live
+# Tablet: the panel that looks up wins; held upright, with neither clearly up, the last one stays.
+TABLET_FACING_DEFAULT = "bottom"
+# Flat on a table: stacked as in the laptop pose. True turns the top panel the
+# other way round (readable from the far side of the table).
+FLAT_TOP_FLIPPED = False
+# Postures that count as tablet mode (virtual SW_TABLET_MODE) and that pop up the
+# on-screen keyboard.
+TABLET_MODE_POSTURES = ("tablet", "tent")
+OSK_POSTURES = ()   # the keyboard is no longer shown by posture: only by its own button/gesture (yoga-osk)
+
+# --- classifier thresholds (degrees of hinge opening, g, seconds) --------------
+DEBOUNCE_S = 0.5
+BOOK_IN_G, BOOK_OUT_G = 0.80, 0.65     # |x| (gravity along the hinge) on both halves
+ANGLE_MIN_G = 0.15                     # gravity in the hinge-perpendicular plane needed to trust the angle
+TABLET_IN, TABLET_OUT = 335.0, 300.0
+# A laptop opened less than this with the lid switch still "open" is a tablet folded back
+# to back and not quite flat (the two gravity angles then differ by 165, not 180): nobody
+# uses a laptop open 30 degrees.
+TABLET_LOW_IN, TABLET_LOW_OUT = 30.0, 45.0
+TENT_IN, TENT_OUT = 255.0, 240.0
+FLAT_IN, FLAT_OUT = 10.0, 20.0         # +- degrees around 180
+FLAT_Z_IN, FLAT_Z_OUT = 0.90, 0.80     # both halves lying horizontal
+ORIENT_MIN_G = 0.45                    # in-plane gravity needed to change orientation
+ORIENT_HYST = 12.0                     # degrees beyond the 45 degree quadrant edge
+FACING_G = 0.35                        # tablet: |z| of the bottom half to change the facing panel
+LID_CLOSED_OPENING = 0.0
+# The lid (hall) sensor also trips when the halves fold back to back or the tablet sits in
+# its stand (hinge near 340), without the lid being closed: logind then suspends and
+# yoga/hypr/yoga.lua turns the panels off, both screens go dark. A "closed" lid reading while the
+# hinge was last seen at or above this opening is that false trip, not a closed lid (a real
+# closing passes through the smaller openings first). From this opening up logind's
+# lid-switch handling is also inhibited (set_inhibit).
+LID_GLITCH_ABOVE = 250.0
+SEAM_DEG = 25.0        # below this, an opening seen from >= 270 is back to back (360), not almost closed
+# A static device reads 1 g on each accelerometer. A reading far from that that does not
+# change (seen: the top sensor stuck at 1.58 g, identical samples, after a move into a
+# stand) is a sensor that has stopped reporting properly, not a posture: after this
+# many seconds the posture falls back to a plain laptop (both screens on, no tablet mode)
+# instead of acting on garbage; it recovers by itself when the readings are sane again.
+SENSOR_G_MIN, SENSOR_G_MAX = 0.6, 1.4
+SENSOR_BAD_AFTER_S = 2.0
+# One accelerometer (seen on the top one, several times) stops updating: its raw readings
+# stay bit-identical while the other keeps its normal noise and follows the machine. A
+# sensor whose raw values have not changed for FROZEN_AFTER_S while the other one changed
+# within the last FROZEN_OTHER_S is treated as frozen; the posture is then worked out
+# from the live half alone, assuming the hinge is flat (both halves share its
+# orientation), which gives both screens on and the right rotation for a book or a stand.
+FROZEN_AFTER_S, FROZEN_OTHER_S = 5.0, 2.0
+# After a resume from suspend the sensor hub wakes up slowly: the first samples are far from 1 g
+# (seen: 0.47 g) and one half can stay frozen for a while (the 2.5 Hz clock of the freeze check
+# does not advance in suspend). Seen on 2026-11-07: resuming in the laptop pose, the top half
+# looked frozen after 6 s, the fallback concluded "flat", and that committed posture change put
+# the on-screen keyboard (just raised for the lock screen) away and re-laid the panels. For this
+# long after a resume the sensor checks start afresh and a posture change is held back (a real
+# one is applied when the time is up; a lid closing is never held).
+RESUME_GRACE_S = 10.0
+
+# --- plumbing ---------------------------------------------------------------
+HYPRCTL = "hyprctl"
+OSK = os.environ.get("YOGA_OSK_BIN") or str(Path.home() / ".local/bin/yoga-osk")
+UINPUT = "/dev/uinput"
+SWITCH_NAME = "Yoga Posture Tablet Mode Switch"
+LOG_ANGLE_STEP = 10.0    # log the opening angle every time it moved this far
+# The cheap inputs (keyboard dock, on-screen keyboard visible) are sampled and the state
+# file rewritten this often, independently of the (slower) sensor loop. The dock debounce
+# itself is yoga_state.DOCK_DEBOUNCE_S: one number for every consumer.
+FAST_PERIOD_S = 0.25
+
+G = 9.80665
+CONFIG_FILE = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "yoga-posture.json"
+
+
+def load_overrides():
+    try:
+        data = json.loads(CONFIG_FILE.read_text())
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError) as e:
+        print(f"yoga-posture: ignoring {CONFIG_FILE}: {e}", file=sys.stderr)
+        return
+    for k, v in data.items():
+        if k in globals() and k.isupper():
+            globals()[k] = v
+        else:
+            print(f"yoga-posture: {CONFIG_FILE}: unknown setting {k}", file=sys.stderr)
+
+
+load_overrides()
+
+RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "yoga-posture"
+POSTURES = ("laptop", "flat", "book", "tent", "tablet", "closed")
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+# =============================================================================
+# Sensors
+# =============================================================================
+
+def read_text(p, default=None):
+    try:
+        return Path(p).read_text().strip()
+    except OSError:
+        return default
+
+
+def find_accels():
+    """-> (top_dir, bottom_dir) by name and instance, or None.
+
+    Order: an iio `label` that says display/lid/screen/top or base/keyboard/bottom
+    wins if present; otherwise the lower HID sensor instance is the lid."""
+    found = []
+    for d in sorted(Path(IIO_DIR).glob("iio:device*"), key=lambda p: int(p.name.split("device")[-1])):
+        if read_text(d / "name") != "accel_3d":
+            continue
+        m = re.search(r"HID-SENSOR-[^.]+\.(\d+)\.auto", str(d.resolve()))
+        inst = int(m.group(1)) if m else 10**6 + int(d.name.split("device")[-1])
+        found.append((inst, d, (read_text(d / "label") or "").lower()))
+    if len(found) != 2:
+        return None
+    found.sort()
+    top, bottom = found[0][1], found[1][1]
+    labels = [f[2] for f in found]
+    if any(w in labels[0] for w in ("display", "lid", "screen", "top")) or any(w in labels[1] for w in ("base", "keyboard", "bottom")):
+        top, bottom = found[0][1], found[1][1]
+    elif any(w in labels[1] for w in ("display", "lid", "screen", "top")) or any(w in labels[0] for w in ("base", "keyboard", "bottom")):
+        top, bottom = found[1][1], found[0][1]
+    if SWAP_ACCELS:
+        top, bottom = bottom, top
+    return top, bottom
+
+
+class Sensors:
+    """Reads both accelerometers (m/s^2 -> g), one raw read after the other: parallel reads
+    made one of the two sensors freeze (see read())."""
+
+    def __init__(self):
+        self.pool = ThreadPoolExecutor(max_workers=6)
+        self.raw_prev = [None, None]
+        self.last_change = [time.monotonic(), time.monotonic()]
+        self.grace_until = 0.0
+        self.frozen = (False, False)
+        self.dirs = None
+        self.scales = {}
+        self.fail = 0
+
+    def discover(self):
+        self.dirs = find_accels()
+        self.scales = {}
+        if self.dirs:
+            for d in self.dirs:
+                self.scales[d] = float(read_text(d / "in_accel_scale", "0.000009806"))
+        return self.dirs
+
+    def describe(self):
+        if not self.dirs:
+            return "no accelerometers"
+        t, b = self.dirs
+        return f"top={t.name} bottom={b.name} ({self._inst(t)}/{self._inst(b)})"
+
+    @staticmethod
+    def _inst(d):
+        m = re.search(r"HID-SENSOR-[^.]+\.(\d+)\.auto", str(d.resolve()))
+        return f"hid{m.group(1)}" if m else "?"
+
+    def read(self):
+        """-> (top, bottom) as (x, y, z) in g, or None (and rediscovers after repeated failures)."""
+        if not self.dirs and not self.discover():
+            return None
+        try:
+            # One read at a time. The reads used to run in parallel threads (a sysfs read costs ~13 ms),
+            # and then one of the two accelerometers kept returning bit-identical values: the sensor
+            # hub does not cope with simultaneous read requests. With the daemon stopped both sensors
+            # update on every read; sequential reads (~80 ms per sample) keep them both alive.
+            jobs = [(d, a) for d in self.dirs for a in "xyz"]
+            vals = [int((d / f"in_accel_{a}_raw").read_text()) for d, a in jobs]
+        except (OSError, ValueError):
+            self.fail += 1
+            if self.fail >= 3:       # renumbered after a resume, or gone
+                self.dirs = None
+            return None
+        self.fail = 0
+        now = time.monotonic()
+        if self.grace_until and now < self.grace_until:      # just resumed: judge the sensors afresh
+            self.last_change = [now, now]
+        for i in range(2):
+            raw = tuple(vals[3 * i:3 * i + 3])
+            if raw != self.raw_prev[i]:
+                self.raw_prev[i] = raw
+                self.last_change[i] = now
+        self.frozen = tuple(
+            now - self.last_change[i] >= FROZEN_AFTER_S and now - self.last_change[1 - i] < FROZEN_OTHER_S
+            for i in range(2))
+        out = []
+        for i, d in enumerate(self.dirs):
+            sc = self.scales[d] / G
+            out.append(tuple(v * sc for v in vals[3 * i:3 * i + 3]))
+        return out[0], out[1]
+
+
+def lid_closed():
+    for p in glob.glob("/proc/acpi/button/lid/*/state"):
+        s = read_text(p, "")
+        if "closed" in s:
+            return True
+    return False
+
+
+# =============================================================================
+# Classifier
+# =============================================================================
+
+def wrap180(a):
+    return (a + 180.0) % 360.0 - 180.0
+
+
+def orient_angle(x, y):
+    """Where "up" points in the screen plane, degrees: 0 = normal (up is -y),
+    +90 = right edge up (+x), 180 = upside down, -90 = left edge up."""
+    return math.degrees(math.atan2(x, -y))
+
+
+def quad_from_angle(theta, cur):
+    """Quarter-turn count (0 normal, 1 right-up, 2 upside-down, 3 left-up) with hysteresis."""
+    centre = {0: 0.0, 1: 90.0, 2: 180.0, 3: -90.0}[cur]
+    if abs(wrap180(theta - centre)) <= 45.0 + ORIENT_HYST:
+        return cur
+    return {0: 0, 1: 1, 2: 2, 3: 3}[min((0, 1, 2, 3), key=lambda q: abs(wrap180(theta - {0: 0.0, 1: 90.0, 2: 180.0, 3: -90.0}[q])))]
+
+
+class Reading:
+    __slots__ = ("posture", "opening", "facing", "quad", "lid", "top", "bottom", "reliable", "hinge_vertical",
+                 "sensor_bad")
+
+    def key(self):
+        """What the layout depends on; debounced as a whole."""
+        p = self.posture
+        facing = self.facing if p in ("tent", "tablet") else None
+        quad = self.quad if p in ("book", "tent", "tablet") else None
+        return (p, facing, quad)
+
+
+class Classifier:
+    def __init__(self):
+        self.top = self.bottom = None      # smoothed vectors, g
+        self.opening = None                # unwrapped hinge opening, degrees (0 closed, 180 flat, 360 back to back)
+        self.posture = "laptop"
+        self.hinge_vertical = False
+        self.bad_since = None
+        self.sensor_bad_logged = False
+        self.quad = 0
+        self.facing_auto = TABLET_FACING_DEFAULT
+        self.flip = False                  # manual flip of the facing panel (tent/tablet)
+
+    def _smooth(self, old, new):
+        if old is None:
+            return new
+        return tuple(o + EMA * (n - o) for o, n in zip(old, new))
+
+    def update(self, top, bottom, lid, force=None):
+        self.top = self._smooth(self.top, top)
+        self.bottom = self._smooth(self.bottom, bottom)
+        xt, yt, zt = self.top
+        xb, yb, zb = self.bottom
+        r = Reading()
+        r.lid, r.top, r.bottom = lid, self.top, self.bottom
+
+        # hinge opening: angle between the two gravity vectors in the y-z plane
+        mt, mb = math.hypot(yt, zt), math.hypot(yb, zb)
+        r.reliable = min(mt, mb) > ANGLE_MIN_G
+        gt, gb = math.sqrt(xt * xt + yt * yt + zt * zt), math.sqrt(xb * xb + yb * yb + zb * zb)
+        now_m = time.monotonic()
+        if SENSOR_G_MIN <= gt <= SENSOR_G_MAX and SENSOR_G_MIN <= gb <= SENSOR_G_MAX:
+            self.bad_since = None
+        elif self.bad_since is None:
+            self.bad_since = now_m
+        r.sensor_bad = self.bad_since is not None and now_m - self.bad_since > SENSOR_BAD_AFTER_S
+        if r.sensor_bad != self.sensor_bad_logged:
+            self.sensor_bad_logged = r.sensor_bad
+            log(f"accelerometers implausible (top {gt:.2f} g, bottom {gb:.2f} g): treating the posture as a laptop"
+                if r.sensor_bad else "accelerometers plausible again")
+        if lid and self.opening is not None and self.opening >= LID_GLITCH_ABOVE and not force:
+            lid = False                    # the sensor tripped in the fold/stand, see LID_GLITCH_ABOVE
+            r.lid = False
+        if lid:
+            self.opening = LID_CLOSED_OPENING
+        elif r.reliable:
+            raw = (180.0 - wrap180(math.degrees(math.atan2(yt, zt) - math.atan2(yb, zb)))) % 360.0
+            if self.opening is None:
+                # no history: next to 0/360 with the lid open is back to back, not almost closed
+                self.opening = 360.0 if (raw < TABLET_LOW_IN or raw > 345.0) else raw
+            else:
+                # raw is already the opening in [0, 360). The only ambiguity is back to back (360)
+                # versus almost closed (0): there the two gravity angles sit at +-180 degrees
+                # apart and the estimate jitters across the 360/0 seam, so near 0 keep the side
+                # we were on. (Do NOT track it by continuity: stepping from 360 down to a
+                # laptop angle is a difference of more than 180 degrees "the short way", which
+                # pinned the opening at 360 and left the top screen off in the upright stand.)
+                if raw < SEAM_DEG and self.opening >= 270.0:
+                    self.opening = 360.0
+                else:
+                    self.opening = raw
+        elif self.opening is None:
+            self.opening = 180.0           # hinge vertical, nothing known yet: spread open
+        r.opening = self.opening
+
+        # hinge vertical (gravity along the hinge axis on both halves, same sign)
+        xmin = min(abs(xt), abs(xb))
+        same_sign = xt * xb > 0
+        self.hinge_vertical = same_sign and xmin > (BOOK_OUT_G if self.hinge_vertical else BOOK_IN_G)
+        r.hinge_vertical = self.hinge_vertical
+
+        # tablet: which panel looks up (screen normal is -z)
+        if zb < -FACING_G:
+            self.facing_auto = "bottom"
+        elif zb > FACING_G:
+            self.facing_auto = "top"
+
+        op, cur = self.opening, self.posture
+        if force:
+            post = force
+        elif lid:
+            post = "closed"
+        elif r.sensor_bad:
+            post = "laptop"                # see SENSOR_G_MIN
+        elif self.hinge_vertical:
+            post = "book"
+        elif op >= (TABLET_OUT if cur == "tablet" else TABLET_IN):
+            post = "tablet"
+        elif op <= (TABLET_LOW_OUT if cur == "tablet" else TABLET_LOW_IN):
+            post = "tablet"
+        elif op >= (TENT_OUT if cur == "tent" else TENT_IN):
+            post = "tent"
+        elif (abs(op - 180.0) < (FLAT_OUT if cur == "flat" else FLAT_IN)
+              and min(abs(zt), abs(zb)) > (FLAT_Z_OUT if cur == "flat" else FLAT_Z_IN)):
+            post = "flat"
+        else:
+            post = "laptop"
+        self.posture = r.posture = post
+
+        facing = TENT_FACING_DEFAULT if post == "tent" else self.facing_auto
+        if self.flip:
+            facing = "top" if facing == "bottom" else "bottom"
+        r.facing = facing
+
+        # orientation: of the facing panel (tent, tablet) or of the pair (book)
+        ref = None
+        if post == "book":
+            ref = ((xt + xb) / 2.0, (yt + yb) / 2.0)
+        elif post in ("tent", "tablet"):
+            ref = (xt, yt) if facing == "top" else (xb, yb)
+        if ref and math.hypot(*ref) >= ORIENT_MIN_G:
+            self.quad = quad_from_angle(orient_angle(*ref), self.quad)
+        r.quad = self.quad
+        return r
+
+
+# =============================================================================
+# Layouts
+# =============================================================================
+
+def other(side):
+    return "top" if side == "bottom" else "bottom"
+
+
+def layout_for(key):
+    """key = (posture, facing, quad) -> dict(arrange, top, bottom, posture).
+
+    Panel transform = (physical quad + PANEL_OFFSET) % 4."""
+    posture, facing, quad = key
+
+    def tf(panel, phys):
+        return (phys + PANEL_OFFSET[panel]) % 4
+
+    if posture in ("laptop", "flat", "closed"):
+        flip = FLAT_TOP_FLIPPED and posture == "flat"
+        return {"posture": posture, "arrange": "stack",
+                "top": {"on": True, "transform": tf("top", 2 if flip else 0)},
+                "bottom": {"on": True, "transform": tf("bottom", 0)}}
+    if posture == "book":
+        bl = quad == QUAD_OF_ORIENTATION[BOOK_BOTTOM_LEFT_WHEN]
+        return {"posture": posture, "arrange": "row_bottom_left" if bl else "row_top_left",
+                "top": {"on": True, "transform": tf("top", quad)},
+                "bottom": {"on": True, "transform": tf("bottom", quad)}}
+    # tent / tablet: the facing panel only
+    lay = {"posture": posture, "arrange": "stack",
+           "top": {"on": False, "transform": tf("top", 0)},
+           "bottom": {"on": False, "transform": tf("bottom", 0)}}
+    lay[facing] = {"on": True, "transform": tf(facing, quad)}
+    return lay
+
+
+def lua_call(lay, pid):
+    def p(d):
+        return "{ on = %s, transform = %d }" % ("true" if d["on"] else "false", d["transform"])
+    return ('return yoga_set_posture({ posture = "%s", arrange = "%s", pid = %d, top = %s, bottom = %s })'
+            % (lay["posture"], lay["arrange"], pid, p(lay["top"]), p(lay["bottom"])))
+
+
+def describe_layout(lay):
+    def p(n):
+        d = lay[n]
+        return f"{n} {'on' if d['on'] else 'off'} t{d['transform']}"
+    return f"{p('top')}, {p('bottom')}, {lay['arrange']}"
+
+
+def parse_force(text):
+    """'tablet-top:1' -> (posture, facing or None, quad or None)."""
+    quad = None
+    if ":" in text:
+        text, q = text.split(":", 1)
+        quad = int(q) % 4
+    facing = None
+    for side in ("top", "bottom"):
+        if text.endswith("-" + side):
+            facing, text = side, text[:-len(side) - 1]
+    if text.endswith("-left-up") or text.endswith("-left"):
+        quad, text = QUAD_OF_ORIENTATION["left-up"], text.rsplit("-left", 1)[0] if text.endswith("-left") else text[:-8]
+    elif text.endswith("-right-up") or text.endswith("-right"):
+        quad, text = QUAD_OF_ORIENTATION["right-up"], text.rsplit("-right", 1)[0] if text.endswith("-right") else text[:-9]
+    if text not in POSTURES or text == "closed":
+        raise ValueError(f"unknown posture {text!r}: use laptop flat book tent tablet "
+                         "(optional -top/-bottom, -left/-right for book, :0-3 rotation)")
+    return text, facing, quad
+
+
+# =============================================================================
+# Outputs: Hyprland, tablet-mode switch, on-screen keyboard
+# =============================================================================
+
+def hypr_env():
+    """Environment with a valid HYPRLAND_INSTANCE_SIGNATURE (the newest live
+    instance when the unit did not inherit one)."""
+    env = dict(os.environ)
+    rt = Path(env.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "hypr"
+    sig = env.get("HYPRLAND_INSTANCE_SIGNATURE")
+    if sig and (rt / sig).is_dir():
+        return env
+    best = None
+    for d in rt.glob("*/hyprland.lock"):
+        try:
+            pid = int(d.read_text().split()[0])
+            os.kill(pid, 0)
+        except (OSError, ValueError, IndexError):
+            continue
+        t = d.stat().st_mtime
+        if best is None or t > best[0]:
+            best = (t, d.parent.name)
+    if best:
+        env["HYPRLAND_INSTANCE_SIGNATURE"] = best[1]
+    return env
+
+
+def hypr_repl(code, dry=False, timeout=8):
+    """Run Lua in the compositor's config state. -> (ok, output)."""
+    if dry:
+        log(f"[dry-run] hyprctl repl {code!r}")
+        return True, "dry-run"
+    try:
+        p = subprocess.run([HYPRCTL, "repl", code], capture_output=True, text=True, timeout=timeout, env=hypr_env())
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, str(e)
+    out = (p.stdout + p.stderr).strip()
+    return (p.returncode == 0 and not out.startswith("error")), out
+
+
+class TabletSwitch:
+    """A virtual evdev device that only reports SW_TABLET_MODE (raw /dev/uinput
+    ioctls; python-evdev is not needed). Needs write access to /dev/uinput
+    (yoga/udev/62-yoga-uinput.rules); without it the switch is skipped, once."""
+
+    EV_SYN, EV_SW, SW_TABLET_MODE = 0, 5, 1
+    UI_SET_EVBIT, UI_SET_SWBIT = 0x40045564, 0x4004556D
+    UI_DEV_SETUP, UI_DEV_CREATE, UI_DEV_DESTROY = 0x405C5503, 0x5501, 0x5502
+
+    def __init__(self, dry=False, enabled=True):
+        self.fd = None
+        self.state = None
+        self.dry = dry
+        self.note = "disabled by option"
+        if enabled and not dry:
+            self.open()
+        elif dry:
+            self.note = "dry-run"
+
+    def open(self):
+        try:
+            fd = os.open(UINPUT, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError as e:
+            self.note = f"{UINPUT}: {e.strerror}"
+            log(f"tablet-mode switch skipped ({self.note}); see docs/yoga-book/posture-daemon.md")
+            return
+        try:
+            fcntl.ioctl(fd, self.UI_SET_EVBIT, self.EV_SW)
+            fcntl.ioctl(fd, self.UI_SET_SWBIT, self.SW_TABLET_MODE)
+            setup = struct.pack("HHHH80sI", 0x06, 0x17EF, 0x6162, 1, SWITCH_NAME.encode(), 0)
+            fcntl.ioctl(fd, self.UI_DEV_SETUP, setup)
+            fcntl.ioctl(fd, self.UI_DEV_CREATE)
+        except OSError as e:
+            os.close(fd)
+            self.note = f"uinput setup failed: {e.strerror}"
+            log(f"tablet-mode switch skipped ({self.note})")
+            return
+        self.fd = fd
+        self.note = f"{SWITCH_NAME} created"
+        log(f"tablet-mode switch: {self.note}")
+        time.sleep(0.3)      # let the compositor open it before the first event
+
+    def _event(self, etype, code, value):
+        os.write(self.fd, struct.pack("llHHi", 0, 0, etype, code, value))
+
+    def set(self, on):
+        if on == self.state:
+            return
+        self.state = on
+        if self.dry:
+            log(f"[dry-run] SW_TABLET_MODE={int(on)}")
+        elif self.fd is not None:
+            try:
+                self._event(self.EV_SW, self.SW_TABLET_MODE, int(on))
+                self._event(self.EV_SYN, 0, 0)
+            except OSError as e:
+                log(f"tablet-mode switch write failed: {e}")
+
+    def close(self):
+        if self.fd is not None:
+            try:
+                fcntl.ioctl(self.fd, self.UI_DEV_DESTROY)
+            except OSError:
+                pass
+            os.close(self.fd)
+            self.fd = None
+
+
+class Osk:
+    """yoga-osk show/hide. The daemon only ever HIDES it (never by a posture change shows it);
+    `show` is kept for the OSK_POSTURES tunable."""
+
+    def __init__(self, dry=False, enabled=True):
+        self.dry, self.enabled = dry, enabled
+        self.out = None          # connector wvkbd was last started for (None = the default, the bottom panel)
+
+    def _run(self, args, env=None):
+        if self.dry:
+            log(f"[dry-run] {' '.join(args)}" + (f" ({env})" if env else ""))
+            return
+        e = hypr_env()
+        e.update(env or {})
+        try:
+            subprocess.Popen(args, env=e, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as ex:
+            log(f"yoga-osk: {ex}")
+
+    def show(self, output=None, default_output=None):
+        if not self.enabled:
+            return
+        env = {}
+        if output:
+            env["YOGA_OSK_OUTPUT"] = output
+            if output != (self.out or default_output) and not self.dry:
+                # laid out for another screen: stop it gracefully (it lets go of its modifiers), start afresh
+                subprocess.run([OSK, "stop"], check=False, env=hypr_env(), timeout=5)
+            self.out = output
+        self._run([OSK, "show"], env)
+
+    def hide(self):
+        if self.enabled:
+            self._run([OSK, "hide"])
+
+    def hide_sync(self, wait=0.8):
+        """Put the keyboard away NOW and wait until its layer is gone, so whatever follows
+        (a layout change, the dock strip of the touchpad) never sees it half there.
+        -> True if it was visible."""
+        if not self.enabled:
+            return False
+        if self.dry:
+            log(f"[dry-run] {OSK} hide (and wait)")
+            return False
+        if not yoga_state.osk_visible():
+            return False
+        try:
+            subprocess.run([OSK, "hide"], env=hypr_env(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=3)
+        except (OSError, subprocess.TimeoutExpired) as ex:
+            log(f"yoga-osk hide: {ex}")
+        t0 = time.monotonic()
+        while yoga_state.osk_visible() and time.monotonic() - t0 < wait:
+            time.sleep(0.05)
+        return True
+
+
+# =============================================================================
+# The daemon
+# =============================================================================
+
+class Daemon:
+    def __init__(self, dry=False, switch=True, osk=True, debug=False):
+        self.dry, self.debug = dry, debug
+        self.sensors = Sensors()
+        self.grace_until = 0.0              # after a resume: hold posture changes until then
+        self.cls = Classifier()
+        self.switch = TabletSwitch(dry=dry, enabled=switch)
+        self.osk = Osk(dry=dry, enabled=osk)
+        self.inhibit_proc = None         # systemd-inhibit holding logind's lid-switch handling off
+        self.committed = None            # (posture, facing, quad) in force
+        self.pending = None
+        self.pending_since = 0.0
+        self.forced = None               # (posture, facing, quad) tokens, or None
+        self.applied = None              # layout dict last applied successfully
+        self.want = None                 # layout we want applied
+        self.apply_failed_at = 0.0
+        self.apply_logged_fail = False
+        self.last_logged_opening = None
+        self.last = None                 # last Reading
+        self.sensor_fail_logged = False
+        self.ring = collections.deque(maxlen=200)
+        self.outputs = None              # {"top": "eDP-1", "bottom": "eDP-2"}
+        self.stop = False
+        self.sock = None
+        # the effective state (docs/yoga-book/state-machine.md)
+        self.dock = yoga_state.DockTracker()
+        self.osk_hold = yoga_state.Hold()
+        self.osk_seen = False            # a wvkbd layer exists right now
+        self.next_fast = 0.0
+        self.sensor_status = "unreadable"
+        self.epoch = 0                   # counts applied layouts (a posture/panel change)
+        self.seq = 0                     # counts changes of the published state
+        self.last_key = None
+        self.osk_hide_at = -10.0
+        self.guard_on = False            # the fold guard (see set_inhibit)
+        self.state_file = yoga_state.state_path()
+        self.publish_state = (not dry) or bool(os.environ.get("YOGA_STATE_FILE"))
+        self._osk_facing = None
+        self.sock_path = Path(os.environ.get("YOGA_POSTURE_SOCK") or (RUNTIME / ("ctl-dry.sock" if dry else "ctl.sock")))
+        self.sel = selectors.DefaultSelector()
+
+    # -- control socket ------------------------------------------------------
+    def open_socket(self):
+        RUNTIME.mkdir(parents=True, exist_ok=True)
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            self.sock_path.unlink()
+        except FileNotFoundError:
+            pass
+        s.bind(str(self.sock_path))
+        os.chmod(self.sock_path, 0o600)
+        s.listen(4)
+        s.setblocking(False)
+        self.sock = s
+        self.sel.register(s, selectors.EVENT_READ)
+
+    def serve(self, timeout):
+        for key, _ in self.sel.select(timeout):
+            conn, _ = key.fileobj.accept()
+            conn.settimeout(1.0)
+            try:
+                req = json.loads(conn.makefile().readline() or "{}")
+                reply = self.handle(req)
+            except Exception as e:      # a bad client must not stop the daemon
+                reply = {"ok": False, "msg": f"error: {e}"}
+            try:
+                conn.sendall((json.dumps(reply) + "\n").encode())
+            except OSError:
+                pass
+            conn.close()
+
+    def handle(self, req):
+        cmd, arg = req.get("cmd"), req.get("arg")
+        if cmd == "status":
+            return {"ok": True, "msg": self.status_text()}
+        if cmd == "force":
+            self.forced = parse_force(arg)
+            log(f"forced: {arg}")
+            self.reclassify_now(time.monotonic())
+            return {"ok": True, "msg": f"forced {arg}\n" + self.status_text()}
+        if cmd == "auto":
+            self.forced = None
+            self.cls.flip = False
+            log("back to automatic")
+            self.reclassify_now(time.monotonic())
+            return {"ok": True, "msg": "automatic\n" + self.status_text()}
+        if cmd == "flip":
+            if not self.committed or self.committed[0] not in ("tent", "tablet"):
+                return {"ok": False, "msg": "flip-tent only does something in tent or tablet"}
+            if self.forced and self.forced[1]:
+                self.forced = (self.forced[0], other(self.forced[1]), self.forced[2])
+            else:
+                self.cls.flip = not self.cls.flip
+            log("flip-tent: using the other panel")
+            self.reclassify_now(time.monotonic())
+            return {"ok": True, "msg": self.status_text()}
+        if cmd == "cycle":
+            order = [None, "laptop", "book", "tent", "tablet"]
+            cur = self.forced[0] if self.forced else None
+            nxt = order[(order.index(cur) + 1) % len(order)]
+            return self.handle({"cmd": "auto"} if nxt is None else {"cmd": "force", "arg": nxt})
+        if cmd == "reset":
+            self.forced = ("laptop", None, None)
+            return self.handle({"cmd": "force", "arg": "laptop"})
+        return {"ok": False, "msg": f"unknown command {cmd!r}"}
+
+    def status_text(self):
+        r = self.last
+        if r is None:
+            return "no reading yet"
+        key = self.committed
+        lines = [
+            f"posture   {key[0] if key else '?'}" + (f"  (forced {self.forced[0]})" if self.forced else "  (auto)")
+            + ("  [flipped]" if self.cls.flip else ""),
+            f"opening   {r.opening:.1f} deg   lid {'closed' if r.lid else 'open'}"
+            + ("   (hinge vertical: angle held)" if r.hinge_vertical or not r.reliable else ""),
+            f"facing    {key[1] if key and key[1] else '-'}   rotation {key[2] if key and key[2] is not None else '-'}"
+            + (f" ({[k for k, v in QUAD_OF_ORIENTATION.items() if v == key[2]][0]})" if key and key[2] is not None else ""),
+            f"gravity   top {tuple(round(v, 2) for v in r.top)} g   bottom {tuple(round(v, 2) for v in r.bottom)} g   (sensor says: {r.posture})",
+            f"layout    {describe_layout(self.applied) if self.applied else 'not applied'}",
+            f"dock      position {self.dock.raw} raw / {self.dock.eff} effective   osk "
+            f"{'visible' if self.osk_seen else 'hidden'}   screens {self.derived()['screens']}   sensors {self.sensor_status}",
+            "want      " + " ".join(f"{k}={int(v) if isinstance(v, bool) else v}" for k, v in self.derived().items()),
+            f"switch    {self.switch.note}; SW_TABLET_MODE={self.switch.state}",
+            f"sensors   {self.sensors.describe()}" + ("   [dry-run]" if self.dry else ""),
+        ]
+        return "\n".join(lines)
+
+    # -- state machine ---------------------------------------------------------
+    def effective_key(self, r):
+        """The layout key for a reading, with a forced posture's tokens applied."""
+        key = list(r.key())
+        if self.forced:
+            post, facing, quad = self.forced
+            if facing and post in ("tent", "tablet"):
+                key[1] = facing
+            if quad is not None and post in ("book", "tent", "tablet"):
+                key[2] = quad
+        return tuple(key)
+
+    def classify(self, top_bottom, lid):
+        force = self.forced[0] if self.forced else None
+        r = self.cls.update(*top_bottom, lid, force=force)
+        self.last = r
+        return r
+
+    def set_inhibit(self, on):
+        """Hold (or drop) an inhibitor on logind's lid-switch handling: while the hinge is
+        folded back the lid sensor can read "closed", and logind would suspend. The same condition
+        is also written to $XDG_RUNTIME_DIR/yoga/folded (our pid) for yoga/hypr/yoga.lua, which
+        otherwise only knows the COMMITTED posture (0.5 s behind): it must not darken the panels
+        or suspend for a lid reading in that window either."""
+        if self.dry:
+            return
+        self.set_fold_guard(on)
+        p = self.inhibit_proc
+        if on and (p is None or p.poll() is not None):
+            try:
+                self.inhibit_proc = subprocess.Popen(
+                    ["systemd-inhibit", "--what=handle-lid-switch", "--who=yoga-posture",
+                     "--why=hinge folded back: the lid sensor trips without the lid being closed",
+                     "--mode=block", "sleep", "infinity"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                log("lid-switch handling inhibited (hinge folded back)")
+            except OSError as ex:
+                self.inhibit_proc = None
+                log(f"cannot inhibit the lid switch: {ex}")
+        elif not on and p is not None:
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+            self.inhibit_proc = None
+            log("lid-switch handling restored")
+
+    def set_fold_guard(self, on):
+        if on == self.guard_on:
+            return
+        self.guard_on = on
+        path = yoga_state.fold_guard_path()
+        try:
+            if on:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"{os.getpid()}\n")
+            else:
+                path.unlink()
+        except OSError:
+            pass
+
+    # -- the effective state: dock, on-screen keyboard, what follows from them ------------------
+    def panels_now(self):
+        lay = self.applied or self.want
+        if lay:
+            return {"top": dict(lay["top"]), "bottom": dict(lay["bottom"])}
+        return {"top": dict(yoga_state.DEFAULT_PANELS["top"]), "bottom": dict(yoga_state.DEFAULT_PANELS["bottom"])}
+
+    def derived(self):
+        post = self.committed[0] if self.committed else "laptop"
+        return yoga_state.derive(self.dock.eff or 0, self.osk_hold.value, post, self.panels_now())
+
+    def fast(self, now):
+        """Sample the dock and the on-screen keyboard (4 Hz, no sensors), keep the invariant
+        "no on-screen keyboard while the keyboard is docked", publish the state."""
+        raw = yoga_state.read_dock_raw()
+        old_raw, old_eff = self.dock.raw, self.dock.eff
+        self.dock.update(raw, now)
+        if self.dock.raw != old_raw and old_raw is not None:
+            log(f"keyboard_position {old_raw} -> {self.dock.raw}")
+        if self.dock.eff != old_eff:
+            log(f"keyboard dock {'-' if old_eff is None else old_eff} -> {self.dock.eff}"
+                + (f" (0 for {yoga_state.DOCK_DEBOUNCE_S} s)" if self.dock.eff == 0 and old_eff is not None else ""))
+        self.osk_seen = yoga_state.osk_visible()
+        self.osk_hold.update(self.osk_seen, now)
+        want = self.derived()
+        if self.osk_seen and not want["osk_allowed"] and now - self.osk_hide_at >= 1.0:
+            # the keyboard docked (or a show raced the dock): put the on-screen one away FIRST, then
+            # publish the dock state, so that the touchpad and the reserve never see both at once
+            self.osk_hide_at = now
+            log("keyboard docked: hiding the on-screen keyboard" if self.dock.eff else "no screen lit: hiding the on-screen keyboard")
+            if self.osk.hide_sync():
+                self.osk_seen = False
+                self.osk_hold.value = False
+                want = self.derived()
+        self.publish(want)
+
+    def publish(self, want):
+        r = self.last
+        post = self.committed[0] if self.committed else None
+        content = {
+            "dock": {"raw": self.dock.raw, "eff": self.dock.eff},
+            "posture": post, "facing": self.committed[1] if self.committed else None,
+            "rotation": self.committed[2] if self.committed else None,
+            "tablet_mode": post in TABLET_MODE_POSTURES,
+            "forced": bool(self.forced), "lid_closed": bool(r.lid) if r else False, "fold_guard": self.guard_on,
+            "sensors": self.sensor_status,
+            "panels": self.panels_now(), "screens": want["screens"], "epoch": self.epoch,
+            "osk": {"visible": self.osk_seen, "held": self.osk_hold.value},
+            "want": want,
+        }
+        key = json.dumps(content, sort_keys=True)
+        if key != self.last_key:
+            self.last_key = key
+            self.seq += 1
+        if not self.publish_state:
+            return
+        data = dict(content, v=yoga_state.STATE_VERSION, pid=os.getpid(), mono=time.monotonic(), ts=round(time.time(), 2),
+                    seq=self.seq, opening=round(r.opening, 1) if r else None)
+        try:
+            yoga_state.write_json_atomic(self.state_file, data)
+        except OSError:
+            pass
+
+    def unpublish(self):
+        if self.publish_state:
+            try:
+                self.state_file.unlink()
+            except OSError:
+                pass
+
+    def step(self, now):
+        top_bottom = self.sensors.read()
+        lid = lid_closed()
+        if top_bottom is None:
+            self.sensor_status = "unreadable"
+            if not self.sensor_fail_logged:
+                log(f"cannot read the accelerometers ({self.sensors.describe()}); retrying")
+                self.sensor_fail_logged = True
+            return
+        if self.sensor_fail_logged:
+            log(f"accelerometers back: {self.sensors.describe()}")
+            self.sensor_fail_logged = False
+        fr = self.sensors.frozen
+        if fr != getattr(self, "_frozen_logged", (False, False)):
+            self._frozen_logged = fr
+            log("accelerometer frozen: " + ("top" if fr[0] else "bottom" if fr[1] else "none") +
+                (" (using the other half, assuming the hinge is flat)" if any(fr) else " (recovered)"))
+        if fr[0] and not fr[1]:
+            top_bottom = (top_bottom[1], top_bottom[1])
+        elif fr[1] and not fr[0]:
+            top_bottom = (top_bottom[0], top_bottom[0])
+        self.sensor_status = ("frozen-top" if fr[0] and not fr[1] else "frozen-bottom" if fr[1] and not fr[0] else "ok")
+        in_grace = now < self.grace_until
+        if in_grace:
+            self.cls.bad_since = None
+        r = self.classify(top_bottom, lid)
+        if r.sensor_bad:
+            self.sensor_status = "implausible"
+        self.set_inhibit(r.opening >= LID_GLITCH_ABOVE or r.posture in ("tablet", "tent"))
+        self.ring.append((time.time(), round(r.opening, 1), r.posture, r.facing, r.quad))
+        if self.debug:
+            log(f"sample opening={r.opening:.1f} posture={r.posture} facing={r.facing} quad={r.quad} "
+                f"top={tuple(round(v, 2) for v in r.top)} bottom={tuple(round(v, 2) for v in r.bottom)}")
+        if (self.last_logged_opening is None or abs(r.opening - self.last_logged_opening) >= LOG_ANGLE_STEP):
+            self.last_logged_opening = r.opening
+            log(f"angle {r.opening:.0f} deg ({r.posture}{', hinge vertical' if r.hinge_vertical else ''}"
+                f"{', angle held' if not r.reliable else ''})")
+        key = self.effective_key(r)
+        if (in_grace and not self.forced and self.committed is not None and key != self.committed
+                and self.committed[0] != "closed" and key[0] != "closed"):
+            self.pending = None            # just resumed: do not act on the sensor hub's first samples
+        elif self.forced or self.committed is None:
+            self.committed_apply(key, now)
+        elif key == self.committed:
+            self.pending = None
+        else:
+            if key != self.pending:
+                self.pending, self.pending_since = key, now
+            elif now - self.pending_since >= DEBOUNCE_S:
+                self.committed_apply(key, now)
+                self.pending = None
+
+    def reclassify_now(self, now):
+        """After a manual change: apply right away, from the last sensor vectors."""
+        if self.cls.top is None:
+            return
+        r = self.classify((self.cls.top, self.cls.bottom), self.last.lid if self.last else False)
+        self.pending = None
+        self.committed_apply(self.effective_key(r), now)
+
+    def committed_apply(self, key, now):
+        old = self.committed
+        self.committed = key
+        post = key[0]
+        if old is None or old[0] != post:
+            if old and not self.forced and self.cls.flip and old[0] != post:
+                self.cls.flip = False
+            r = self.last
+            log(f"posture {old[0] if old else '-'} -> {post}  opening {r.opening:.0f} deg, lid {'closed' if r.lid else 'open'}"
+                f", facing {key[1]}, rotation {key[2]}" + (" (forced)" if self.forced else ""))
+        elif old != key:
+            log(f"{post}: facing {key[1]} rotation {key[2]} (was {old[1]}, {old[2]})")
+        self.want = layout_for(key)
+        # A posture or panel change puts the on-screen keyboard away FIRST (it was laid out for the
+        # screens as they were: docked to the top of the bottom screen with a touchpad under it, or
+        # floating over the one lit screen), and waits for its layer to be gone, before the panels
+        # change under it. It is never raised by a posture change. Starting up: only when the new
+        # posture is not the plain one the previous daemon left behind.
+        first = old is None
+        if (not first and (old[0] != post or key[1] != self._osk_facing)) or (first and post not in ("laptop", "flat")):
+            if self.osk.hide_sync():
+                self.osk_seen = False
+                self.osk_hold.value = False
+        self._osk_facing = key[1]
+        self.try_apply(now, post, old[0] if old else None, key)
+        try:
+            if self.dry:
+                raise OSError
+            RUNTIME.mkdir(parents=True, exist_ok=True)
+            (RUNTIME / "state.json").write_text(json.dumps(
+                {"posture": post, "facing": key[1], "rotation": key[2], "tablet_mode": post in TABLET_MODE_POSTURES,
+                 "opening": round(self.last.opening, 1), "layout": self.want}))
+        except OSError:
+            pass
+
+    def try_apply(self, now, post, old_post, key):
+        lay = self.want
+        if lay != self.applied:
+            if self.outputs is None:
+                ok, out = hypr_repl("return table.concat({yoga_panel_outputs()}, ',')")
+                if ok and "," in out:
+                    self.outputs = dict(zip(("top", "bottom"), out.split(",")))
+            ok, out = hypr_repl(lua_call(lay, os.getpid()), dry=self.dry)
+            if ok:
+                if self.apply_logged_fail:
+                    log("hyprland reachable again")
+                self.apply_logged_fail = False
+                self.applied = lay
+                self.epoch += 1
+                log(f"applied {describe_layout(lay)} -> {out}")
+            else:
+                self.apply_failed_at = now
+                if not self.apply_logged_fail:
+                    log(f"applying the layout failed ({out}); will retry")
+                self.apply_logged_fail = True
+        # tablet-mode switch and keyboard follow the committed posture
+        if post != "closed":
+            self.switch.set(post in TABLET_MODE_POSTURES)
+
+    # -- main loop -------------------------------------------------------------
+    def run(self):
+        signal.signal(signal.SIGTERM, lambda *_: setattr(self, "stop", True))
+        signal.signal(signal.SIGINT, lambda *_: setattr(self, "stop", True))
+        try:
+            self.open_socket()
+        except OSError as e:
+            log(f"control socket unavailable: {e}")
+        log(f"yoga-posture started{' [dry-run]' if self.dry else ''}: {self.sensors.discover() and self.sensors.describe() or 'no accelerometers found yet'}")
+        next_t = time.monotonic()
+        slept = time.clock_gettime(time.CLOCK_BOOTTIME) - time.monotonic()
+        while not self.stop:
+            now = time.monotonic()
+            # CLOCK_MONOTONIC stops in suspend, CLOCK_BOOTTIME does not: their difference grows
+            gap = time.clock_gettime(time.CLOCK_BOOTTIME) - now
+            if gap - slept > 2.0:
+                log(f"resumed from suspend (asleep {gap - slept:.0f} s): holding posture changes for {RESUME_GRACE_S:.0f} s")
+                self.sensors.grace_until = now + RESUME_GRACE_S
+                self.grace_until = now + RESUME_GRACE_S
+            slept = gap
+            if now >= next_t:
+                try:
+                    self.step(now)
+                    if self.want is not None and self.want != self.applied and now - self.apply_failed_at > 3.0:
+                        self.try_apply(now, self.committed[0], self.committed[0], self.committed)
+                except Exception as e:     # never die on one bad tick
+                    log(f"tick error: {type(e).__name__}: {e}")
+                period = 1.0 / (CLOSED_RATE_HZ if (self.last and self.last.lid) else RATE_HZ)
+                next_t = max(next_t + period, now)
+            if now >= self.next_fast:
+                self.next_fast = now + FAST_PERIOD_S
+                try:
+                    self.fast(now)
+                except Exception as e:
+                    log(f"fast tick error: {type(e).__name__}: {e}")
+            self.serve(max(0.0, min(next_t, self.next_fast, now + 0.5) - time.monotonic()))
+        self.shutdown()
+
+    def shutdown(self):
+        log("stopping: restoring the laptop layout")
+        self.unpublish()    # consumers fall back to computing the state themselves
+        if not self.dry:
+            hypr_repl("return yoga_set_posture(nil)")
+        self.set_inhibit(False)
+        self.set_fold_guard(False)
+        self.switch.set(False)
+        self.switch.close()
+        if self.sock:
+            try:
+                self.sock.close()
+                self.sock_path.unlink()
+            except OSError:
+                pass
+
+
+# =============================================================================
+# Client commands
+# =============================================================================
+
+def client(cmd, arg=None):
+    path = os.environ.get("YOGA_POSTURE_SOCK") or str(RUNTIME / "ctl.sock")
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(5)
+    try:
+        s.connect(path)
+    except OSError:
+        return None
+    s.sendall((json.dumps({"cmd": cmd, "arg": arg}) + "\n").encode())
+    data = b""
+    while not data.endswith(b"\n"):
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+    s.close()
+    return json.loads(data or b"{}")
+
+
+def need_daemon(cmd, arg=None):
+    reply = client(cmd, arg)
+    if reply is None:
+        print("yoga-posture: the daemon is not running (systemctl --user start yoga-posture)", file=sys.stderr)
+        return 1
+    print(reply.get("msg", ""))
+    return 0 if reply.get("ok") else 1
+
+
+def cmd_once(_args):
+    s = Sensors()
+    ab = s.read()
+    if ab is None:
+        print("no accelerometer readings (" + s.describe() + ")", file=sys.stderr)
+        return 1
+    c = Classifier()
+    c.update(*ab, lid_closed())          # prime the smoothing
+    r = c.update(*ab, lid_closed())
+    key = r.key()
+    lay = layout_for(key)
+    print(f"sensors  {s.describe()}")
+    print(f"top      x,y,z = {tuple(round(v, 2) for v in r.top)} g")
+    print(f"bottom   x,y,z = {tuple(round(v, 2) for v in r.bottom)} g")
+    print(f"opening  {r.opening:.1f} deg   lid {'closed' if r.lid else 'open'}"
+          + ("   (hinge vertical)" if r.hinge_vertical else "") + ("   (angle unreliable)" if not r.reliable else ""))
+    print(f"posture  {r.posture}   facing {r.facing}   rotation {r.quad}")
+    print(f"layout   {describe_layout(lay)}")
+    print("lua      " + lua_call(lay, 0))
+    return 0
+
+
+def cmd_apply(args):
+    post, facing, quad = parse_force(args.posture)
+    key = (post, facing or (TENT_FACING_DEFAULT if post == "tent" else "bottom") if post in ("tent", "tablet") else None,
+           (quad or 0) if post in ("book", "tent", "tablet") else None)
+    if post == "book" and quad is None:
+        key = (post, None, QUAD_OF_ORIENTATION["left-up"])
+    lay = layout_for(key)
+    ok, out = hypr_repl(lua_call(lay, os.getpid()), dry=args.dry_run)
+    print(f"{describe_layout(lay)} -> {out}")
+    if args.revert and ok and not args.dry_run:
+        print(f"reverting in {args.revert}s ...", flush=True)
+        try:
+            time.sleep(args.revert)
+        finally:
+            ok, out = hypr_repl("return yoga_set_posture(nil)")
+            print(f"reverted -> {out}")
+    return 0 if ok else 1
+
+
+def cmd_reset(_args):
+    reply = client("reset")
+    ok, out = hypr_repl("return yoga_set_posture(nil)")
+    print(f"layout reset -> {out}" + ("" if reply is None else " (daemon told too; use `auto` to go back to the sensors)"))
+    return 0 if ok else 1
+
+
+def cmd_status(_args):
+    reply = client("status")
+    if reply is not None:
+        print(reply.get("msg", ""))
+        return 0
+    print("(daemon not running; one live reading)")
+    return cmd_once(_args)
+
+
+def cmd_log(args):
+    cmd = ["journalctl", "--user", "-u", "yoga-posture.service", "--no-pager", "-o", "short-iso", "-n", str(args.n)]
+    if args.follow:
+        cmd.append("-f")
+    os.execvp(cmd[0], cmd)
+
+
+# -- replay ----------------------------------------------------------------------
+
+EXPECTED = {   # Blaise's labels -> (posture, facing, quad); None = not checked
+    "laptop": ("laptop", None, None), "laptop-90": ("laptop", None, None), "flat": ("flat", None, None),
+    "tent": ("tent", None, None), "tablet-bottom-up": ("tablet", "bottom", None),
+    "tablet-top-up": ("tablet", "top", None), "book": ("book", None, 3), "book-flipped": ("book", None, 1),
+    "closed": ("closed", None, None),
+}
+
+
+SURVEY_PERIOD_S = 0.5     # the survey's timestamps are all the flush time; its samples were ~2 Hz
+
+
+def load_survey(path):
+    """-> ordered {section: [(t, top_xyz_g, bottom_xyz_g)]}, {section: lid_closed}.
+
+    The csv holds one row per sensor per sample in file order and its time
+    column is not usable (rows of a section share a flush time), so the
+    accel19/accel20 rows of a section are paired in order and spaced
+    SURVEY_PERIOD_S apart, with a 5 s gap between sections."""
+    rows = collections.OrderedDict()
+    with open(path) as f:
+        for row in csv.DictReader(f):
+            if row["label"] in ("accel19", "accel20"):
+                v = tuple(float(row[k]) / G for k in ("v0", "v1", "v2"))
+                rows.setdefault(row["posture"], {"accel19": [], "accel20": []})[row["label"]].append(v)
+    sections = collections.OrderedDict()
+    t = 0.0
+    for post, d in rows.items():
+        sections[post] = []
+        for a, b in zip(d["accel19"], d["accel20"]):
+            sections[post].append((t, a, b))
+            t += SURVEY_PERIOD_S
+        t += 5.0
+    lids = {}
+    txt = Path(path).with_name("postures.txt")
+    if txt.exists():
+        for m in re.finditer(r"^--- (\S+)\s+lid:\s+state:\s+(\w+)", txt.read_text(), re.M):
+            lids[m.group(1)] = m.group(2) == "closed"
+    for post in sections:
+        lids.setdefault(post, post == "closed")
+    return sections, lids
+
+
+def replay_section(samples, lid):
+    """Fresh classifier + debounce over one recorded section. -> (final key, reading, transitions)."""
+    c = Classifier()
+    committed = pending = None
+    since = 0.0
+    trans = []
+    r = None
+    for t, top, bottom in samples:
+        r = c.update(top, bottom, lid)
+        key = r.key()
+        if committed is None:
+            committed = key
+            trans.append((t, key))
+        elif key == committed:
+            pending = None
+        elif key != pending:
+            pending, since = key, t
+        elif t - since >= DEBOUNCE_S:
+            committed = key
+            trans.append((t, key))
+            pending = None
+    return committed, r, trans
+
+
+def cmd_replay(args):
+    sections, lids = load_survey(args.file)
+    bad = 0
+    if args.continuous:
+        c = Classifier()
+        committed = pending = None
+        since = 0.0
+        t0 = None
+        for post, samples in sections.items():
+            lid = lids[post]
+            print(f"--- recorded as {post} (lid {'closed' if lid else 'open'})")
+            for t, top, bottom in samples:
+                t0 = t0 or t
+                r = c.update(top, bottom, lid)
+                key = r.key()
+                if committed is None:
+                    committed = key
+                    print(f"  t={t - t0:6.1f}s  -> {key}  opening {r.opening:.0f}")
+                elif key == committed:
+                    pending = None
+                elif key != pending:
+                    pending, since = key, t
+                elif t - since >= DEBOUNCE_S:
+                    committed = key
+                    pending = None
+                    print(f"  t={t - t0:6.1f}s  -> {key}  opening {r.opening:.0f}")
+        return 0
+    print(f"{'recorded as':18} {'lid':6} {'opening':>8}  {'posture':8} {'facing':7} {'rot':4} {'ok':3} layout")
+    for post, samples in sections.items():
+        lid = lids[post]
+        key, r, trans = replay_section(samples, lid)
+        exp = EXPECTED.get(post)
+        ok = "?"
+        if exp:
+            ok = "ok"
+            for want, got in zip(exp, key):
+                if want is not None and want != got:
+                    ok = "NO"
+            bad += ok == "NO"
+        lay = layout_for(key)
+        print(f"{post:18} {'closed' if lid else 'open':6} {r.opening:8.1f}  {key[0]:8} {str(key[1] or '-'):7} {str(key[2] if key[2] is not None else '-'):4} {ok:3} {describe_layout(lay)}"
+              + (f"   [{len(trans)} changes]" if len(trans) > 1 else ""))
+    return 1 if bad else 0
+
+
+# -- main ------------------------------------------------------------------------
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="yoga-posture", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    d = sub.add_parser("daemon", help="run the posture daemon")
+    d.add_argument("--dry-run", action="store_true", help="log the hyprctl/uinput/yoga-osk actions instead of doing them")
+    d.add_argument("--no-switch", action="store_true", help="do not create the virtual SW_TABLET_MODE switch")
+    d.add_argument("--no-osk", action="store_true", help="do not call yoga-osk")
+    d.add_argument("--debug", action="store_true", help="log every sample")
+    sub.add_parser("status")
+    f = sub.add_parser("force")
+    f.add_argument("posture")
+    sub.add_parser("auto")
+    sub.add_parser("flip-tent", aliases=["flip"])
+    sub.add_parser("cycle")
+    lg = sub.add_parser("log")
+    lg.add_argument("-f", "--follow", action="store_true")
+    lg.add_argument("-n", type=int, default=40)
+    sub.add_parser("reset")
+    a = sub.add_parser("apply")
+    a.add_argument("posture")
+    a.add_argument("--revert", type=float, default=0, metavar="SECONDS")
+    a.add_argument("--dry-run", action="store_true")
+    sub.add_parser("once")
+    rp = sub.add_parser("replay")
+    rp.add_argument("file")
+    rp.add_argument("--continuous", action="store_true")
+    args = ap.parse_args(argv)
+
+    if args.cmd == "daemon":
+        Daemon(dry=args.dry_run, switch=not args.no_switch, osk=not args.no_osk, debug=args.debug).run()
+        return 0
+    if args.cmd == "status":
+        return cmd_status(args)
+    if args.cmd == "force":
+        try:
+            parse_force(args.posture)
+        except ValueError as e:
+            print(f"yoga-posture: {e}", file=sys.stderr)
+            return 2
+        return need_daemon("force", args.posture)
+    if args.cmd == "auto":
+        return need_daemon("auto")
+    if args.cmd in ("flip-tent", "flip"):
+        return need_daemon("flip")
+    if args.cmd == "cycle":
+        return need_daemon("cycle")
+    if args.cmd == "log":
+        return cmd_log(args)
+    if args.cmd == "reset":
+        return cmd_reset(args)
+    if args.cmd == "apply":
+        try:
+            return cmd_apply(args)
+        except ValueError as e:
+            print(f"yoga-posture: {e}", file=sys.stderr)
+            return 2
+    if args.cmd == "once":
+        return cmd_once(args)
+    if args.cmd == "replay":
+        return cmd_replay(args)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

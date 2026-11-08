@@ -1,0 +1,16 @@
+[Unit]
+Description=Yoga Book: outline of the virtual touchpad strip on the bottom screen
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionPathExists=%h/.local/bin/yoga-touchpad-indicator
+
+[Service]
+# gtk-layer-shell has to be loaded before libwayland-client
+Environment=LD_PRELOAD=/usr/lib/libgtk-layer-shell.so
+ExecStart=/usr/bin/python3 %h/.local/bin/yoga-touchpad-indicator
+Restart=on-failure
+RestartSec=3
+SyslogIdentifier=yoga-touchpad-indicator
+
+[Install]
+WantedBy=graphical-session.target

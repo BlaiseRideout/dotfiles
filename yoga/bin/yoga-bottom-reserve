@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+"""yoga-bottom-reserve: keep the bottom screen free for the keyboard. Run by yoga-bottom-reserve.service.
+
+While the physical keyboard is docked on the bottom screen, or the on-screen keyboard is
+showing (dual screen only), the workspace(s) that were on the bottom screen live on the
+top screen instead (the top screen keeps showing the workspace it had, the focus stays
+where it was); when the bottom screen is free again they move back. The moving is
+yoga_set_reserved() in yoga/hypr/yoga.lua, which also keeps the pointer off the bottom screen
+for as long as it is reserved. The bottom screen's Noctalia dock is hidden for the same time
+(the keyboard and the touchpad strip cover it), and while the on-screen keyboard shows, its
+Noctalia bar is hidden too (the keyboard then starts at the top edge of the screen).
+With only one panel lit (tent, tablet) nothing is reserved: the floating keyboard leaves the
+dock and the pointer alone.
+
+This script decides NOTHING by itself: when and whether is `want.reserved` / `want.bar_hidden`
+in the state yoga-posture publishes ($XDG_RUNTIME_DIR/yoga/state.json, yoga/bin/yoga_state.py,
+docs/yoga-book/state-machine.md), where the dock debounce (DOCK_DEBOUNCE_S) and the hold on the
+keyboard's visibility live. It only applies the wish, and applies it again after a config reload
+(which resets the Lua side), when a try failed (both panels not lit yet), and every 10 s. When
+no fresh state exists (daemon down) it computes the same thing locally from the same functions,
+and, as the daemon would, puts the on-screen keyboard away while the physical one is docked.
+
+  yoga-bottom-reserve            # the watcher (the service)
+  yoga-bottom-reserve on|off     # force it by hand (until the watcher next decides)
+  yoga-bottom-reserve status
+
+Knobs: YOGA_RESERVE_DOCK=0 / YOGA_RESERVE_OSK=0 leave the dock / the on-screen keyboard out of
+the decision; YOGA_RESERVE_HIDE_BAR=0 leaves the bar alone; YOGA_RESERVE_HIDE_DOCK=0 leaves the dock alone. The bottom panel is the monitor
+whose description contains $YOGA_OSK_DESC (default 0x4182).
+"""
+import json
+import os
+import selectors
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import yoga_state   # noqa: E402
+
+TICK_S = 0.25
+REASSERT_S = 10.0       # a config reload resets the Lua side; the event below usually catches it first
+RETRY_S = 1.0
+OK_ANSWERS = ("reserved", "released", "unchanged")
+
+use_dock = os.environ.get("YOGA_RESERVE_DOCK", "1") == "1"
+use_osk = os.environ.get("YOGA_RESERVE_OSK", "1") == "1"
+hide_bar = os.environ.get("YOGA_RESERVE_HIDE_BAR", "1") == "1"
+hide_dock = os.environ.get("YOGA_RESERVE_HIDE_DOCK", "1") == "1"
+DESC = os.environ.get("YOGA_OSK_DESC", "0x4182")
+HERE = os.path.dirname(os.path.realpath(__file__))
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+# -- actuators (replaced by the test harness) ------------------------------------------------
+def apply_reserved(on):
+    """-> the answer of yoga_set_reserved(), or an error text."""
+    try:
+        p = subprocess.run(["hyprctl", "repl", f"return yoga_set_reserved({'true' if on else 'false'})"],
+                           capture_output=True, text=True, timeout=8, env=yoga_state.hypr_env())
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"error: {e}"
+    return (p.stdout + p.stderr).strip()
+
+
+def bottom_output():
+    if os.environ.get("YOGA_OSK_OUTPUT"):
+        return os.environ["YOGA_OSK_OUTPUT"]
+    d = yoga_state.hypr_json("monitors")
+    for m in d if isinstance(d, list) else []:
+        if DESC in m.get("description", "") and not m.get("disabled"):
+            return m["name"]
+    return None
+
+
+def apply_bar(hidden):
+    out = bottom_output()
+    if not out:
+        return False
+    try:
+        subprocess.run(["noctalia", "msg", "bar-hide" if hidden else "bar-show", "default", out],
+                       capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return True
+
+
+def apply_dock(hidden):
+    """Hide or show the dock on the bottom screen only (Noctalia's per-monitor override, which it
+    keeps in its settings.toml: the watcher always puts it back when it stops)."""
+    out = bottom_output()
+    if not out:
+        return False
+    try:
+        p = subprocess.run(["noctalia", "msg", "config-set", f"dock.monitor.{out}.enabled",
+                            "false" if hidden else "true"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return p.returncode == 0 and "error" not in (p.stdout + p.stderr).lower()
+
+
+def hide_osk():
+    try:
+        subprocess.run([os.path.join(HERE, "yoga-osk"), "hide"], capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+class Events:
+    """Hyprland's event socket: only used to notice a config reload / monitor change."""
+
+    def __init__(self):
+        self.sock = None
+        self.buf = b""
+        self.retry_at = 0.0
+
+    def connect(self, now):
+        if self.sock or now < self.retry_at:
+            return
+        self.retry_at = now + 2.0
+        sig = yoga_state.hypr_env().get("HYPRLAND_INSTANCE_SIGNATURE")
+        if not sig:
+            return
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.connect(str(yoga_state.runtime_dir() / "hypr" / sig / ".socket2.sock"))
+            s.setblocking(False)
+        except OSError:
+            s.close()
+            return
+        self.sock = s
+
+    def poll(self, timeout):
+        """-> True if a config reload or monitor event arrived."""
+        if not self.sock:
+            time.sleep(timeout)
+            return False
+        sel = selectors.DefaultSelector()
+        sel.register(self.sock, selectors.EVENT_READ)
+        hit = False
+        if sel.select(timeout):
+            try:
+                data = self.sock.recv(65536)
+            except OSError:
+                data = b""
+            if not data:
+                self.sock.close()
+                self.sock = None
+                return True       # Hyprland went away or restarted: assert everything again
+            self.buf += data
+            *lines, self.buf = self.buf.split(b"\n")
+            for ln in lines:
+                if ln.startswith((b"configreloaded>>", b"monitoradded", b"monitorremoved")):
+                    hit = True
+        sel.close()
+        return hit
+
+
+def wish(st):
+    """(reserved, bar_hidden, dock_hidden) from a state, with the knobs applied. The dock is
+    out of the way whenever the bottom screen is reserved: the keyboard (docked or on-screen)
+    and the touchpad strip cover it."""
+    w = st["want"]
+    dual = st["screens"] == "dual"
+    docked = bool(st["dock"]["eff"])
+    held = bool(st["osk"]["held"])
+    reserved = dual and ((use_dock and docked) or (use_osk and held))
+    return reserved, bool(w["bar_hidden"]) and hide_bar, reserved and hide_dock
+
+
+class Watcher:
+    def __init__(self, consumer=None, events=None):
+        self.c = consumer or yoga_state.Consumer()
+        self.events = events
+        self.res_applied = None      # what we last got an OK answer for
+        self.res_due = 0.0
+        self.bar_applied = None
+        self.bar_due = 0.0
+        self.dock_applied = None
+        self.dock_due = 0.0
+        self.asserted_at = 0.0
+
+    def tick(self, now, reassert=False):
+        st = self.c.get(now)
+        reserved, bar_hidden, dock_hidden = wish(st)
+        if st.get("source") == "fallback" and st["osk"]["visible"] and not st["want"]["osk_allowed"]:
+            hide_osk()      # the daemon would have; without it this is the safety net
+        if reassert or now - self.asserted_at >= REASSERT_S:
+            self.asserted_at = now
+            self.res_due = self.bar_due = self.dock_due = 0.0
+            self.res_applied = None                 # yoga_set_reserved() answers "unchanged" when nothing is to do
+            if bar_hidden:
+                self.bar_applied = None             # a reloaded bar comes back visible
+            if hide_dock:
+                self.dock_applied = None            # (and a restarted Noctalia may not have the override)
+        if reserved != self.res_applied and now >= self.res_due:
+            ans = apply_reserved(reserved)
+            if ans in OK_ANSWERS:
+                self.res_applied = reserved
+            else:
+                self.res_due = now + RETRY_S      # e.g. "both panels are not on": try again shortly
+                if ans != getattr(self, "_last_err", None):
+                    self._last_err = ans
+                    log(f"yoga_set_reserved({reserved}): {ans or 'no answer'}; retrying")
+        if hide_bar and bar_hidden != self.bar_applied and now >= self.bar_due:
+            if apply_bar(bar_hidden):
+                self.bar_applied = bar_hidden
+            else:
+                self.bar_due = now + RETRY_S
+        if hide_dock and dock_hidden != self.dock_applied and now >= self.dock_due:
+            if apply_dock(dock_hidden):
+                self.dock_applied = dock_hidden
+            else:
+                self.dock_due = now + RETRY_S
+        return reserved, bar_hidden, dock_hidden
+
+    def run(self):
+        self.events = self.events or Events()
+        stop = []
+        signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+        signal.signal(signal.SIGINT, lambda *_: stop.append(1))
+        log(f"yoga-bottom-reserve started: dock={use_dock} osk={use_osk} bar={hide_bar} hide_dock={hide_dock}, state {yoga_state.state_path()}")
+        last = None
+        try:
+            while not stop:
+                now = time.monotonic()
+                self.events.connect(now)
+                r, b, d = self.tick(now, reassert=self.events.poll(TICK_S))
+                if (r, b, d, self.c.source) != last:
+                    last = (r, b, d, self.c.source)
+                    log(f"reserved={r} bar_hidden={b} dock_hidden={d} (state from {self.c.source}: dock "
+                        f"{yoga_state.dig(self.c.last, 'dock.eff')}, osk {yoga_state.dig(self.c.last, 'osk.held')}, "
+                        f"screens {self.c.last.get('screens')})")
+        finally:
+            if hide_bar and self.bar_applied:
+                apply_bar(False)     # never leave the bar hidden behind
+            if hide_dock and self.dock_applied:
+                apply_dock(False)    # nor the dock
+            log("yoga-bottom-reserve stopped")
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else "watch"
+    if cmd in ("on", "off"):
+        print(apply_reserved(cmd == "on"))
+        return 0
+    if cmd == "status":
+        c = yoga_state.Consumer()
+        st = c.get()
+        print(f"state from {c.source}; dock position {yoga_state.dig(st, 'dock.raw')} raw / {yoga_state.dig(st, 'dock.eff')} effective")
+        print("on-screen keyboard: " + ("visible" if yoga_state.dig(st, "osk.visible") else "hidden")
+              + f" (held {yoga_state.dig(st, 'osk.held')}), screens {st.get('screens')}")
+        print("wish: reserved={} bar_hidden={} dock_hidden={}".format(*wish(st)))
+        print("Lua: " + subprocess.run(["hyprctl", "repl", 'return "reserved=" .. tostring(yoga_bottom_reserved)'],
+                                       capture_output=True, text=True, env=yoga_state.hypr_env()).stdout.strip())
+        return 0
+    if cmd in ("watch", "daemon"):
+        Watcher().run()
+        return 0
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# On-screen keyboard (wvkbd with the Yoga patch: a Hide key, --output) for
+# the Yoga Book 9i. Build/install it with yoga/wvkbd/build.sh (ansible does this).
+# Notes: docs/yoga-book/touch-ux.md.
+#
+#   yoga-osk toggle   # show it if hidden, hide it if shown (starts wvkbd if needed)
+#   yoga-osk show | hide
+#   yoga-osk status   # prints "visible", "hidden" or "not running" (exit 0 only when visible)
+#   yoga-osk start    # start wvkbd (hidden) without showing it
+#   yoga-osk stop     # end wvkbd gracefully (it releases any latched modifier first)
+#   (show/toggle do nothing while the physical keyboard is docked or a USB keyboard is
+#   connected (a connected but undocked Bluetooth keyboard does not block it); see blocked() below and `yoga_state.py keyboard`)
+#   yoga-osk move     # floating (single-screen) keyboard: jump between the bottom and the top
+#                     # of the screen, to uncover a text box (the Move key does the same)
+#
+# It opens on the bottom panel: the monitor whose description contains
+# $YOGA_OSK_DESC (default "0x4182", the bottom Samsung panel), falling back to
+# whatever monitor the compositor picks. Override the connector directly with
+# $YOGA_OSK_OUTPUT (e.g. eDP-2). Height in logical pixels: $YOGA_OSK_HEIGHT (420).
+# It docks to the TOP of that panel (the edge nearest the hinge), leaving the front
+# part of the bottom screen for the virtual touchpad; $YOGA_OSK_POSITION=bottom
+# docks it to the bottom edge instead.
+#
+# With only ONE Yoga panel lit (tent, tablet), a full-height keyboard docked to the top
+# would cover the screen, and there is no touchpad strip to leave room for: the keyboard
+# then floats over the bottom of the lit panel (anchored to its bottom edge, without
+# reserving space, so windows are not resized), $YOGA_OSK_FLOAT_HEIGHT logical px
+# (default 340) tall. The mode is picked each time it is shown, from the state yoga-posture
+# publishes (screens = dual | single, docs/yoga-book/state-machine.md; Hyprland's own monitor list
+# when there is none); a running keyboard in the other mode is restarted. It is never shown by
+# itself: only by this command. Everything that starts, stops or shows it takes one lock, so two
+# callers at once (a button, the lock-screen watcher) cannot start two keyboards.
+#
+# wvkbd is shown/hidden with signals (USR2 / USR1 / RTMIN toggle); "visible" means
+# its layer surface exists, which wvkbd destroys on hide.
+set -u
+
+bin=${YOGA_OSK_WVKBD:-wvkbd-yoga}   # (a stub in the tests)
+desc=${YOGA_OSK_DESC:-0x4182}
+height=${YOGA_OSK_HEIGHT:-420}
+position=${YOGA_OSK_POSITION:-top}
+float_height=${YOGA_OSK_FLOAT_HEIGHT:-340}
+top_desc=${YOGA_TOP_DESC:-0x4167}
+mode_file=${XDG_RUNTIME_DIR:-/tmp}/yoga-osk.mode
+lock_file=${XDG_RUNTIME_DIR:-/tmp}/yoga-osk.lock
+here=$(dirname "$(readlink -f "$0")")
+# the shared state (yoga/bin/yoga_state.py): `state get KEY` prints one value, exit 3 without a fresh one
+state() { python3 -I "$here/yoga_state.py" "$@" 2>/dev/null; }
+
+pid() { pgrep -x -u "$(id -u)" "$bin" | head -n1; }
+running() { [ -n "$(pid)" ]; }
+
+visible() {
+  hyprctl layers -j 2>/dev/null | grep -q '"namespace": *"wvkbd"'
+}
+
+bottom_output() {
+  [ -n "${YOGA_OSK_OUTPUT:-}" ] && { echo "$YOGA_OSK_OUTPUT"; return; }
+  hyprctl monitors -j 2>/dev/null | python3 -I -c '
+import sys, json
+d = sys.argv[1]
+try:
+    for m in json.load(sys.stdin):
+        if d in m.get("description", "") and not m.get("disabled"):
+            print(m["name"]); break
+except Exception:
+    pass' "$desc"
+}
+
+# prints the connector of the Yoga panel that is lit when exactly one is (tent, tablet)
+single_output() {
+  hyprctl monitors -j 2>/dev/null | python3 -I -c '
+import sys, json
+want = sys.argv[1:3]
+try:
+    lit = [m["name"] for m in json.load(sys.stdin)
+           if any(w in m.get("description", "") for w in want) and not m.get("disabled")]
+    if len(lit) == 1:
+        print(lit[0])
+except Exception:
+    pass' "$desc" "$top_desc"
+}
+
+# the connector of the panel that is lit when exactly one is (tent, tablet); nothing in dual mode.
+# The published state decides (screens, panels); without a fresh one Hyprland's monitor list does.
+float_output() {
+  local screens desc_side
+  screens=$(state get screens)
+  case "$screens" in
+    single)
+      if [ "$(state get panels.top.on)" = 1 ]; then desc_side=$top_desc; else desc_side=$desc; fi
+      hyprctl monitors -j 2>/dev/null | python3 -I -c '
+import sys, json
+try:
+    for m in json.load(sys.stdin):
+        if sys.argv[1] in m.get("description", ""):
+            print(m["name"]); break
+except Exception:
+    pass' "$desc_side" ;;
+    dual|none) ;;
+    *) single_output ;;
+  esac
+}
+
+# end wvkbd: TERM first (it releases its latched modifiers and leaves), KILL if it will not
+stop_wvkbd() {
+  local p
+  p=$(pid); [ -n "$p" ] || return 0
+  kill -TERM "$p" 2>/dev/null
+  for _ in $(seq 1 20); do running || return 0; sleep 0.1; done
+  pkill -KILL -x -u "$(id -u)" "$bin"; sleep 0.2
+}
+
+start() {
+  if ! command -v "$bin" >/dev/null; then
+    echo "yoga-osk: $bin not found; run ~/.dotfiles/yoga/wvkbd/build.sh" >&2
+    return 1
+  fi
+  local one out mode
+  one=$(float_output)
+  if [ -n "$one" ]; then mode="float:$one"; else mode="dock:$(bottom_output)"; fi
+  if running; then
+    [ "$(cat "$mode_file" 2>/dev/null)" = "$mode" ] && return 0
+    stop_wvkbd; sleep 0.2   # laid out for different screens: start afresh
+  fi
+  if [ -n "$one" ]; then
+    out=$one
+    args=(--hidden -H "$((float_height + 60))" -L "$float_height" --non-exclusive --fn "Sans 14")
+  else
+    out=$(bottom_output)
+    args=(--hidden -H "$height" -L "$height" --fixed --fn "Sans 14")
+    [ "$position" = top ] && args+=(--top)
+  fi
+  [ -n "$out" ] && args+=(--output "$out")
+  echo "$mode" > "$mode_file"
+  setsid -f "$bin" "${args[@]}" >/dev/null 2>&1 </dev/null 9>&-    # (does not inherit the lock)
+  for _ in $(seq 1 30); do
+    running && break
+    sleep 0.1
+  done
+  running || { echo "yoga-osk: $bin did not start" >&2; return 1; }
+  # signals are blocked and read from a signalfd once wvkbd's main loop runs; give
+  # it a moment so an immediate show is not lost
+  sleep 0.5
+}
+
+wait_for() { # wait_for visible|hidden
+  for _ in $(seq 1 20); do
+    if [ "$1" = visible ]; then visible && return 0; else visible || return 0; fi
+    sleep 0.1
+  done
+  return 1
+}
+
+# The on-screen keyboard is not allowed while the physical keyboard is docked (or no screen is
+# lit): show/toggle refuse (hiding is always allowed). The decision is the daemon's (`want.osk_allowed`
+# in the published state: the dock position is debounced there, so a slide 1 -> 0 -> 2 does not open
+# a window for the keyboard to appear); without a fresh state, the raw dock file. yoga-posture hides
+# it when the keyboard docks anyway, and `show` checks again once the keyboard is up (a dock that
+# raced the command). YOGA_OSK_FORCE=1 overrides.
+blocked() {
+  [ -z "${YOGA_OSK_FORCE:-}" ] || return 1
+  python3 -I "$here/yoga_state.py" osk-allowed >/dev/null 2>&1
+  case $? in
+    0) return 1 ;;
+    1) return 0 ;;
+  esac
+  # no helper: the raw dock file
+  local p f
+  f=${YOGA_DOCK_FILE:-$(ls /sys/bus/wmi/devices/E7F300FA-*/keyboard_position 2>/dev/null | head -n1)}
+  p=$(cat "$f" 2>/dev/null | head -n1)
+  [ -n "$p" ] && [ "$p" != 0 ]
+}
+refuse_docked() {
+  # silent unless verbose: YOGA_VERBOSE=1, or the file ~/.config/yoga/verbose
+  if [ -n "${YOGA_VERBOSE:-}" ] || [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/yoga/verbose" ]; then
+    notify-send -a yoga-osk -t 2500 "On-screen keyboard off" "The keyboard is docked, or a USB keyboard is connected." 2>/dev/null
+  fi
+  exit 0
+}
+
+# the state-changing commands run one at a time
+take_lock() { exec 9>"$lock_file"; flock -w 10 9 || { echo "yoga-osk: busy" >&2; exit 1; }; }
+
+# show it, and put it away again if the physical keyboard docked while it came up
+show_checked() {
+  start || return 1
+  visible || { kill -USR2 "$(pid)"; wait_for visible; }
+  if blocked; then kill -USR1 "$(pid)" 2>/dev/null; wait_for hidden; fi
+  return 0
+}
+
+case "${1:-toggle}" in
+  toggle)
+    if visible; then kill -USR1 "$(pid)"; exit 0; fi
+    take_lock
+    blocked && refuse_docked
+    show_checked || exit 1 ;;
+  show)
+    take_lock
+    blocked && refuse_docked
+    show_checked || exit 1 ;;
+  hide)
+    running && visible && kill -USR1 "$(pid)"; exit 0 ;;
+  start) take_lock; start ;;
+  stop) take_lock; stop_wvkbd; exit 0 ;;
+  move)
+    running && kill -s RTMIN+1 "$(pid)"; exit 0 ;;
+  status)
+    if ! running; then echo "not running"; exit 1; fi
+    if visible; then echo visible; else echo hidden; exit 1; fi ;;
+  *) sed -n '2,/^set -u/p' "$0" | sed '$d;s/^# \{0,1\}//' >&2; exit 2 ;;
+esac

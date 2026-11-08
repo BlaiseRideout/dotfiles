@@ -1,0 +1,19 @@
+[Unit]
+Description=Yoga Book speaker levels (fixed hardware balance of the treble and bass paths; the volume slider is software)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Treble ("Speaker") 4.5 dB below the bass amps ("DAC2"), the balance from
+# https://github.com/andrewgodwin/lenovo-yoga-book-9; WirePlumber's soft-mixer rule
+# (yoga/nix/module.nix) leaves these alone. Force Firmware Load reloads the bass amps' DSP program at
+# each playback start: without it they go silent after power-saving. docs/yoga-book/platform.md.
+ExecStart=-/usr/bin/amixer -c 0 -q cset iface=CARD,name='Speaker Force Firmware Load' on
+ExecStart=-/usr/bin/amixer -c 0 -q cset name='Speaker Playback Volume' 81,81
+ExecStart=-/usr/bin/amixer -c 0 -q cset name='DAC2 Playback Volume' 87,87
+SyslogIdentifier=yoga-audio-levels
+
+[Install]
+WantedBy=graphical-session.target

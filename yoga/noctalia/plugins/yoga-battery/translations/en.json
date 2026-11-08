@@ -1,0 +1,32 @@
+{
+  "settings": {
+    "poll_interval": {
+      "label": "Poll interval (s)",
+      "description": "How often to read the keyboards' battery levels"
+    },
+    "low_threshold": {
+      "label": "Low battery (%)",
+      "description": "A keyboard (or half of one) at or below this turns red and sends a notification"
+    },
+    "critical_threshold": {
+      "label": "Critical battery (%)",
+      "description": "A second, urgent notification at or below this"
+    },
+    "notify": {
+      "label": "Notifications",
+      "description": "Notify when a keyboard (or half) reaches the low or critical level"
+    },
+    "show_value": {
+      "label": "Show values",
+      "description": "Print the percentages next to the meters"
+    }
+  },
+  "tooltip": {
+    "unknown": "unknown"
+  },
+  "notify": {
+    "low_title": "{name}{half} battery low",
+    "critical_title": "{name}{half} battery very low",
+    "body": "Battery at {level}%. Charge the keyboard soon."
+  }
+}

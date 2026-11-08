@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""yoga-dock-peek: show Noctalia's dock for a moment, for touch. Bound to the swipe up from the
+bottom edge of a screen (yoga/hypr/touch.lua).
+
+The dock normally hides itself behind windows (dock.smart_auto_hide) and comes back when the
+pointer touches the edge, which a finger cannot do. This turns smart hiding off, so the dock
+shows over the windows, and turns it back on when
+
+  - 10 s have passed ($YOGA_DOCK_PEEK_S),
+  - a window opened (an app was started from the dock), or the focus or workspace changed
+    (an app already running was picked), after a short grace for the swipe itself, or
+  - the gesture is made again (it toggles).
+
+The dock of the bottom screen stays away while that screen is reserved for the keyboard
+(yoga-bottom-reserve), so this shows the top screen's. Noctalia keeps the setting in its
+settings.toml, so the script puts it back whatever happens to it (TERM, INT, errors);
+$YOGA_DOCK_SMART (default true) is the value it is put back to.
+
+  yoga-dock-peek          # show, or hide again if it is showing
+"""
+import os
+import selectors
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import yoga_state   # noqa: E402
+
+PEEK_S = float(os.environ.get("YOGA_DOCK_PEEK_S", "10"))
+SMART = os.environ.get("YOGA_DOCK_SMART", "true")
+GRACE_S = 0.8                # the swipe itself changes the focus; do not count that
+HIDE_AFTER = (b"openwindow>>", b"activewindowv2>>", b"workspacev2>>")
+
+
+def pid_file():
+    return yoga_state.runtime_dir() / "yoga-dock-peek.pid"
+
+
+def set_smart(value):
+    try:
+        subprocess.run(["noctalia", "msg", "config-set", "dock.smart_auto_hide", value],
+                       capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def running_peek():
+    """pid of a peek that is showing the dock, else None."""
+    try:
+        pid = int(pid_file().read_text().split()[0])
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            if b"yoga-dock-peek" in f.read():
+                return pid
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def hypr_events():
+    sig = yoga_state.hypr_env().get("HYPRLAND_INSTANCE_SIGNATURE")
+    if not sig:
+        return None
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        s.connect(str(yoga_state.runtime_dir() / "hypr" / sig / ".socket2.sock"))
+        s.setblocking(False)
+    except OSError:
+        s.close()
+        return None
+    return s
+
+
+def main():
+    other = running_peek()
+    if other:
+        os.kill(other, signal.SIGTERM)      # it puts the dock back itself
+        return 0
+    stop = []
+    signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
+    signal.signal(signal.SIGINT, lambda *_: stop.append(1))
+    pid_file().write_text(str(os.getpid()))
+    ev = hypr_events()
+    set_smart("false")
+    try:
+        t0 = time.monotonic()
+        sel = selectors.DefaultSelector()
+        if ev:
+            sel.register(ev, selectors.EVENT_READ)
+        buf = b""
+        while not stop:
+            left = PEEK_S - (time.monotonic() - t0)
+            if left <= 0:
+                break
+            if not ev:
+                time.sleep(min(left, 0.2))
+                continue
+            if not sel.select(min(left, 0.5)):
+                continue
+            try:
+                data = ev.recv(65536)
+            except OSError:
+                data = b""
+            if not data:
+                break                       # Hyprland went away
+            buf += data
+            *lines, buf = buf.split(b"\n")
+            if time.monotonic() - t0 > GRACE_S and any(ln.startswith(HIDE_AFTER) for ln in lines):
+                break
+    finally:
+        set_smart(SMART)
+        try:
+            if pid_file().read_text().split()[0] == str(os.getpid()):
+                pid_file().unlink()
+        except (OSError, IndexError):
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,18 @@
+[Unit]
+Description=Yoga Book posture daemon (hinge angle and orientation: panel layout, tablet mode, on-screen keyboard)
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionPathExists=%h/.local/bin/yoga-posture
+
+[Service]
+ExecStart=/usr/bin/python3 %h/.local/bin/yoga-posture daemon
+Restart=on-failure
+RestartSec=3
+SyslogIdentifier=yoga-posture
+# On SIGTERM the daemon puts the laptop layout back itself; this covers a crash
+# or SIGKILL, so a panel can never stay switched off.
+ExecStopPost=-%h/.local/bin/yoga-posture reset
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target
