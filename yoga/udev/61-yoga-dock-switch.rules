@@ -1,0 +1,23 @@
+# Yoga Book 9 (Gen 9/10): keep the keyboard dock out of libinput.
+#
+# lenovo-yb9-kbdock (and lenovo-ymc) report SW_TABLET_MODE from the keyboard
+# dock, i.e. "tablet mode" whenever the Bluetooth keyboard is detached. The
+# wanted tablet mode follows the hinge angle and orientation (the posture
+# daemon's own uinput switch), and only one device may report SW_TABLET_MODE, so
+# libinput (Hyprland) must ignore these. The driver still exposes the dock state
+# in sysfs (keyboard_position) and in the "Lenovo Yoga Book 9 keyboard dock
+# switch" evdev node, which other programs can read directly.
+#
+# Installed to /etc/udev/rules.d by ansible/yoga.yaml on yoga-linux only.
+ACTION=="remove", GOTO="yoga_dock_end"
+# uaccess + a stable name: the posture/touchpad daemons can read the dock state
+# from /dev/input/yoga-kbdock as the logged-in user (or poll keyboard_position).
+SUBSYSTEM=="input", KERNEL=="event*", \
+  ATTRS{name}=="Lenovo Yoga Book 9 keyboard dock switch", \
+  ENV{LIBINPUT_IGNORE_DEVICE}="1", TAG+="uaccess", SYMLINK+="input/yoga-kbdock"
+# lenovo-ymc can't bind on the 13IMU9 (its WMI GUID is absent), but if a later
+# firmware adds it, it would be a second SW_TABLET_MODE source.
+SUBSYSTEM=="input", KERNEL=="event*", \
+  ATTRS{name}=="Lenovo Yoga Tablet Mode Control switch", \
+  ENV{LIBINPUT_IGNORE_DEVICE}="1"
+LABEL="yoga_dock_end"
