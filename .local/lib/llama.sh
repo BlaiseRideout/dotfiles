@@ -18,7 +18,9 @@ llama_port() {
   echo "${p:-$LLAMA_FALLBACK_PORT}"
 }
 
-llama_base() { echo "http://127.0.0.1:$(llama_port "$@")"; }
+# Base URL of the router. $LLAMA_URL points the tools at a remote router (e.g. the desktop over the tailnet);
+# unset, they talk to the local service.
+llama_base() { if [[ -n ${LLAMA_URL:-} ]]; then echo "${LLAMA_URL%/}"; else echo "http://127.0.0.1:$(llama_port "$@")"; fi; }
 
 # GET /models as JSON. $1 = max seconds (default 5). Fails if the router is not answering.
 llama_models() { llama_curl -fsS -m "${1:-5}" "$(llama_base)/models"; }

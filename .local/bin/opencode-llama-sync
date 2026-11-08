@@ -2,23 +2,24 @@
 # Sync the models served by the local llama.cpp router into opencode's (v2) config as the `llamacpp` provider.
 # Only .providers.llamacpp is replaced; everything else in the file is kept. Re-run after downloading a model.
 #   opencode-llama-sync [--port N] [--dry-run]
+# With LLAMA_URL set (e.g. https://nhuto.<tailnet>.ts.net) it syncs from that remote router instead.
 set -euo pipefail
 
 CONFIG=${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}
 . "${LLAMA_LIB:-$HOME/.local/lib/llama.sh}"
-PORT=$(llama_port)
+BASE=$(llama_base)
 DRY=0
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --port) PORT=$2; shift 2 ;;
+    --port) BASE=http://127.0.0.1:$2; shift 2 ;;
     --dry-run) DRY=1; shift ;;
-    -h|--help) sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 for c in curl jq; do command -v "$c" >/dev/null || { echo "missing: $c" >&2; exit 1; }; done
 
-models=$(llama_curl -fsS -m 10 "http://127.0.0.1:$PORT/models") || { echo "llama.cpp router not answering on :$PORT" >&2; exit 1; }
+models=$(llama_curl -fsS -m 10 "$BASE/models") || { echo "llama.cpp router not answering at $BASE" >&2; exit 1; }
 
 # Friendly keys/names for the models we know; anything else gets an automatic slug.
 read -r -d '' KNOWN <<'EOF' || true
@@ -44,19 +45,19 @@ read -r -d '' CTX <<'EOF' || true
   "nemotron-3.5-lightning-30b": 131072, "gemma4-26b-a4b-hauhau": 65536, "qwen3-coder-30b-a3b": 65536 }
 EOF
 
-provider=$(jq -n --argjson m "$models" --argjson known "$KNOWN" --argjson ctx "$CTX" --arg port "$PORT" '
+provider=$(jq -n --argjson m "$models" --argjson known "$KNOWN" --argjson ctx "$CTX" --arg base "$BASE" --arg where "$([[ -n ${LLAMA_URL:-} ]] && echo remote || echo local)" '
   def slug: split("/") | last | sub(":.*$"; "") | ascii_downcase | sub("-gguf$"; "");
   def quant: split(":") | if length > 1 then last else "" end;
   {
-    name: "llama.cpp (local)",
+    name: "llama.cpp (\($where))",
     package: "@opencode/ai/providers/openai-compatible",
-    settings: { baseURL: "http://127.0.0.1:\($port)/v1", apiKey: "{file:~/.local/state/llama-serve/api-key}" },
+    settings: { baseURL: "\($base)/v1", apiKey: "{file:~/.local/state/llama-serve/api-key}" },
     models: (
       [ $m.data[] | . as $e
         | ($known[$e.id] // [($e.id | slug), ($e.id | slug)]) as $k
         | { key: $k[0],
             value: {
-              name: ("\($k[1])" + (($e.id | quant) as $q | if $q == "" then "" else " (\($q))" end) + " - local"),
+              name: ("\($k[1])" + (($e.id | quant) as $q | if $q == "" then "" else " (\($q))" end) + " - \($where)"),
               modelID: $e.id,
               compatibility: { reasoningField: "reasoning_content" },
               capabilities: {
@@ -73,7 +74,7 @@ provider=$(jq -n --argjson m "$models" --argjson known "$KNOWN" --argjson ctx "$
 n=$(jq '.models | length' <<<"$provider")
 # The default model follows whatever the router has loaded: ~/.local/bin/opencode (a wrapper) keeps this file current.
 MODEL_FILE=${XDG_STATE_HOME:-$HOME/.local/state}/llama-serve/opencode-model
-new=$(jq --argjson p "$provider" '.providers.llamacpp = $p | .model //= "{file:~/.local/state/llama-serve/opencode-model}"' "$CONFIG" 2>/dev/null || jq -n --argjson p "$provider" '{"$schema": "https://opencode.ai/config.json", providers: {llamacpp: $p}}')
+new=$(jq --argjson p "$provider" '.providers.llamacpp = $p | .model //= "{file:~/.local/state/llama-serve/opencode-model}"' "$CONFIG" 2>/dev/null || jq -n --argjson p "$provider" '{"$schema": "https://opencode.ai/config.json", model: "{file:~/.local/state/llama-serve/opencode-model}", providers: {llamacpp: $p}}')
 
 if ((DRY)); then jq . <<<"$new"; exit 0; fi
 if [[ -f $CONFIG && ! -e $CONFIG.bak ]]; then cp -p "$CONFIG" "$CONFIG.bak"; echo "backed up the previous config to $CONFIG.bak"; fi
