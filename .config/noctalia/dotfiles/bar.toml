@@ -27,7 +27,7 @@ end = [ "fsearch", "t3code", "tray", "clock" ]
 # primary.toml (see dotfiles.toml), so it follows the primary at runtime.
 [bar.default.monitor.primary]
 start = [ "launcher", "workspaces", "sysmon_2", "sysmon_gpu", "sysmon_cpu_temp", "sysmon_cpu", "sysmon_3", "media_player" ]
-end = [ "fsearch", "t3code", "tray", "volume", "network", "caffeine", "notifications", "clock", "session" ]
+end = [ "fsearch", "t3code", "tray", "volume", "network", "bluetooth", "caffeine", "notifications", "clock", "session" ]
 
 [widget.launcher]
 custom_image = "/usr/share/pixmaps/archlinux-logo.svg"
@@ -72,6 +72,9 @@ format = "{:%a, %b %d %R}"
 
 [widget.network]
 color = "#ffffff"
+show_label = false
+
+[widget.bluetooth]
 show_label = false
 
 [widget.notifications]
