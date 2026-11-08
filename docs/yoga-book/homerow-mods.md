@@ -34,7 +34,15 @@ repeats the letter and fast doubles (`ee`, `ll`) don't become modifiers.
 
 Keycodes assume an OS in Dvorak, as `hyprland.lua` has it.
 
-## Pitfall
+## Pitfall: keyboard rollover
+
+With caps (NAV) and S held, pressing J or `;` makes the keyboard itself report Left Ctrl instead of the
+key (`sudo KEYD_DEBUG=2 keyd` shows `input leftcontrol down` and never a `j`), so alt+left/right can't be
+done with the home-row Alt. keyd and the layer config can't fix that; other three-key chords may do the
+same. Use the physical Alt key instead (caps + Alt + arrow). Modifier keys are reported in a separate
+byte of the HID report and don't hit it.
+
+## Pitfall: stuck Shift
 
 A key held when the keyboard docks or disconnects can leave keyd's virtual keyboard with Shift down, which
 kills the touch gestures. `sudo keyd reload` (or tapping and releasing Shift) clears it; adding yourself to the
