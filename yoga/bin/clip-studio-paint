@@ -14,4 +14,19 @@ if [ -z "$exe" ]; then
   say "Not installed in the $bottle bottle yet. Run: ~/.dotfiles/docs/yoga-book/csp-bottle.sh install ~/Downloads/<CSP installer>.exe $bottle"
   exit 1
 fi
-exec flatpak run --command=bottles-cli "$APP" run -b "$bottle" -e "$exe" "$@"
+
+# Pen pressure: wine-staging 11.x closes the XInput device Wine's Wintab listens on, so Wintab
+# gets one pen event and then none. This preload shim stops that (WineHQ bug 59772; source and
+# explanation in docs/yoga-book/xinput-no-close.c). It lives in the Flatpak's data dir so the
+# sandbox can read it, and is rebuilt when the source is newer.
+src=$(dirname "$(readlink -f "$0")")/../../docs/yoga-book/xinput-no-close.c
+shim_dir=$HOME/.var/app/$APP/data/csp-shims
+shim=$shim_dir/xinput-no-close.so
+if [ -f "$src" ] && { [ ! -f "$shim" ] || [ "$src" -nt "$shim" ]; }; then
+  mkdir -p "$shim_dir" && gcc -shared -fPIC -O2 -o "$shim" "$src" -ldl 2>/dev/null \
+    || say "Could not build the pen-pressure shim (needs gcc); pen pressure will not work."
+fi
+env_args=()
+[ -f "$shim" ] && env_args=(--env="LD_PRELOAD=$shim")
+
+exec flatpak run "${env_args[@]}" --command=bottles-cli "$APP" run -b "$bottle" -e "$exe" "$@"

@@ -1,0 +1,75 @@
+--- a/dlls/d2d1/device.c
++++ b/dlls/d2d1/device.c
+@@ -174,7 +174,8 @@
+     ID3D11DeviceContext1_OMSetRenderTargets(context, 1, &render_target->target.bitmap->rtv, NULL);
+     if (brush)
+     {
+-        ID3D11DeviceContext1_OMSetBlendState(context, render_target->bs, NULL, D3D11_DEFAULT_SAMPLE_MASK);
++        ID3D11BlendState *bs = render_target->copy_blend && render_target->bs_copy ? render_target->bs_copy : render_target->bs;
++        ID3D11DeviceContext1_OMSetBlendState(context, bs, NULL, D3D11_DEFAULT_SAMPLE_MASK);
+         d2d_brush_bind_resources(brush, render_target, 0);
+     }
+     else
+@@ -276,6 +277,8 @@
+             IDWriteRenderingParams_Release(context->text_rendering_params);
+         if (context->bs)
+             ID3D11BlendState_Release(context->bs);
++        if (context->bs_copy)
++            ID3D11BlendState_Release(context->bs_copy);
+         ID3D11RasterizerState_Release(context->rs);
+         ID3D11Buffer_Release(context->vb);
+         ID3D11Buffer_Release(context->ib);
+@@ -2554,6 +2557,9 @@
+     if (context->bs)
+         ID3D11BlendState_Release(context->bs);
+     context->bs = NULL;
++    if (context->bs_copy)
++        ID3D11BlendState_Release(context->bs_copy);
++    context->bs_copy = NULL;
+ }
+ 
+ static void STDMETHODCALLTYPE d2d_device_context_SetTarget(ID2D1DeviceContext6 *iface, ID2D1Image *target)
+@@ -2606,6 +2612,11 @@
+         blend_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+         if (FAILED(hr = ID3D11Device1_CreateBlendState(context->d3d_device, &blend_desc, &context->bs)))
+             WARN("Failed to create blend state, hr %#lx.\n", hr);
++
++        /* Blending off: the source replaces the destination (D2D1_COMPOSITE_MODE_SOURCE_COPY). */
++        blend_desc.RenderTarget[0].BlendEnable = FALSE;
++        if (FAILED(hr = ID3D11Device1_CreateBlendState(context->d3d_device, &blend_desc, &context->bs_copy)))
++            WARN("Failed to create copy blend state, hr %#lx.\n", hr);
+     }
+     else if (SUCCEEDED(ID2D1Image_QueryInterface(target, &IID_ID2D1CommandList, (void **)&command_list)))
+     {
+@@ -2740,12 +2751,19 @@
+         return;
+     }
+ 
+-    if (composite_mode != D2D1_COMPOSITE_MODE_SOURCE_OVER)
++    /* Both copy modes are drawn as a bounded copy: the source replaces the destination inside the
++     * drawn rectangle. SOURCE_COPY should also clear the rest of the clip; that part is not done. */
++    if (composite_mode != D2D1_COMPOSITE_MODE_SOURCE_OVER
++            && composite_mode != D2D1_COMPOSITE_MODE_SOURCE_COPY
++            && composite_mode != D2D1_COMPOSITE_MODE_BOUNDED_SOURCE_COPY)
+         FIXME("Unhandled composite mode %#x.\n", composite_mode);
+ 
+     if (SUCCEEDED(ID2D1Image_QueryInterface(image, &IID_ID2D1Bitmap, (void **)&bitmap)))
+     {
++        context->copy_blend = composite_mode == D2D1_COMPOSITE_MODE_SOURCE_COPY
++                || composite_mode == D2D1_COMPOSITE_MODE_BOUNDED_SOURCE_COPY;
+         d2d_device_context_draw_bitmap(context, bitmap, NULL, 1.0f, interpolation_mode, image_rect, target_offset, NULL);
++        context->copy_blend = FALSE;
+ 
+         ID2D1Bitmap_Release(bitmap);
+         return;
+--- a/dlls/d2d1/d2d1_private.h
++++ b/dlls/d2d1/d2d1_private.h
+@@ -206,6 +206,8 @@
+     ID3D11Buffer *vb;
+     ID3D11RasterizerState *rs;
+     ID3D11BlendState *bs;
++    ID3D11BlendState *bs_copy;
++    BOOL copy_blend;
+     ID3D11SamplerState *sampler_states
+             [D2D_SAMPLER_INTERPOLATION_MODE_COUNT]
+             [D2D_SAMPLER_EXTEND_MODE_COUNT]
