@@ -229,8 +229,8 @@ return function(host)
     --
     -- Monitors with a rule of their own in the shared config keep it: the docked
     -- pair above and the desk's G95C, AOC and TV. With the desk's monitors the pair
-    -- goes below the largest one, centered, because those rules put a monitor at
-    -- 0,100 where the panels would otherwise be; with anything else the panels stay
+    -- goes to the left of the largest one (negative x), top-aligned with it, because
+    -- those rules put a monitor at 0,100 where the panels would otherwise be; with anything else the panels stay
     -- at the left as in kens. Any other external would be placed by the catch-all's
     -- "auto", which follows wherever the panels happen to be and so moves whenever
     -- they do; those are laid out here instead, in a row from the right edge of what
@@ -288,8 +288,8 @@ return function(host)
                 for _, p in ipairs(plan) do
                     if p.w * p.h > main.w * main.h then main = p end
                 end
-                x = math.floor(main.x + (main.w - pw) / 2)
-                y = math.floor(main.y + main.h)
+                x = math.floor(main.x - pw)
+                y = math.floor(main.y)
             end
         end
         -- the bottom panel, while it is reserved for the keyboard, sits out of the pointer's reach
