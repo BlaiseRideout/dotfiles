@@ -437,6 +437,28 @@
         enabled: true
         state: started
 
+    # --- Pi installation (pi.dev) ----------------------------------------------------
+    # Note: The install.sh script opens an interactive installer when run with no
+    # arguments, using a menu with keys y/u/n. Installing from a script requires
+    # piping input or running in a non-TTY context. The installer auto-selects
+    # the default action (install) when no terminal is detected. Node.js and npm
+    # are installed as part of the base packages, so they're available when the
+    # installer runs. Pi installs to ~/.local/bin/ (like most npm global packages).
+    # See: https://pi.dev/install.sh
+    - name: Ensure ~/.local/bin exists
+      ansible.builtin.file:
+        path: "{{ ansible_facts['env']['HOME'] }}/.local/bin"
+        state: directory
+        mode: "0755"
+
+    - name: Install Pi (pi.dev)
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL https://pi.dev/install.sh | bash -s
+      args:
+        executable: /bin/bash
+        creates: "{{ ansible_facts['env']['HOME'] }}/.local/bin/pi"
+
     - name: Install Neovim's Python provider
       community.general.pipx:
         name: pynvim
