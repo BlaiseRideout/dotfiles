@@ -87,17 +87,7 @@ show_label = false
 [widget.session]
 color = "#ffffff"
 
-# The Waybar scratchpad buttons: show/hide the existing app window.
-[widget.fsearch]
-type = "blaise/bar-button:button"
-glyph = "search"
-glyph_size = 13
-tooltip = "Search files"
-color = "#ffffff"
-capsule = false
 
-[widget.fsearch.actions]
-left = "exec $HOME/.config/sway/scratchpad-app.sh fsearch toggle"
 
 [widget.t3code]
 type = "blaise/bar-button:button"

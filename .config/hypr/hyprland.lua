@@ -497,29 +497,11 @@ local function succeeds(cmd)
     return out == "ok"
 end
 
-local apps = {
-    fsearch = {
-        class   = "io.github.cboxdoerfer.FSearch",
-        title   = "^FSearch",   -- the main window; its dialogs share the class
-        launch  = "flatpak run io.github.cboxdoerfer.FSearch",
-        overlay = true,
-        installed = function()
-            return succeeds("flatpak info io.github.cboxdoerfer.FSearch")
-        end,
-    },
-    t3code = {
-        class   = "com.t3tools.T3Code",
-        title   = "",
-        launch  = home .. "/.local/bin/t3code",
-        overlay = false,
-        installed = function()
-            return succeeds("test -x " .. home .. "/.local/bin/t3code")
-        end,
-    },
-}
+local apps = {}
 local pending_show = {}   -- apps launched by a toggle, to show once their window opens
 
 local function app_matches(app, w)
+    if not app or not app.class then return false end
     return w.class == app.class and (w.title or ""):find(app.title) ~= nil
 end
 
@@ -618,16 +600,6 @@ hl.on("window.minimize", function(w, minimized)
     end
 end)
 
--- Started hidden at login: FSearch's main window goes straight to its special workspace
-hl.window_rule({
-    name  = "fsearch-hidden",
-    match = { class = "^io\\.github\\.cboxdoerfer\\.FSearch$", title = "^FSearch" },
-    workspace = "special:fsearch silent",
-    float = true,
-    rounding = 12,   -- like fuzzel (fuzzel.ini)
-})
-
-
 ---------------------
 ---- AUTOSTART ------
 ---------------------
@@ -685,7 +657,6 @@ hl.on("hyprland.start", function()
     exec("command -v mintupdate-launcher >/dev/null && exec mintupdate-launcher")   -- Mint's updates
     exec("udiskie --no-tray")
     exec(swaydir .. "/selection-to-clipboard.sh")
-    if apps.fsearch.installed() then exec(apps.fsearch.launch) end
 end)
 
 
@@ -1030,7 +1001,7 @@ local function launcher_cmd() return yoga and yoga.launcher_cmd end
 bind("d", function()
     hl.dispatch(run(launcher_cmd() or "noctalia msg panel-toggle launcher"))
 end)
-bind("u", function() scratch_toggle("fsearch") end)   -- search files: show or hide FSearch
+bind("u", run("fsearch"))
 
 -- Escape dismisses FSearch's main window. Disable the binding everywhere
 -- else so other apps and FSearch dialogs keep their normal Escape handling.

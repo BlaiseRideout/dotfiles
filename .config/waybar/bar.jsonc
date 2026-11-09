@@ -125,11 +125,7 @@
     },
     // Show or hide FSearch and T3 Code (see sway/scratchpad-app.sh). "label" prints
     // nothing where the app isn't installed, which hides the button
-    "custom/fsearch": {
-        "exec": "$HOME/.config/sway/scratchpad-app.sh fsearch label",
-        "tooltip-format": "Search files",
-        "on-click": "$HOME/.config/sway/scratchpad-app.sh fsearch toggle"
-    },
+
     "custom/t3code": {
         "exec": "$HOME/.config/sway/scratchpad-app.sh t3code label",
         "tooltip-format": "T3 Code",

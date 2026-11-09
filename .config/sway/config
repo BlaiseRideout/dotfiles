@@ -48,10 +48,7 @@ exec ~/.config/sway/tv-autotoggle.sh
 # back); only where T3 Code is installed
 exec sh -c '[ -x ~/.local/bin/t3code ] && exec ~/.config/sway/t3code-minimize-hook.py'
 
-# FSearch, started hidden in the scratchpad; $mod+s or Waybar's magnifying glass brings it
-# up. scratchpad-app.sh does nothing where an app isn't installed
-exec ~/.config/sway/scratchpad-app.sh fsearch start
-
+# FSearch is started with $mod+u keyboard shortcut
 ### Idle configuration
 #
 # Example configuration:
