@@ -138,6 +138,17 @@ yoga_lock_conf() {
 if [[ $1 == "--yoga-lock-conf" ]]; then yoga_lock_conf; exit 0; fi
 
 if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]] && hyprlock_ready; then
+  # Move into a systemd scope of our own, out of whatever cgroup called us. A lock started from a
+  # shell inside a cgroup that later ends (a Claude/T3 Code agent's scope: "lock the PC when
+  # you're done") was killed with it, SIGTERM to hyprlock and lock.sh together, and Hyprland
+  # showed its "lockscreen crashed" splash (2026-11-09 01:38). `&`, setsid and nohup do not help:
+  # they leave the cgroup alone. --scope moves this very process and execs the script again, so
+  # the environment is kept and the call still blocks until the unlock (hypridle's
+  # before_sleep_cmd relies on that).
+  if [[ -z ${LOCK_SH_DETACHED:-} ]] && command -v systemd-run >/dev/null; then
+    LOCK_SH_DETACHED=1 exec systemd-run --user --scope --quiet --collect \
+      --description="Lock screen (hyprlock)" -- "$(readlink -f "$0")" "$@"
+  fi
   # Already locked: nothing to do. A hyprlock that's been up a while without the
   # session being locked is a hung leftover, which would otherwise swallow every
   # lock request, so clear it out.
@@ -163,8 +174,15 @@ if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]] && hyprlock_ready; then
   [[ -n $conf ]] && args=(-c "$conf")
   locked_hint true
   # not exec: the hint is cleared when hyprlock goes (unlock, or killed)
-  hyprlock "${args[@]}"
+  # hyprlock's own log and exit status go to ~/.cache/hyprlock/hyprlock.log: a crash left nothing
+  # in the journal or the coredumps (2026-11-09). rc 139 = SIGSEGV, 134 = SIGABRT, 137 = SIGKILL.
+  log=${XDG_CACHE_HOME:-$HOME/.cache}/hyprlock/hyprlock.log
+  mkdir -p "${log%/*}"
+  [[ -f $log && $(stat -c %s "$log") -gt 1048576 ]] && mv -f "$log" "$log.old"
+  printf '%s lock.sh pid %s: starting hyprlock\n' "$(date '+%F %T')" "$$" >>"$log"
+  hyprlock --verbose "${args[@]}" 2>>"$log"
   rc=$?
+  printf '%s lock.sh pid %s: hyprlock exited %s\n' "$(date '+%F %T')" "$$" "$rc" >>"$log"
   # (not if a newer lock.sh has already replaced this hyprlock with its own)
   pidof hyprlock >/dev/null || locked_hint false
   exit $rc
