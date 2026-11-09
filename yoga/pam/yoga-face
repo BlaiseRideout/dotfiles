@@ -1,0 +1,5 @@
+# PAM stack for yoga-lock-face (yoga/bin): the face check alone, no password step, so
+# a face that doesn't match is not a failed password and never counts towards faillock.
+# Installed as /etc/pam.d/yoga-face by ansible/yoga.yaml.
+auth     required   pam_howdy.so
+account  required   pam_permit.so

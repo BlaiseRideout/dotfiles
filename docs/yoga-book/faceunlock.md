@@ -41,6 +41,18 @@ the SHA-256, so the files are the same ones. By hand: `sudo ~/.dotfiles/yoga/bin
 
 - **Lock screen:** Howdy runs first, for up to `[video] timeout` seconds (4 by default). If it doesn't recognise
   you the password prompt appears only after that. Lower the timeout if that is annoying.
+- **Waking the lock screen from idle:** hyprlock runs its PAM stack (so the face scan) once, when it
+  starts, and again only after a wrong password. A screen that has been locked for minutes therefore
+  asked for a password even with you in front of it. `yoga/bin/yoga-lock-face` rescans: hypridle runs
+  it on resume from the 600 s idle listener (`.config/hypr/hypridle.conf`, `on-resume`), so the first
+  key or touch after the idle lock starts a scan, and a match sends hyprlock SIGUSR1 (unlock). A miss
+  changes nothing; type the password as before. It scans through its own PAM service,
+  `/etc/pam.d/yoga-face` (`yoga/pam/yoga-face`, installed by ansible), which has `pam_howdy` and
+  nothing else: through `/etc/pam.d/hyprlock` a non-matching face would run on into `pam_unix` and
+  count as a failed password for `pam_faillock`. It does nothing when hyprlock is not running, when
+  hyprlock is under 6 s old (its own scan has the camera), or when another scan is running.
+  Try it: `yoga-lock-face --dry-run` (scans, reports, unlocks nothing). Needs `yoga-lock-face` in
+  `~/.local/bin` (home-manager switch) and hypridle restarted to read the new config.
 - **Login screen:** the packaged greeter (v1.7.0) only starts PAM when you press Enter with a password typed, so the
   camera stays dark until then. Upstream PR #183 adds `[auth] auto_start_pam`, which starts PAM when the password
   step appears (the camera lights up at once; a password typed meanwhile is queued and used if the face doesn't

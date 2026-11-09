@@ -1,0 +1,149 @@
+#!/usr/bin/env python3
+"""Face unlock for a lock screen that has been up a while (Yoga Book; docs/yoga-book/faceunlock.md).
+
+hyprlock runs its PAM stack (Howdy first) once, when it starts, and then only again after a
+wrong password. Wake the screen from idle and the face scan from minutes ago is long over, so
+you had to type a password. hypridle runs this on resume (on-resume of the lock listener in
+.config/hypr/hypridle.conf): it scans for a face with Howdy and, if it matches, unlocks
+hyprlock with SIGUSR1.
+
+The scan goes through PAM with only pam_howdy in the stack (the "yoga-face" service,
+/etc/pam.d/yoga-face, installed by ansible/yoga.yaml from yoga/pam/yoga-face), never the login
+stack: a face that doesn't match must not look like a failed password to faillock. A password
+prompt, if the stack ever raised one, is refused.
+
+  yoga-lock-face            scan if hyprlock is up; unlock it on a match
+  yoga-lock-face --dry-run  scan and say what would happen; leave hyprlock alone
+
+Exit status: 0 matched (or nothing to do), 1 no match, 2 could not scan.
+"""
+import ctypes
+import ctypes.util
+import fcntl
+import getpass
+import os
+import signal
+import subprocess
+import sys
+
+MIN_LOCK_AGE = 6   # s: hyprlock's own scan runs for its first few seconds and owns the camera
+
+PAM_SUCCESS, PAM_CONV_ERR = 0, 19
+PAM_PROMPT_ECHO_OFF, PAM_PROMPT_ECHO_ON, PAM_ERROR_MSG, PAM_TEXT_INFO = 1, 2, 3, 4
+
+
+class PamMessage(ctypes.Structure):
+    _fields_ = [("msg_style", ctypes.c_int), ("msg", ctypes.c_char_p)]
+
+
+class PamResponse(ctypes.Structure):
+    _fields_ = [("resp", ctypes.c_char_p), ("resp_retcode", ctypes.c_int)]
+
+
+CONV = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.POINTER(PamMessage)),
+                        ctypes.POINTER(ctypes.POINTER(PamResponse)), ctypes.c_void_p)
+
+
+class PamConv(ctypes.Structure):
+    _fields_ = [("conv", CONV), ("appdata_ptr", ctypes.c_void_p)]
+
+
+libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+libc.calloc.restype = ctypes.c_void_p
+libc.calloc.argtypes = [ctypes.c_size_t, ctypes.c_size_t]
+libpam = ctypes.CDLL(ctypes.util.find_library("pam"), use_errno=True)
+libpam.pam_start.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(PamConv),
+                             ctypes.POINTER(ctypes.c_void_p)]
+libpam.pam_authenticate.argtypes = [ctypes.c_void_p, ctypes.c_int]
+libpam.pam_end.argtypes = [ctypes.c_void_p, ctypes.c_int]
+libpam.pam_strerror.restype = ctypes.c_char_p
+libpam.pam_strerror.argtypes = [ctypes.c_void_p, ctypes.c_int]
+
+
+def say(text):
+    print(f"yoga-lock-face: {text}", file=sys.stderr, flush=True)
+
+
+def _conv(n, msgs, resp, _data):
+    # Answer informational messages, refuse anything that asks for input.
+    array = libc.calloc(n, ctypes.sizeof(PamResponse))
+    if not array:
+        return PAM_CONV_ERR
+    for i in range(n):
+        if msgs[i].contents.msg_style in (PAM_PROMPT_ECHO_OFF, PAM_PROMPT_ECHO_ON):
+            libc.free(ctypes.c_void_p(array))
+            return PAM_CONV_ERR
+    resp[0] = ctypes.cast(array, ctypes.POINTER(PamResponse))
+    return PAM_SUCCESS
+
+
+_conv_ref = CONV(_conv)   # keep alive for the duration of the call
+
+
+def face_matches(service, user):
+    pamh = ctypes.c_void_p()
+    conv = PamConv(_conv_ref, None)
+    rc = libpam.pam_start(service.encode(), user.encode(), ctypes.byref(conv), ctypes.byref(pamh))
+    if rc != PAM_SUCCESS:
+        say(f"pam_start failed ({rc})")
+        return None
+    rc = libpam.pam_authenticate(pamh, 0)
+    why = libpam.pam_strerror(pamh, rc).decode(errors="replace")
+    libpam.pam_end(pamh, rc)
+    if rc == PAM_SUCCESS:
+        return True
+    say(f"no match: {why}")
+    return False
+
+
+def hyprlock_pids():
+    out = subprocess.run(["pidof", "-s", "hyprlock"], capture_output=True, text=True).stdout.split()
+    return [int(p) for p in out]
+
+
+def age(pid):
+    out = subprocess.run(["ps", "-o", "etimes=", "-p", str(pid)], capture_output=True, text=True).stdout
+    return int(out.strip() or 0)
+
+
+def main():
+    dry = "--dry-run" in sys.argv[1:]
+    pids = hyprlock_pids()
+    if not pids and not dry:
+        return 0                                  # not locked
+    if pids and age(pids[0]) < MIN_LOCK_AGE:
+        say("hyprlock has only just started: its own scan is running")
+        return 0
+
+    # one scan at a time (every resume event, and a keypress storm, ends up here)
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    lock = open(os.path.join(runtime, "yoga-lock-face.lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return 0
+
+    service = "yoga-face"
+    # without its file PAM falls back to /etc/pam.d/other (deny, and a warning in the journal)
+    if not os.path.isfile(f"/etc/pam.d/{service}"):
+        say(f"/etc/pam.d/{service} is missing: run the Yoga ansible play (yoga/pam/yoga-face)")
+        return 2
+
+    ok = face_matches(service, getpass.getuser())
+    if ok is None:
+        return 2
+    if not ok:
+        return 1
+    # the lock may have gone while we scanned (the password was typed in the meantime)
+    pids = hyprlock_pids()
+    if dry:
+        say(f"face matched; would unlock hyprlock ({pids or 'not running'})")
+        return 0
+    for pid in pids:
+        say(f"face matched: unlocking hyprlock ({pid})")
+        os.kill(pid, signal.SIGUSR1)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

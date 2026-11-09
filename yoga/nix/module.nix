@@ -18,6 +18,7 @@ let
   scripts = [
     "yoga-osk"                # on-screen keyboard (wvkbd) toggle; docs/yoga-book/touch-ux.md
     "yoga-osk-lockwatch"      # shows it over the lock screen
+    "yoga-lock-face"          # face rescan when the locked screen wakes from idle; docs/yoga-book/faceunlock.md
     "yoga-touch"              # hyprgrass plugin control + rescue (`yoga-touch recover`)
     "yoga-posture"            # posture daemon + CLI; docs/yoga-book/posture-daemon.md
     "yoga-touchpad"           # virtual touchpad daemon + CLI; docs/yoga-book/touchpad.md

@@ -661,6 +661,20 @@
         regexp: 'pam_howdy\.so'
         line: "auth       sufficient   pam_howdy.so"
 
+    # yoga/bin/yoga-lock-face rescans for a face when the screen wakes from idle behind the
+    # lock screen (hypridle on-resume). Its own service holds pam_howdy alone: going through
+    # /etc/pam.d/hyprlock would end in the password step, and a face that doesn't match would
+    # count as a failed password for faillock.
+    - name: PAM service for the lock screen's face rescan (yoga-lock-face)
+      when: yoga_faceunlock_pam | default(true) | bool
+      become: true
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/pam/yoga-face"
+        dest: /etc/pam.d/yoga-face
+        owner: root
+        group: root
+        mode: "0644"
+
 # power-profiles-daemon is installed and works (ideapad platform_profile), but is
 # only D-Bus activated; start it at boot so the saved profile applies right away.
 - name: Start power-profiles-daemon at boot (Yoga Book)
