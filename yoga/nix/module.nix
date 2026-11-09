@@ -135,6 +135,7 @@ in
         Categories=Graphics;2DGraphics;RasterGraphics;
         Keywords=drawing;painting;manga;comic;csp;celsys;
         StartupNotify=true
+        StartupWMClass=clipstudiopaint.exe
       '';
     };
   };
