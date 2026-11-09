@@ -1,0 +1,11 @@
+[Unit]
+Description=Update the FSearch file index hourly
+
+[Timer]
+OnCalendar=hourly
+# Run at the next login if the machine was off at the scheduled time
+Persistent=true
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

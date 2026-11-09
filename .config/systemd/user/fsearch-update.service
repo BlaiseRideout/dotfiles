@@ -1,0 +1,10 @@
+[Unit]
+Description=Update the FSearch file index
+
+[Service]
+Type=oneshot
+# The Flatpak launcher linked by ansible/setup.yaml (apps=true)
+ExecStart=%h/.local/bin/fsearch -u
+# Indexing is I/O heavy; keep it from competing with the desktop
+Nice=10
+IOSchedulingClass=idle

@@ -653,6 +653,23 @@
               StartupWMClass=com.t3tools.T3Code
               StartupNotify=false
 
+    # FSearch's Flatpak exports its launcher to /var/lib/flatpak/exports/bin; this
+    # gives it a short name on the PATH (~/.local/bin). Runs as the user, not root.
+    - name: Link fsearch into ~/.local/bin
+      when: apps | bool
+      block:
+        - name: Make sure ~/.local/bin exists
+          ansible.builtin.file:
+            path: "{{ ansible_facts['env']['HOME'] }}/.local/bin"
+            state: directory
+            mode: "0755"
+
+        - name: Link fsearch to the FSearch Flatpak launcher
+          ansible.builtin.file:
+            src: /var/lib/flatpak/exports/bin/io.github.cboxdoerfer.FSearch
+            dest: "{{ ansible_facts['env']['HOME'] }}/.local/bin/fsearch"
+            state: link
+
     - name: Use zsh as the login shell
       become: true
       ansible.builtin.user:
@@ -779,6 +796,16 @@
     - name: Start the shared SSH agent
       ansible.builtin.systemd:
         name: ssh-agent.service
+        scope: user
+        daemon_reload: true
+        state: started
+
+    # Hourly FSearch index update (user timer, home/common.nix). Needs the fsearch
+    # launcher from the apps block above, so it follows apps=true.
+    - name: Start the FSearch index update timer
+      when: apps | bool
+      ansible.builtin.systemd:
+        name: fsearch-update.timer
         scope: user
         daemon_reload: true
         state: started

@@ -109,4 +109,12 @@
     dotfilesLink ".config/systemd/user/ssh-agent.service";
   xdg.configFile."systemd/user/default.target.wants/ssh-agent.service".source =
     dotfilesLink ".config/systemd/user/ssh-agent.service";
+
+  # Daily FSearch index update (fsearch -u). The timers.target link enables it.
+  xdg.configFile."systemd/user/fsearch-update.service".source =
+    dotfilesLink ".config/systemd/user/fsearch-update.service";
+  xdg.configFile."systemd/user/fsearch-update.timer".source =
+    dotfilesLink ".config/systemd/user/fsearch-update.timer";
+  xdg.configFile."systemd/user/timers.target.wants/fsearch-update.timer".source =
+    dotfilesLink ".config/systemd/user/fsearch-update.timer";
 }
