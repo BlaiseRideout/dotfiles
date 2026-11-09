@@ -231,7 +231,7 @@
         - copyq
 
     # Default apps by MIME type, set with xdg-mime (~/.config/mimeapps.list).
-    # smplayer comes from app_packages (apps=true); feh from base_packages.
+    # smplayer comes from app_packages (apps=true); qView from base_packages.
     video_player: smplayer.desktop
     video_mimes:
       - video/mp4
@@ -244,7 +244,7 @@
       - video/x-ms-wmv
       - video/ogg
       - video/3gpp
-    image_viewer: feh.desktop
+    image_viewer: qView.desktop
     image_mimes:
       - image/jpeg
       - image/png
@@ -966,7 +966,7 @@
       register: video_defaults
       changed_when: false
 
-    - name: Make smplayer the default video player
+    - name: Set the default video player
       ansible.builtin.command: xdg-mime default {{ video_player }} {{ item.item }}
       loop: "{{ video_defaults.results }}"
       loop_control:
@@ -981,7 +981,7 @@
       register: image_defaults
       changed_when: false
 
-    - name: Make feh the default image viewer
+    - name: Set the default image viewer
       ansible.builtin.command: xdg-mime default {{ image_viewer }} {{ item.item }}
       loop: "{{ image_defaults.results }}"
       loop_control:
