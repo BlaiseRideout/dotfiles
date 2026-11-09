@@ -108,6 +108,7 @@
         - lm-sensors
         - x11-xserver-utils # xrdb, xmodmap
         - feh
+        - qview
         - sassc             # builds the Orchis GTK theme
         - qt5-style-kvantum # the Orchis Qt theme's engine
         - qt6-style-kvantum
@@ -136,6 +137,7 @@
         - xorg-xrdb
         - xorg-xmodmap
         - feh
+        - qview
         - sassc             # builds the Orchis GTK theme
         - kvantum           # the Orchis Qt theme's engine (Qt 6)
         - kvantum-qt5
@@ -244,7 +246,7 @@
       - video/x-ms-wmv
       - video/ogg
       - video/3gpp
-    image_viewer: qView.desktop
+    image_viewer: "{{ 'com.interversehq.qView.desktop' if pkg_mgr == 'pacman' else 'feh.desktop' }}"
     image_mimes:
       - image/jpeg
       - image/png
