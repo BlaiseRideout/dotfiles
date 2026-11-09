@@ -10,7 +10,11 @@ tap-to-click, two-finger scroll and gestures) and every other touch to a uinput
 touchscreen with the real one's ranges ("Yoga Virtual Touchscreen Bottom", bound
 to the bottom panel by yoga/hypr/yoga.lua), so the rest of the screen keeps working.
 A touch stays where it started until it lifts, even if it drifts across the
-boundary. Notes: docs/yoga-book/touchpad.md.
+boundary. The front edge of the strip (the side nearest you) is a bar of two mouse
+buttons, left and right: a finger that starts there holds BTN_LEFT / BTN_RIGHT on the
+same virtual touchpad until it lifts (one device: libinput sees a touchpad with
+physical buttons, so tap-to-click stays the system's touchpad setting), so you can
+press with one thumb and drag on the pad with a finger. Notes: docs/yoga-book/touchpad.md.
 
   yoga-touchpad status             # what it is doing and why
   yoga-touchpad on | off           # force the touchpad on (default front strip) / off
@@ -89,6 +93,14 @@ DEFAULTS = {
         "invert_x": False,
         "invert_y": False,
     },
+    # Two mouse buttons along the strip's front edge (its high-y end, the side nearest you in
+    # every pose): the bar is taken from the strip, the pad is what is left. Left of `split`
+    # is BTN_LEFT, right of it BTN_RIGHT.
+    "buttons": {
+        "enabled": True,
+        "height": 0.08,          # of the screen's height (~14 mm); never more than half the strip
+        "split": 0.5,            # where left ends and right begins, as a fraction of the strip's width
+    },
     "source": {"device": "/dev/input/yoga-touch-bottom"},
     # The dock position (debounced), the on-screen keyboard and the posture come from the state
     # yoga-posture publishes ($XDG_RUNTIME_DIR/yoga/state.json; yoga/bin/yoga_state.py), the same
@@ -100,7 +112,7 @@ DEFAULTS = {
         "name": "Yoga Virtual Touchpad",
         "slots": 5,
         "prop_buttonpad": False,     # no physical click here: tap-to-click only
-        "advertise_left_button": False,  # without BTN_LEFT libinput enables tapping by default
+        "advertise_left_button": False,  # BTN_LEFT without the button bar (the bar advertises BTN_LEFT and BTN_RIGHT itself)
     },
     "screen": {"name": "Yoga Virtual Touchscreen Bottom"},
     "hyprland": {"poke": True},  # run yoga_apply_devices() after the devices appear
@@ -173,20 +185,56 @@ class Rect:
         return f"Rect(x {self.x0}..{self.x1}, y {self.y0}..{self.y1})"
 
 
-def strip_rect(cfg, key, src):
+def strip_fracs(cfg, key):
+    """The strip as configured: screen fractions (xa, xb, ya, yb), y = 0 at the hinge."""
     s = cfg["strip"][key]
     xa, xb = sorted(float(v) for v in s["x"])
     ya, yb = sorted(float(v) for v in s["y"])
-    xa, xb, ya, yb = (min(max(v, 0.0), 1.0) for v in (xa, xb, ya, yb))
+    return tuple(min(max(v, 0.0), 1.0) for v in (xa, xb, ya, yb))
+
+
+def button_fracs(cfg, key):
+    """The button bar inside the strip, in screen fractions: -> None or (ya, yb, x_split).
+    It sits at the strip's high-y end, the edge nearest the user."""
+    b = cfg["buttons"]
+    if not b["enabled"]:
+        return None
+    xa, xb, ya, yb = strip_fracs(cfg, key)
+    h = min(max(float(b["height"]), 0.0), (yb - ya) / 2)
+    if h <= 0:
+        return None
+    return yb - h, yb, xa + (xb - xa) * min(max(float(b["split"]), 0.05), 0.95)
+
+
+def _rect(cfg, src, xa, xb, ya, yb):
     if cfg["panel"]["invert_x"]:
         xa, xb = 1 - xb, 1 - xa
     if cfg["panel"]["invert_y"]:
         ya, yb = 1 - yb, 1 - ya
     xm, ym = src["x_max"] + 1, src["y_max"] + 1
-    r = Rect(xa * xm, ya * ym, xb * xm, yb * ym)
+    return Rect(xa * xm, ya * ym, xb * xm, yb * ym)
+
+
+def strip_rect(cfg, key, src):
+    """The whole strip (pad and buttons) in source units."""
+    r = _rect(cfg, src, *strip_fracs(cfg, key))
     if r.w < 100 or r.h < 100:
         raise ValueError(f"strip {key} is empty: {r}")
     return r
+
+
+def strip_layout(cfg, key, src):
+    """-> (pad Rect, [(button name, Rect), ...]): the strip split into the touchpad proper
+    and its two buttons. Left stays on the user's left whatever panel.invert_x says."""
+    xa, xb, ya, yb = strip_fracs(cfg, key)
+    bf = button_fracs(cfg, key)
+    if bf is None:
+        return strip_rect(cfg, key, src), []
+    by0, by1, sx = bf
+    pad = _rect(cfg, src, xa, xb, ya, by0)
+    if pad.w < 100 or pad.h < 100:
+        raise ValueError(f"strip {key} is empty: {pad}")
+    return pad, [("left", _rect(cfg, src, xa, sx, by0, by1)), ("right", _rect(cfg, src, sx, xb, by0, by1))]
 
 
 # =============================================================================
@@ -347,6 +395,58 @@ class Sink:
         self.out.close()
 
 
+class ButtonSink:
+    """Mouse buttons held by fingers, written to the touchpad's own device (`out` is the pad's). A finger that starts in a button's rectangle presses it
+    and releases it when that finger lifts; two fingers on one button keep it down until both
+    are up. Same interface as Sink where the Router needs it."""
+
+    NAMES = {"left": "BTN_LEFT", "right": "BTN_RIGHT"}
+
+    def __init__(self, out):
+        _, self.e = ev()
+        self.out = out
+        self.held = {}          # source slot -> button name
+        self.state = {}         # button name -> 0 | 1 as last written
+        self.dirty = False
+        self.frames = 0
+
+    def press(self, src_slot, name):
+        self.held[src_slot] = name
+        self.dirty = True
+        return True
+
+    def up(self, src_slot):
+        if self.held.pop(src_slot, None) is not None:
+            self.dirty = True
+
+    def lift_all(self):
+        self.held.clear()
+        self.dirty = True
+        self.sync()
+
+    def count(self):
+        return len(self.held)
+
+    def sync(self):
+        if not self.dirty:
+            return
+        self.dirty = False
+        down = set(self.held.values())
+        changed = False
+        for name, code in self.NAMES.items():
+            val = 1 if name in down else 0
+            if self.state.get(name, 0) != val:
+                self.out.write(self.e.EV_KEY, getattr(self.e, code), val)
+                self.state[name] = val
+                changed = True
+        if changed:
+            self.out.syn()
+            self.frames += 1
+
+    def close(self):        # the device belongs to the pad, which closes it
+        self.lift_all()
+
+
 # =============================================================================
 # Router: the logic. Source events in, contacts steered to the pad or the screen.
 # =============================================================================
@@ -363,18 +463,21 @@ class Contact:
 
 
 class Router:
-    def __init__(self, pad, screen, rect, nslots=10):
+    def __init__(self, pad, screen, rect, nslots=10, buttons=None, button_rects=()):
         _, e = ev()
         self.e = e
         self.pad, self.screen = pad, screen
+        self.buttons = buttons              # a ButtonSink, or None: no buttons
+        self.button_rects = list(button_rects)   # [(name, Rect)]
         self.rect = rect
         self.contacts = {}      # source slot -> Contact
         self.slot = 0
         self.dropping = False   # inside a SYN_DROPPED burst
 
-    def set_rect(self, rect):
+    def set_rect(self, rect, button_rects=()):
         """New strip: only contacts that START later use it."""
         self.rect = rect
+        self.button_rects = list(button_rects)
 
     def feed(self, t, c, v):
         e = self.e
@@ -415,11 +518,18 @@ class Router:
                 ct.y, ct.dirty = v, True
 
     def _sink(self, ct):
-        return self.pad if ct.dest == "pad" else self.screen
+        return {"pad": self.pad, "btn": self.buttons}.get(ct.dest, self.screen)
+
+    def _button_at(self, x, y):
+        if self.buttons is not None:
+            for name, r in self.button_rects:
+                if r.contains(x, y):
+                    return name
+        return None
 
     def _flush_contact(self, slot, ct):
         if ct.dead:
-            if ct.dest in ("pad", "screen"):
+            if ct.dest in ("pad", "screen", "btn"):
                 self._sink(ct).up(slot)
             if self.contacts.get(slot) is ct:
                 del self.contacts[slot]
@@ -431,6 +541,9 @@ class Router:
             if ct.rect is not None and ct.rect.contains(ct.x, ct.y):
                 ok = self.pad.down(slot, ct.x - ct.rect.x0, ct.y - ct.rect.y0)
                 ct.dest = "pad" if ok else "none"
+            elif self._button_at(ct.x, ct.y):
+                self.buttons.press(slot, self._button_at(ct.x, ct.y))
+                ct.dest = "btn"
             else:
                 ok = self.screen.down(slot, ct.x, ct.y)
                 ct.dest = "screen" if ok else "none"
@@ -439,6 +552,7 @@ class Router:
             self.pad.move(slot, ct.x - ct.rect.x0, ct.y - ct.rect.y0)
         elif ct.dest == "screen":
             self.screen.move(slot, ct.x, ct.y)
+        # dest "btn": the finger holds its button; sliding about changes nothing
 
     def flush(self):
         for slot, ct in list(self.contacts.items()):
@@ -447,11 +561,15 @@ class Router:
                 ct.dirty = False
         self.pad.sync()
         self.screen.sync()
+        if self.buttons is not None:
+            self.buttons.sync()
 
     def release_all(self):
         self.contacts.clear()
         self.pad.lift_all()
         self.screen.lift_all()
+        if self.buttons is not None:
+            self.buttons.lift_all()
 
 
 # =============================================================================
@@ -541,7 +659,9 @@ def make_pad(cfg, src, rect, memory=False):
     ]
     keys = [e.BTN_TOUCH, e.BTN_TOOL_FINGER, e.BTN_TOOL_DOUBLETAP, e.BTN_TOOL_TRIPLETAP,
             e.BTN_TOOL_QUADTAP, e.BTN_TOOL_QUINTTAP]
-    if cfg["pad"]["advertise_left_button"]:
+    if cfg["buttons"]["enabled"]:
+        keys += [e.BTN_LEFT, e.BTN_RIGHT]       # the button bar: one device, a touchpad with physical buttons
+    elif cfg["pad"]["advertise_left_button"]:
         keys += [e.BTN_LEFT]
     props = [e.INPUT_PROP_POINTER]
     if cfg["pad"]["prop_buttonpad"]:
@@ -592,8 +712,9 @@ class Active:
 
     def __init__(self, cfg, key, dry):
         self.cfg, self.key, self.dry = cfg, key, dry
-        self.src = self.dev = self.pad = self.screen = self.router = None
-        self.rect = None
+        self.src = self.dev = self.pad = self.screen = self.buttons = self.router = None
+        self.rect = None            # the touchpad proper (the strip less the button bar)
+        self.button_rects = []
         self.start = time.monotonic()
         self.n_events = 0
         self.lost_at = None     # set while the real touchscreen is away (lose_source)
@@ -609,15 +730,18 @@ class Active:
             except Exception as ex:
                 self.src = dict(SOURCE_FALLBACK)
                 log(f"[dry-run] cannot open the touchscreen ({ex}); assuming the default ranges")
-            self.rect = strip_rect(cfg, self.key, self.src)
+            self.rect, self.button_rects = strip_layout(cfg, self.key, self.src)
             log(f"[dry-run] would grab {cfg['source']['device']}, create {cfg['pad']['name']!r} "
-                f"({self.rect.w}x{self.rect.h} units) and {cfg['screen']['name']!r}; strip {self.rect}")
+                f"({self.rect.w}x{self.rect.h} units) and {cfg['screen']['name']!r}; strip {self.rect}"
+                + (f", buttons {self.button_rects}" if self.button_rects else ""))
             return
         self.dev, self.src = source_info(cfg["source"]["device"])
-        self.rect = strip_rect(cfg, self.key, self.src)
+        self.rect, self.button_rects = strip_layout(cfg, self.key, self.src)
         self.pad = make_pad(cfg, self.src, self.rect)
         self.screen = make_screen(cfg, self.src)
-        self.router = Router(self.pad, self.screen, self.rect)
+        if cfg["buttons"]["enabled"]:
+            self.buttons = ButtonSink(self.pad.out)
+        self.router = Router(self.pad, self.screen, self.rect, buttons=self.buttons, button_rects=self.button_rects)
         # let Hyprland find the new devices and bind the touchscreen before it receives touches
         if wait_hypr:
             names = [hypr_name(cfg["pad"]["name"]), hypr_name(cfg["screen"]["name"])]
@@ -640,23 +764,28 @@ class Active:
         os.set_blocking(self.dev.fd, False)
         self.dev.grab()
         log(f"grabbed {self.dev.path} ({self.dev.name}); strip {self.rect} "
-            f"[{self.key}: {STRIP_LABEL.get(self.key, '')}]")
+            f"[{self.key}: {STRIP_LABEL.get(self.key, '')}]"
+            + (f"; buttons {', '.join(f'{n} {r}' for n, r in self.button_rects)}" if self.button_rects else ""))
 
     def set_key(self, key):
         """A different strip while active."""
-        rect = strip_rect(self.cfg, key, self.src)
+        rect, button_rects = strip_layout(self.cfg, key, self.src)
         self.key = key
         if self.dry:
-            self.rect = rect
+            self.rect, self.button_rects = rect, button_rects
             log(f"[dry-run] strip -> {key} {rect}")
             return
         if (rect.w, rect.h) != (self.rect.w, self.rect.h):   # different size: a new pad
-            self.router.contacts = {s: c for s, c in self.router.contacts.items() if c.dest != "pad"}
+            self.router.contacts = {s: c for s, c in self.router.contacts.items() if c.dest not in ("pad", "btn")}
+            if self.buttons is not None:
+                self.buttons.lift_all()         # a held button goes down with the old device
             self.pad.close()
             self.pad = make_pad(self.cfg, self.src, rect)
+            if self.buttons is not None:
+                self.buttons.out = self.pad.out
             self.router.pad = self.pad
-        self.rect = rect
-        self.router.set_rect(rect)
+        self.rect, self.button_rects = rect, button_rects
+        self.router.set_rect(rect, button_rects)
         log(f"strip -> {key} {rect}")
 
     def lose_source(self):
@@ -729,7 +858,7 @@ class Active:
                 self.dev.close()
             except Exception:
                 pass
-        for s in (self.pad, self.screen):
+        for s in (self.pad, self.screen):     # the button sink shares the pad's device
             if s:
                 try:
                     s.close()
@@ -737,7 +866,8 @@ class Active:
                     pass
         secs = time.monotonic() - self.start
         log(f"released the touchscreen after {secs:.0f} s: {self.n_events} events in, "
-            f"{self.pad.frames} touchpad frames, {self.screen.frames} touchscreen frames out"
+            f"{self.pad.frames} touchpad frames, {self.screen.frames} touchscreen frames"
+            + (f", {self.buttons.frames} button frames" if self.buttons else "") + " out"
             + (f", {self.drops} USB drops survived" if self.drops else ""))
 
 
@@ -841,6 +971,9 @@ class Daemon:
             st = self.cfg["strip"][a.key]
             data.update(key=a.key, label=STRIP_LABEL.get(a.key, a.key),
                         x=sorted(float(v) for v in st["x"]), y=sorted(float(v) for v in st["y"]))
+            bf = button_fracs(self.cfg, a.key)
+            if bf:
+                data["buttons"] = {"y": [bf[0], bf[1]], "split": bf[2]}
         try:
             p = runtime_dir() / "yoga-touchpad" / "strip.json"
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -926,11 +1059,14 @@ class Daemon:
         if a:
             lines.append(f"strip     {a.key}: {a.rect} of {a.src['x_max'] + 1}x{a.src['y_max'] + 1} units"
                          + ("   [dry run: nothing grabbed]" if a.dry else ""))
+            if a.button_rects:
+                lines.append("buttons   " + ", ".join(f"{n} {r}" for n, r in a.button_rects))
             if a.lost_at is not None and a.dev is None:
                 lines.append(f"waiting   the touchscreen is away (USB reset), {time.monotonic() - a.lost_at:.0f} s")
             if not a.dry:
                 lines.append(f"traffic   {a.n_events} source events, {a.pad.frames} pad frames, "
-                             f"{a.screen.frames} screen frames; up {time.monotonic() - a.start:.0f} s")
+                             f"{a.screen.frames} screen frames"
+                             + (f", {a.buttons.frames} button frames" if a.buttons else "") + f"; up {time.monotonic() - a.start:.0f} s")
         return "\n".join(lines)
 
     def handle_ctl(self, conn):
@@ -1081,7 +1217,7 @@ def selftest():
     evdev, e = ev()
     src = dict(SOURCE_FALLBACK)
     cfg = copy.deepcopy(DEFAULTS)
-    rect = strip_rect(cfg, "dock1", src)     # y from 0.615 * 7149
+    rect, brects = strip_layout(cfg, "dock1", src)     # the pad is y 0.615 * 7149 up to the button bar
     failures = []
 
     def check(name, cond, detail=""):
@@ -1092,7 +1228,7 @@ def selftest():
     def fresh():
         pad = make_pad(cfg, src, rect, memory=True)
         scr = make_screen(cfg, src, memory=True)
-        r = Router(pad, scr, rect)
+        r = Router(pad, scr, rect, buttons=ButtonSink(pad.out), button_rects=brects)
         return pad, scr, r, Script(r)
 
     def vals(sink, code, ty=None):
@@ -1173,8 +1309,8 @@ def selftest():
     # 8. the strip changes mid-contact: the old contact keeps its origin, new ones use the new strip
     pad, scr, r, s = fresh()
     s.down(0, 3000, fy); s.syn()
-    other = strip_rect(cfg, "dock2", src)
-    r.set_rect(other)
+    other, other_btns = strip_layout(cfg, "dock2", src)
+    r.set_rect(other, other_btns)
     s.move(0, 3000, fy + 10); s.syn()
     check("a running contact keeps the strip it started in", vals(pad, e.ABS_MT_POSITION_Y)[-1] == 510)
     s.down(1, 3000, fy); s.syn()           # fy is now outside the new strip
@@ -1209,6 +1345,69 @@ def selftest():
     rr = strip_rect(c2, "dock1", src)
     check("invert_y mirrors the strip to the hinge side", rr.y0 == 0 and 0.375 < rr.y1 / (src["y_max"] + 1) < 0.395, str(rr))
 
+    # 13. mouse buttons: the bar at the strip's front edge, left and right of the split
+    bl, br = dict(brects)["left"], dict(brects)["right"]
+    check("button bar is the strip's front end, under the pad",
+          bl.y0 == br.y0 == rect.y1 and bl.y1 == br.y1 == src["y_max"] + 1 and bl.x1 == br.x0, str(brects))
+    check("button bar is 8% of the screen", abs(bl.h / (src["y_max"] + 1) - 0.08) < 0.002, str(bl))
+    by = bl.y0 + 10
+    pad, scr, r, s = fresh()
+    btn = r.buttons
+    s.down(0, bl.x0 + 100, by); s.syn()
+    check("a finger on the left button presses BTN_LEFT", vals(btn, e.BTN_LEFT) == [1] and not vals(btn, e.BTN_RIGHT),
+          str(btn.out.events))
+    check("... and touches neither pad nor screen", not vals(pad, e.ABS_MT_TRACKING_ID) and not scr.out.events)
+    s.move(0, br.x0 + 500, by - 400); s.syn()           # slides onto the right button and the pad
+    check("sliding off the button changes nothing", vals(btn, e.BTN_LEFT) == [1] and not vals(btn, e.BTN_RIGHT)
+          and not vals(pad, e.ABS_MT_TRACKING_ID))
+    s.up(0); s.syn()
+    check("lifting releases it", vals(btn, e.BTN_LEFT) == [1, 0])
+    pad, scr, r, s = fresh()
+    btn = r.buttons
+    s.down(0, br.x0 + 100, by); s.syn(); s.up(0); s.syn()
+    check("a tap on the right button clicks BTN_RIGHT", vals(btn, e.BTN_RIGHT) == [1, 0] and not vals(btn, e.BTN_LEFT))
+    pad, scr, r, s = fresh()
+    btn = r.buttons
+    s.down(0, bl.x0 + 100, by); s.syn()
+    s.down(1, 5000, fy); s.syn()                          # a second finger drags on the pad meanwhile
+    s.move(1, 5100, fy + 50); s.syn()
+    check("hold the button, drag on the pad", btn.count() == 1 and pad.count() == 1 and vals(btn, e.BTN_LEFT) == [1])
+    s.up(1); s.syn()
+    check("lifting the pad finger keeps the button down", vals(btn, e.BTN_LEFT) == [1])
+    s.up(0); s.syn()
+    check("... until its own finger lifts", vals(btn, e.BTN_LEFT) == [1, 0])
+    pad, scr, r, s = fresh()
+    btn = r.buttons
+    s.down(0, bl.x0 + 100, by); s.down(1, bl.x0 + 300, by); s.syn()
+    s.up(0); s.syn()
+    check("two fingers on one button: it stays down until both lift", vals(btn, e.BTN_LEFT) == [1])
+    s.up(1); s.syn()
+    check("... then releases once", vals(btn, e.BTN_LEFT) == [1, 0])
+    pad, scr, r, s = fresh()
+    btn = r.buttons
+    s.down(0, bl.x0 + 100, by); s.down(1, br.x0 + 100, by); s.syn()
+    s.dropped(); s.syn()
+    check("SYN_DROPPED releases held buttons", vals(btn, e.BTN_LEFT)[-1] == 0 and vals(btn, e.BTN_RIGHT)[-1] == 0
+          and btn.count() == 0, str(btn.out.events))
+    pad, scr, r, s = fresh()
+    s.down(0, 5000, rect.y1 - 5); s.syn()
+    check("the pad's last row is still the pad", pad.count() == 1 and r.buttons.count() == 0)
+    pad, scr, r, s = fresh()
+    r.release_all(); r.buttons.lift_all()
+    check("releasing with nothing held writes nothing", not r.buttons.out.events)
+    c3 = copy.deepcopy(DEFAULTS)
+    c3["buttons"]["enabled"] = False
+    nr, nb = strip_layout(c3, "dock1", src)
+    check("buttons off: the pad is the whole strip", nr == strip_rect(c3, "dock1", src) and nb == [])
+    c4 = copy.deepcopy(DEFAULTS)
+    c4["buttons"]["height"] = 0.9
+    check("a huge bar is capped at half the strip",
+          abs(dict(strip_layout(c4, "dock1", src)[1])["left"].h * 2 - strip_rect(c4, "dock1", src).h) < 2)
+    c5 = copy.deepcopy(DEFAULTS)
+    c5["panel"]["invert_x"] = True
+    ib = dict(strip_layout(c5, "dock1", src)[1])
+    check("invert_x puts the user's left button at the digitiser's high x", ib["left"].x0 > ib["right"].x0, str(ib))
+
     log(f"{'ALL PASSED' if not failures else 'FAILED: ' + ', '.join(failures)}")
     return 1 if failures else 0
 
@@ -1219,7 +1418,7 @@ def simulate(live_pad):
     evdev, e = ev()
     cfg = load_config()
     src = dict(SOURCE_FALLBACK)
-    rect = strip_rect(cfg, "dock1", src)
+    rect, _ = strip_layout(cfg, "dock1", src)
     pad = make_pad(cfg, src, rect, memory=not live_pad)
     scr = make_screen(cfg, src, memory=True)
     r = Router(pad, scr, rect)

@@ -3,7 +3,8 @@
 
 A click-through layer-shell surface on the bottom panel, drawn over the strip that
 yoga-touchpad is currently forwarding to the virtual touchpad (a rounded outline, a
-faint fill and a small "touchpad" label), and gone when the touchpad is off. It
+faint fill and a small "touchpad" label, and along its front edge the bar of the
+left and right mouse buttons, split by a divider), and gone when the touchpad is off. It
 only draws: it reads $XDG_RUNTIME_DIR/yoga-touchpad/strip.json, which the daemon
 rewrites whenever the strip changes (fractions of the panel, y = 0 at the hinge
 edge = the top of the bottom screen), and never touches input.
@@ -53,6 +54,7 @@ class Indicator(Gtk.Window):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.monitor = monitor
         self.label = ""
+        self.bar = None      # (px from the top of the window where the button bar starts, px of the left/right split)
         self.set_app_paintable(True)
         self.set_decorated(False)
         self.set_accept_focus(False)
@@ -94,6 +96,15 @@ class Indicator(Gtk.Window):
         cr.set_source_rgba(1, 1, 1, 0.45)
         cr.set_line_width(LINE)
         cr.stroke()
+        if self.bar:
+            top, split = self.bar
+            cr.set_source_rgba(1, 1, 1, 0.45)
+            cr.set_line_width(LINE / 2)
+            cr.move_to(x, top)
+            cr.line_to(x + rw, top)
+            cr.move_to(split, top)
+            cr.line_to(split, y + rh)
+            cr.stroke()
         if self.label:
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
             cr.set_font_size(15)
@@ -103,17 +114,23 @@ class Indicator(Gtk.Window):
             cr.show_text(self.label)
         return False
 
-    def place(self, fx, fy, label = ""):
+    def place(self, fx, fy, label="", buttons=None):
         g = self.monitor.get_geometry()   # logical px
         x0, x1 = fx
         y0, y1 = fy
         left, top = round(g.width * x0), round(g.height * y0)
         width, height = max(round(g.width * (x1 - x0)), 40), max(round(g.height * (y1 - y0)), 40)
-        key = (left, top, width, height, label)
+        # the button bar: where it starts inside the window and where left turns into right
+        bar = None
+        if buttons:
+            by0, _by1 = buttons["y"]
+            bar = (round(g.height * by0) - top, round(g.width * buttons["split"]) - left)
+        key = (left, top, width, height, label, bar)
         if key == self.last:
             return
         self.last = key
         self.label = label
+        self.bar = bar
         GtkLayerShell.set_margin(self, GtkLayerShell.Edge.LEFT, left)
         GtkLayerShell.set_margin(self, GtkLayerShell.Edge.TOP, top)
         self.set_size_request(width, height)
@@ -152,7 +169,7 @@ def main():
                 return True
             if ind is None:
                 ind = Indicator(mon)
-            ind.place(st["x"], st["y"])
+            ind.place(st["x"], st["y"], buttons=st.get("buttons"))
             ind.show_all()
         elif ind is not None:
             ind.destroy()
