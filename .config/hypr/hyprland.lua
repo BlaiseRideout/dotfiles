@@ -835,8 +835,24 @@ hl.window_rule({
 --    640x400 WebView host windows stay unfocusable too (nothing to see or type into).
 -- Only focuses a dialog already on the workspace you're looking at, so it never
 -- pulls you across workspaces.
+--
+-- CSP's web pages (the sign-up panel, the welcome dialog) are WebView2 pages that
+-- CSP draws into its own window. WebView2 keeps the browser's real windows open
+-- but fully transparent, which Wine passes on as _NET_WM_WINDOW_OPACITY = 0 and
+-- Hyprland ignores, so they covered the page as black boxes and took its clicks.
+-- Those go to a special workspace that is never shown. x-all-transparent.sh tells
+-- them from a real browser window (a pop-up), which stays.
 hl.on("window.open", function(w)
     if not (w.xwayland and (w.class or ""):lower():match("%.exe$")) then return end
+
+    if (w.class or ""):lower() == "msedgewebview2.exe" then
+        if succeeds(home .. "/.config/hypr/x-all-transparent.sh msedgewebview2.exe") then
+            hl.dispatch(hl.dsp.window.set_prop({ prop = "no_focus", value = "true", window = "address:" .. w.address }))
+            hl.dispatch(hl.dsp.window.move({ workspace = "special:wine-hidden", follow = false,
+                                             window = "address:" .. w.address }))
+        end
+        return
+    end
 
     local editor
     for _, o in ipairs(hl.get_windows() or {}) do

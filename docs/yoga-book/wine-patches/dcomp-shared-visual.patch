@@ -1,0 +1,1364 @@
+dcomp: cross-process shared visuals, window surfaces and a scale transform, so WebView2 pages
+hosted through a composition visual (Clip Studio Paint 5.1.5's sign-up panel and welcome dialog)
+are drawn.
+
+Applies to Wine 11.20 with wine-staging 11.20's dcomp-DCompositionCreateDevice2 patch set applied
+(patches/dcomp-DCompositionCreateDevice2/00*.patch, patch -p1). Build dlls/dcomp/x86_64-windows/dcomp.dll
+as for d2d1-source-copy.patch, strip it, and install it as the runner's dcomp.dll.
+
+- IDCompositionDesktopDevicePartner::CreateSharedResource / OpenSharedResourceHandle and
+  DCompositionCreateSharedVisualHandle: the handle is a section, so it survives DuplicateHandle into
+  the browser process; no wineserver change. The target created from it renders its tree into a
+  named section and the visual created from it blends that into the host's window (shared.c).
+- CreateSurfaceFromHwnd: a surface standing for what this process' targets compose into that window
+  (needs --in-process-gpu); those targets are no longer drawn on screen.
+- CreateScaleTransform, SetTransformObject, SetClip return success; SetOffsetY and the translation
+  of SetTransform are applied.
+
+diff --color -urN a/dlls/dcomp/dcomp_private.h b/dlls/dcomp/dcomp_private.h
+--- a/dlls/dcomp/dcomp_private.h	2026-11-09 12:19:27.059942037 -0800
++++ b/dlls/dcomp/dcomp_private.h	2026-11-09 12:19:27.061355354 -0800
+@@ -30,6 +30,7 @@
+     IDCompositionDeviceUnknown IDCompositionDeviceUnknown_iface;
+     IDCompositionSurfaceUnknown *drawing_surface;
+     struct list targets;
++    struct list entry;
+     HANDLE thread;
+     BOOL exit_thread;
+     BOOL thread_exited;
+@@ -61,6 +62,37 @@
+     LONG ref;
+ };
+ 
++struct shared_visual_data
++{
++    DWORD magic;
++    DWORD id_pid;
++    DWORD id_seq;
++    LONG gen;       /* generation of the published frame section, 0 if none */
++    LONG width;
++    LONG height;
++    LONG seq;       /* published frame counter */
++    LONG last_gen;  /* last generation used for a frame section name */
++};
++
++struct shared_frame_producer
++{
++    LONG width, height;
++    HDC dc;
++    HBITMAP bitmap, old_bitmap;
++    void *bits;
++    HANDLE section;
++    void *view;
++};
++
++struct shared_frame_consumer
++{
++    LONG gen;
++    LONG width, height;
++    HDC dc;
++    HBITMAP bitmap, old_bitmap;
++    HANDLE section;
++};
++
+ struct composition_target
+ {
+     IDCompositionTarget IDCompositionTarget_iface;
+@@ -68,7 +100,10 @@
+     IDCompositionVisual *root;
+     BOOL topmost;
+     HWND hwnd;
++    BOOL redirected; /* composed through a window surface instead of on screen */
+     HANDLE shared_visual_handle;
++    struct shared_visual_data *shared_data;
++    struct shared_frame_producer producer;
+     struct list entry;
+     LONG ref;
+ };
+@@ -84,12 +119,16 @@
+     enum DCOMPOSITION_BORDER_MODE border_mode;
+     enum DCOMPOSITION_BACKFACE_VISIBILITY visibility;
+     float offset_x;
++    float offset_y;
++    float transform_dx, transform_dy;
+     struct list child_visuals; /* visuals closer to head are lower in z-order */
+     struct list entry;
+     struct composition_visual *parent;
+     BOOL is_root;
+     BOOL is_child;
+     HANDLE shared_visual_handle;
++    struct shared_visual_data *shared_data;
++    struct shared_frame_consumer consumer;
+     int version;
+     LONG ref;
+ };
+@@ -145,6 +184,24 @@
+ HRESULT create_target_from_shared_visual_handle(struct composition_device *device, HANDLE shared_visual_handle, void **new_target);
+ HRESULT create_visual(int version, REFIID iid, void **visual);
+ HRESULT create_visual_from_shared_visual_handle(HANDLE shared_visual_handle, void **new_visual);
++HANDLE get_visual_shared_handle(IUnknown *unknown);
++
++extern const GUID IID_wine_dcomp_hwnd_surface;
++HRESULT create_hwnd_surface(HWND hwnd, IUnknown **out);
++HWND get_hwnd_surface_window(IUnknown *unknown);
++HRESULT create_scale_transform(IDCompositionScaleTransform **out);
++
++HANDLE shared_visual_create(void);
++struct shared_visual_data *shared_visual_open(HANDLE handle, HANDLE *new_handle);
++void shared_visual_close(HANDLE handle, struct shared_visual_data *data);
++BOOL shared_producer_resize(struct shared_visual_data *data, struct shared_frame_producer *producer,
++                            LONG width, LONG height);
++void shared_producer_clear(struct shared_frame_producer *producer);
++void shared_producer_publish(struct shared_visual_data *data, struct shared_frame_producer *producer);
++void shared_producer_destroy(struct shared_frame_producer *producer);
++HDC shared_consumer_get_dc(struct shared_visual_data *data, struct shared_frame_consumer *consumer,
++                           LONG *width, LONG *height);
++void shared_consumer_destroy(struct shared_frame_consumer *consumer);
+ 
+ 
+ #endif /* __WINE_DCOMP_PRIVATE_H */
+diff --color -urN a/dlls/dcomp/device.c b/dlls/dcomp/device.c
+--- a/dlls/dcomp/device.c	2026-11-09 12:19:27.051559861 -0800
++++ b/dlls/dcomp/device.c	2026-11-09 12:19:27.052940761 -0800
+@@ -35,7 +35,6 @@
+ #include "dwmapi.h"
+ #include "d3d11_4.h"
+ #include "d3dcompiler.h"
+-#include "wine/server.h"
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(dcomp);
+@@ -112,6 +111,9 @@
+ 
+     if (!ref)
+     {
++        dcomp_lock();
++        list_remove(&device->entry);
++        dcomp_unlock();
+         if (device->thread)
+         {
+             WaitForSingleObject(device->thread, INFINITE);
+@@ -405,9 +407,28 @@
+     return hr;
+ }
+ 
++static HDC get_target_dc(const struct composition_target *target, HDC dst_dc)
++{
++    DWORD style;
++
++    if (dst_dc)
++        return dst_dc;
++
++    style = DCX_USESTYLE | DCX_CACHE;
++    if (!target->topmost)
++        style |= DCX_CLIPCHILDREN;
++    return GetDCEx(target->hwnd, 0, style);
++}
++
++static void release_target_dc(const struct composition_target *target, HDC dst_dc, HDC dc)
++{
++    if (!dst_dc)
++        ReleaseDC(target->hwnd, dc);
++}
++
+ static void do_composite_dxgi_surface(const struct composition_target *target,
+                                       const struct composition_visual *visual,
+-                                      IDXGISurface *dxgi_surface)
++                                      IDXGISurface *dxgi_surface, HDC offscreen_dc, int x, int y)
+ {
+     ID3DDeviceContextState *state = NULL, *old_state = NULL;
+     ID3D11DeviceContext1 *d3d11_device_context1 = NULL;
+@@ -422,7 +443,6 @@
+     ID2D1Image *old_target = NULL;
+     HDC dst_dc, src_dc;
+     D2D1_SIZE_U size;
+-    DWORD style;
+     HRESULT hr;
+ 
+     static const BLENDFUNCTION blend_func =
+@@ -549,12 +569,9 @@
+         goto done;
+     }
+ 
+-    style = DCX_USESTYLE | DCX_CACHE;
+-    if (!target->topmost)
+-        style |= DCX_CLIPCHILDREN;
+-    dst_dc = GetDCEx(target->hwnd, 0, style);
+-    GdiAlphaBlend(dst_dc, 0, 0, size.width, size.height, src_dc, 0, 0, size.width, size.height, blend_func);
+-    ReleaseDC(target->hwnd, dst_dc);
++    dst_dc = get_target_dc(target, offscreen_dc);
++    GdiAlphaBlend(dst_dc, x, y, size.width, size.height, src_dc, 0, 0, size.width, size.height, blend_func);
++    release_target_dc(target, offscreen_dc, dst_dc);
+ 
+     ID2D1GdiInteropRenderTarget_ReleaseDC(visual->interop, NULL);
+     ID2D1DeviceContext_SetTarget(visual->device_context, old_target);
+@@ -588,117 +605,227 @@
+         ID3D11Device1_Release(d3d11_device);
+ }
+ 
+-static struct composition_visual * shared_visual_target_get_root(HANDLE shared_visual_handle)
++/* Returns the dxgi surface holding the visual's content, S_FALSE if it has none. */
++static HRESULT get_visual_content_surface(struct composition_visual *visual, IDXGISurface **dxgi_surface)
+ {
+-    struct composition_visual *visual = NULL;
+-    NTSTATUS status;
++    HRESULT hr;
++
++    *dxgi_surface = NULL;
++    if (!visual->content)
++        return S_FALSE;
+ 
+-    SERVER_START_REQ(dcomp_get_shared_visual_info)
++    if (IsEqualGUID(&visual->content_iid, &IID_IDXGISwapChain1))
+     {
+-        req->handle = wine_server_obj_handle(shared_visual_handle);
+-        if (!(status = wine_server_call(req)))
+-            visual = impl_from_IDCompositionVisual(wine_server_get_ptr(reply->target_root));
++        IDXGISwapChain1 *swapchain;
++
++        hr = IUnknown_QueryInterface(visual->content, &IID_IDXGISwapChain1, (void **)&swapchain);
++        if (FAILED(hr))
++        {
++            FIXME("Failed to query IDXGISwapChain1.\n");
++            return hr;
++        }
++
++        /* The front buffer is the last back buffer because the composition swapchain must
++         * be created with DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL */
++        hr = IDXGISwapChain1_GetBuffer(swapchain, 0, &IID_IDXGISurface, (void **)dxgi_surface);
++        IDXGISwapChain1_Release(swapchain);
++        if (FAILED(hr))
++            ERR("Failed to get the swapchain front buffer, hr %#lx.\n", hr);
++        return hr;
+     }
+-    SERVER_END_REQ;
++    else if (IsEqualGUID(&visual->content_iid, &IID_IDCompositionSurface))
++    {
++        struct composition_surface *surface_impl;
++        IDCompositionSurface *surface;
++
++        hr = IUnknown_QueryInterface(visual->content, &IID_IDCompositionSurface, (void **)&surface);
++        if (FAILED(hr))
++        {
++            FIXME("Failed to query IDCompositionSurface.\n");
++            return hr;
++        }
++
++        surface_impl = impl_from_IDCompositionSurface(surface);
++        if (IsEqualGUID(&surface_impl->physical_surface_iid, &IID_IDXGISurface))
++        {
++            *dxgi_surface = (IDXGISurface *)surface_impl->physical_surface;
++            IDXGISurface_AddRef(*dxgi_surface);
++            IDCompositionSurface_Release(surface);
++            return S_OK;
++        }
+ 
+-    if (status)
+-        ERR("dcomp_get_shared_visual_info failed, not in the same process? status %#lx.\n", status);
++        FIXME("IDCompositionSurface physical_surface_iid %s is unsupported.\n",
++              wine_dbgstr_guid(&surface_impl->physical_surface_iid));
++        IDCompositionSurface_Release(surface);
++        return E_FAIL;
++    }
+ 
+-    return visual;
++    FIXME("content_iid %s is unsupported.\n", wine_dbgstr_guid(&visual->content_iid));
++    return E_FAIL;
+ }
+ 
+-static HRESULT do_composite(const struct composition_target *target, struct composition_visual *visual)
++static struct list devices = LIST_INIT(devices);
++
++static HRESULT do_composite(const struct composition_target *target, struct composition_visual *visual,
++                            HDC offscreen_dc, int x, int y);
++
++static BOOL is_window_surface(const struct composition_visual *visual)
+ {
++    return visual->content && IsEqualGUID(&visual->content_iid, &IID_wine_dcomp_hwnd_surface);
++}
++
++/* Composes what the targets of this process show in a window and its children. Those targets
++ * stop being composed on screen. */
++static void do_composite_window(const struct composition_target *target, HWND hwnd, HDC offscreen_dc,
++                                int x, int y)
++{
++    struct composition_device *device;
++    struct composition_target *other;
++    POINT pt;
++
++    LIST_FOR_EACH_ENTRY(device, &devices, struct composition_device, entry)
++    {
++        LIST_FOR_EACH_ENTRY(other, &device->targets, struct composition_target, entry)
++        {
++            if (other == target || other->shared_data || !other->hwnd)
++                continue;
++            if (other->hwnd != hwnd && !IsChild(hwnd, other->hwnd))
++                continue;
++            if (!other->redirected)
++            {
++                FIXME("Redirecting the target for window %p into the surface of window %p.\n", other->hwnd, hwnd);
++                other->redirected = TRUE;
++            }
++            if (!other->root)
++                continue;
++
++            pt.x = pt.y = 0;
++            if (other->hwnd != hwnd)
++                MapWindowPoints(other->hwnd, hwnd, &pt, 1);
++            do_composite(target, impl_from_IDCompositionVisual(other->root), offscreen_dc, x + pt.x, y + pt.y);
++        }
++    }
++}
++
++static HRESULT do_composite(const struct composition_target *target, struct composition_visual *visual,
++                            HDC offscreen_dc, int x, int y)
++{
++    static const BLENDFUNCTION blend_func = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+     struct composition_visual *child_visual;
+     IDXGISurface *dxgi_surface;
+     HRESULT hr;
+ 
+-    if (visual->shared_visual_handle)
++    x += (int)(visual->offset_x + visual->transform_dx);
++    y += (int)(visual->offset_y + visual->transform_dy);
++
++    /* A visual created from a shared visual handle shows what the target created from the same
++     * handle, possibly in another process, published */
++    if (visual->shared_data)
+     {
+-        struct composition_visual *root = shared_visual_target_get_root(visual->shared_visual_handle);
+-        if (root)
+-            do_composite(target, root);
++        LONG width, height;
++        HDC src_dc, dst_dc;
++
++        if ((src_dc = shared_consumer_get_dc(visual->shared_data, &visual->consumer, &width, &height)))
++        {
++            dst_dc = get_target_dc(target, offscreen_dc);
++            if (getenv("WINE_DCOMP_SHARED_OPAQUE"))
++                BitBlt(dst_dc, x, y, width, height, src_dc, 0, 0, SRCCOPY);
++            else
++                GdiAlphaBlend(dst_dc, x, y, width, height, src_dc, 0, 0, width, height, blend_func);
++            release_target_dc(target, offscreen_dc, dst_dc);
++        }
+     }
+ 
+     /* Render content */
+-    if (visual->content)
++    if (is_window_surface(visual))
+     {
+-        if (IsEqualGUID(&visual->content_iid, &IID_IDXGISwapChain1))
+-        {
+-            DXGI_SWAP_CHAIN_DESC swapchain_desc;
+-            IDXGISwapChain1 *swapchain;
++        do_composite_window(target, get_hwnd_surface_window(visual->content), offscreen_dc, x, y);
++        dxgi_surface = NULL;
++    }
++    else
++    {
++        hr = get_visual_content_surface(visual, &dxgi_surface);
++        if (FAILED(hr))
++            return hr;
++    }
++    if (dxgi_surface)
++    {
++        do_composite_dxgi_surface(target, visual, dxgi_surface, offscreen_dc, x, y);
++        IDXGISurface_Release(dxgi_surface);
++    }
+ 
+-            hr = IUnknown_QueryInterface(visual->content, &IID_IDXGISwapChain1, (void **)&swapchain);
+-            if (FAILED(hr))
+-            {
+-                FIXME("Failed to query IDXGISwapChain1.\n");
+-                return hr;
+-            }
++    LIST_FOR_EACH_ENTRY(child_visual, &visual->child_visuals, struct composition_visual, entry)
++    {
++        do_composite(target, child_visual, offscreen_dc, x, y);
++    }
+ 
+-            hr = IDXGISwapChain1_GetDesc(swapchain, &swapchain_desc);
+-            if (FAILED(hr))
+-            {
+-                ERR("Failed to get the swapchain description, hr %#lx.\n", hr);
+-                IDXGISwapChain1_Release(swapchain);
+-                return hr;
+-            }
++    return S_OK;
++}
+ 
+-            /* The front buffer is the last back buffer because the composition swapchain must
+-                     * be created with DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL */
+-            hr = IDXGISwapChain1_GetBuffer(swapchain, 0, &IID_IDXGISurface,
+-                                           (void **)&dxgi_surface);
+-            IDXGISwapChain1_Release(swapchain);
+-            if (FAILED(hr))
+-            {
+-                ERR("Failed to get the swapchain front buffer, hr %#lx.\n", hr);
+-                return hr;
+-            }
+-        }
+-        else if (IsEqualGUID(&visual->content_iid, &IID_IDCompositionSurface))
+-        {
+-            struct composition_surface *surface_impl;
+-            IDCompositionSurface *surface;
++/* Computes the extent of the content in a visual tree */
++static void get_visual_tree_extent(struct composition_visual *visual, int x, int y, LONG *width, LONG *height)
++{
++    struct composition_visual *child_visual;
++    IDXGISurface *dxgi_surface;
++    DXGI_SURFACE_DESC desc;
+ 
+-            hr = IUnknown_QueryInterface(visual->content, &IID_IDCompositionSurface, (void **)&surface);
+-            if (FAILED(hr))
+-            {
+-                FIXME("Failed to query IDCompositionSurface.\n");
+-                return hr;
+-            }
++    x += (int)(visual->offset_x + visual->transform_dx);
++    y += (int)(visual->offset_y + visual->transform_dy);
+ 
+-            surface_impl = impl_from_IDCompositionSurface(surface);
+-            if (IsEqualGUID(&surface_impl->physical_surface_iid, &IID_IDXGISurface))
+-            {
+-                dxgi_surface = (IDXGISurface *)surface_impl->physical_surface;
+-                IDXGISurface_AddRef(dxgi_surface);
+-                IDCompositionSurface_Release(surface);
+-            }
+-            else
+-            {
+-                FIXME("IDCompositionSurface physical_surface_iid %s is unsupported.\n",
+-                      wine_dbgstr_guid(&surface_impl->physical_surface_iid));
+-                IDCompositionSurface_Release(surface);
+-                return E_FAIL;
+-            }
++    if (visual->shared_data && visual->shared_data->gen)
++    {
++        *width = max(*width, x + visual->shared_data->width);
++        *height = max(*height, y + visual->shared_data->height);
++    }
++
++    if (is_window_surface(visual))
++    {
++        RECT rect;
++
++        if (GetClientRect(get_hwnd_surface_window(visual->content), &rect))
++        {
++            *width = max(*width, x + rect.right);
++            *height = max(*height, y + rect.bottom);
+         }
+-        else
++    }
++    else if (get_visual_content_surface(visual, &dxgi_surface) == S_OK)
++    {
++        if (SUCCEEDED(IDXGISurface_GetDesc(dxgi_surface, &desc)))
+         {
+-            FIXME("content_iid %s is unsupported.\n", wine_dbgstr_guid(&visual->content_iid));
+-            return E_FAIL;
++            *width = max(*width, x + (LONG)desc.Width);
++            *height = max(*height, y + (LONG)desc.Height);
+         }
+-
+-        do_composite_dxgi_surface(target, visual, dxgi_surface);
+         IDXGISurface_Release(dxgi_surface);
+     }
+ 
+     LIST_FOR_EACH_ENTRY(child_visual, &visual->child_visuals, struct composition_visual, entry)
+     {
+-        do_composite(target, child_visual);
++        get_visual_tree_extent(child_visual, x, y, width, height);
+     }
+-
+-    return S_OK;
+ }
+ 
++/* Renders the visual tree of a target created from a shared visual handle and publishes it for
++ * the visual created from the same handle */
++static HRESULT do_composite_shared_target(struct composition_target *target)
++{
++    struct composition_visual *root = impl_from_IDCompositionVisual(target->root);
++    LONG width = 0, height = 0;
++    HRESULT hr;
++
++    get_visual_tree_extent(root, 0, 0, &width, &height);
++    if (width <= 0 || height <= 0)
++        return S_OK;
++    width = min(width, 8192);
++    height = min(height, 8192);
++
++    if (!shared_producer_resize(target->shared_data, &target->producer, width, height))
++        return E_FAIL;
++
++    shared_producer_clear(&target->producer);
++    hr = do_composite(target, root, target->producer.dc, 0, 0);
++    shared_producer_publish(target->shared_data, &target->producer);
++    return hr;
++}
+ 
+ static DWORD WINAPI composite_thread_proc(void *iface)
+ {
+@@ -727,13 +854,18 @@
+                 continue;
+             }
+ 
+-            /* Skip targets created from a shared visual handle. Composition for such targets will
+-             * be done for the visual tree where the visual created from the shared visual handle is at */
+-            if (target->shared_visual_handle)
++            if (target->shared_data)
++            {
++                if (SUCCEEDED(do_composite_shared_target(target)))
++                    count++;
++                continue;
++            }
++
++            if (target->redirected)
+                 continue;
+ 
+             visual = impl_from_IDCompositionVisual(target->root);
+-            if (SUCCEEDED(do_composite(target, visual)))
++            if (SUCCEEDED(do_composite(target, visual, NULL, 0, 0)))
+                 count++;
+         }
+ 
+@@ -842,8 +974,15 @@
+ static HRESULT STDMETHODCALLTYPE device_CreateSurfaceFromHwnd(IDCompositionDevice *iface,
+         HWND hwnd, IUnknown **surface)
+ {
+-    FIXME("iface %p, hwnd %p, surface %p stub!\n", iface, hwnd, surface);
+-    return E_NOTIMPL;
++    WCHAR class_name[64] = {0};
++    RECT rect = {0};
++
++    GetClassNameW(hwnd, class_name, ARRAY_SIZE(class_name));
++    GetWindowRect(hwnd, &rect);
++    FIXME("iface %p, hwnd %p (class %s, style %#lx, ex style %#lx, parent %p, owner %p, rect %s), surface %p semi-stub!\n",
++          iface, hwnd, debugstr_w(class_name), GetWindowLongW(hwnd, GWL_STYLE), GetWindowLongW(hwnd, GWL_EXSTYLE),
++          GetAncestor(hwnd, GA_PARENT), GetWindow(hwnd, GW_OWNER), wine_dbgstr_rect(&rect), surface);
++    return create_hwnd_surface(hwnd, surface);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE device_CreateTranslateTransform(IDCompositionDevice *iface,
+@@ -856,8 +995,8 @@
+ static HRESULT STDMETHODCALLTYPE device_CreateScaleTransform(IDCompositionDevice *iface,
+         IDCompositionScaleTransform **transform)
+ {
+-    FIXME("iface %p, transform %p stub!\n", iface, transform);
+-    return E_NOTIMPL;
++    FIXME("iface %p, transform %p semi-stub!\n", iface, transform);
++    return create_scale_transform(transform);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE device_CreateRotateTransform(IDCompositionDevice *iface,
+@@ -1084,8 +1223,8 @@
+ static HRESULT STDMETHODCALLTYPE desktop_device_CreateScaleTransform(IDCompositionDeviceUnknown *iface,
+         IDCompositionScaleTransform **transform)
+ {
+-    FIXME("iface %p, transform %p stub!\n", iface, transform);
+-    return E_NOTIMPL;
++    FIXME("iface %p, transform %p semi-stub!\n", iface, transform);
++    return create_scale_transform(transform);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE desktop_device_CreateRotateTransform(IDCompositionDeviceUnknown *iface,
+@@ -1196,22 +1335,66 @@
+ static HRESULT STDMETHODCALLTYPE desktop_device_CreateSurfaceFromHwnd(IDCompositionDeviceUnknown *iface,
+         HWND hwnd, IUnknown **surface)
+ {
+-    FIXME("iface %p, hwnd %p, surface %p stub!\n", iface, hwnd, surface);
+-    return E_NOTIMPL;
++    WCHAR class_name[64] = {0};
++    RECT rect = {0};
++
++    GetClassNameW(hwnd, class_name, ARRAY_SIZE(class_name));
++    GetWindowRect(hwnd, &rect);
++    FIXME("iface %p, hwnd %p (class %s, style %#lx, ex style %#lx, parent %p, owner %p, rect %s), surface %p semi-stub!\n",
++          iface, hwnd, debugstr_w(class_name), GetWindowLongW(hwnd, GWL_STYLE), GetWindowLongW(hwnd, GWL_EXSTYLE),
++          GetAncestor(hwnd, GA_PARENT), GetWindow(hwnd, GW_OWNER), wine_dbgstr_rect(&rect), surface);
++    return create_hwnd_surface(hwnd, surface);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE desktop_device_CreateSharedResource(IDCompositionDeviceUnknown *iface,
+         REFIID riid, void **obj)
+ {
+-    FIXME("iface %p, riid %s, obj %p stub!\n", iface, debugstr_guid(riid), obj);
+-    return E_NOTIMPL;
++    HANDLE handle;
++    HRESULT hr;
++
++    FIXME("iface %p, riid %s, obj %p semi-stub!\n", iface, debugstr_guid(riid), obj);
++
++    if (!obj)
++        return E_INVALIDARG;
++    *obj = NULL;
++
++    if (!IsEqualGUID(riid, &IID_IDCompositionVisual))
++    {
++        FIXME("Unsupported shared resource %s.\n", debugstr_guid(riid));
++        return E_NOINTERFACE;
++    }
++
++    if (!(handle = shared_visual_create()))
++        return E_OUTOFMEMORY;
++    hr = create_visual_from_shared_visual_handle(handle, obj);
++    CloseHandle(handle);
++    FIXME("Created shared visual %p, hr %#lx.\n", *obj, hr);
++    return hr;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE desktop_device_OpenSharedResourceHandle(IDCompositionDeviceUnknown *iface,
+         IUnknown *unknown, HANDLE *handle)
+ {
+-    FIXME("iface %p, unknown %p, handle %p stub!\n", iface, unknown, handle);
+-    return E_NOTIMPL;
++    HANDLE shared;
++
++    FIXME("iface %p, unknown %p, handle %p semi-stub!\n", iface, unknown, handle);
++
++    if (!handle)
++        return E_INVALIDARG;
++    *handle = NULL;
++
++    if (!(shared = get_visual_shared_handle(unknown)))
++    {
++        FIXME("%p is not a shared visual.\n", unknown);
++        return E_INVALIDARG;
++    }
++
++    if (!DuplicateHandle(GetCurrentProcess(), shared, GetCurrentProcess(), handle, 0, FALSE,
++                         DUPLICATE_SAME_ACCESS))
++        return HRESULT_FROM_WIN32(GetLastError());
++
++    FIXME("Returning handle %p for shared visual %p.\n", *handle, unknown);
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE desktop_device_CreateFromSharedVisualHandle(IDCompositionDeviceUnknown *iface,
+@@ -1223,8 +1406,8 @@
+ 
+     /* visual_handle is from DCompositionCreateSharedVisualHandle(). iid is IID_IDCompositionVisual
+     * or IDCompositionTarget */
+-    assert(IsEqualGUID(iid, &IID_IDCompositionVisual) || IsEqualGUID(iid, &IID_IDCompositionTarget));
+-    assert(out);
++    if (!out)
++        return E_INVALIDARG;
+ 
+     if (IsEqualGUID(iid, &IID_IDCompositionVisual))
+     {
+@@ -2003,6 +2186,9 @@
+         return E_OUTOFMEMORY;
+ 
+     list_init(&device->targets);
++    dcomp_lock();
++    list_add_tail(&devices, &device->entry);
++    dcomp_unlock();
+     device->IDCompositionDevice_iface.lpVtbl = &device_vtbl;
+     device->IDCompositionDeviceUnknown_iface.lpVtbl = &desktop_device_vtbl;
+     device->version = version;
+@@ -2046,19 +2232,13 @@
+ 
+ HRESULT WINAPI DCompositionCreateSharedVisualHandle(HANDLE *handle)
+ {
+-    NTSTATUS status;
+-
+-    FIXME("handle %p stub!\n", handle);
++    FIXME("handle %p semi-stub!\n", handle);
+ 
+     if (!handle)
+         return STATUS_INVALID_PARAMETER;
+ 
+-    SERVER_START_REQ( dcomp_create_shared_visual )
+-    {
+-        if (!(status = wine_server_call( req )))
+-            *handle = wine_server_ptr_handle( reply->handle );
+-    }
+-    SERVER_END_REQ;
++    if (!(*handle = shared_visual_create()))
++        return E_OUTOFMEMORY;
+ 
+-    return (HRESULT)status;
++    return S_OK;
+ }
+diff --color -urN a/dlls/dcomp/Makefile.in b/dlls/dcomp/Makefile.in
+--- a/dlls/dcomp/Makefile.in	2026-11-09 12:19:27.063157108 -0800
++++ b/dlls/dcomp/Makefile.in	2026-11-09 12:19:27.062194832 -0800
+@@ -6,6 +6,7 @@
+ SOURCES = \
+ 	dcomp_private_iface.idl \
+ 	device.c \
++	shared.c \
+ 	surface.c \
+ 	target.c \
+ 	visual.c
+diff --color -urN a/dlls/dcomp/shared.c b/dlls/dcomp/shared.c
+--- a/dlls/dcomp/shared.c	1969-12-31 16:00:00.000000000 -0800
++++ b/dlls/dcomp/shared.c	2026-11-09 12:19:27.064465634 -0800
+@@ -0,0 +1,442 @@
++/*
++ * Cross-process shared visuals.
++ *
++ * A shared visual handle is a handle to a small page-file backed section holding a
++ * struct shared_visual_data. The process that owns the composition target created from the handle
++ * (the producer) renders its visual tree into a named section holding BGRA pixels; the process
++ * that owns the visual created from the handle (the consumer) blends those pixels into its own
++ * target. No wineserver support is needed, and the same path serves a single process.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#define COBJMACROS
++#include <stdarg.h>
++#include <stdlib.h>
++#include <string.h>
++#include "windef.h"
++#include "winbase.h"
++#include "wingdi.h"
++#include "winuser.h"
++#include "dcomp_private.h"
++#include "wine/debug.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(dcomp);
++
++#define SHARED_VISUAL_MAGIC 0x56534357 /* "WCSV" */
++#define SHARED_VISUAL_SIZE  4096
++
++static LONG shared_visual_seq;
++
++static void frame_name(const struct shared_visual_data *data, LONG gen, WCHAR *name, unsigned int len)
++{
++    swprintf(name, len, L"wine_dcomp_frame_%08lx_%08lx_%ld", data->id_pid, data->id_seq, gen);
++}
++
++HANDLE shared_visual_create(void)
++{
++    struct shared_visual_data *data;
++    HANDLE handle;
++
++    handle = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, SHARED_VISUAL_SIZE, NULL);
++    if (!handle)
++    {
++        ERR("Failed to create a section, error %lu.\n", GetLastError());
++        return NULL;
++    }
++
++    if (!(data = MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, SHARED_VISUAL_SIZE)))
++    {
++        ERR("Failed to map the section, error %lu.\n", GetLastError());
++        CloseHandle(handle);
++        return NULL;
++    }
++    data->id_pid = GetCurrentProcessId();
++    data->id_seq = InterlockedIncrement(&shared_visual_seq);
++    data->magic = SHARED_VISUAL_MAGIC;
++    UnmapViewOfFile(data);
++    return handle;
++}
++
++/* Duplicates the handle and maps its data. */
++struct shared_visual_data *shared_visual_open(HANDLE handle, HANDLE *new_handle)
++{
++    struct shared_visual_data *data;
++
++    *new_handle = NULL;
++    if (!DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), new_handle, 0, FALSE,
++                         DUPLICATE_SAME_ACCESS))
++    {
++        ERR("Cannot duplicate handle %p, error %lu.\n", handle, GetLastError());
++        return NULL;
++    }
++
++    if (!(data = MapViewOfFile(*new_handle, FILE_MAP_ALL_ACCESS, 0, 0, SHARED_VISUAL_SIZE))
++            || data->magic != SHARED_VISUAL_MAGIC)
++    {
++        ERR("Handle %p is not a shared visual, error %lu.\n", handle, GetLastError());
++        if (data)
++            UnmapViewOfFile(data);
++        CloseHandle(*new_handle);
++        *new_handle = NULL;
++        return NULL;
++    }
++
++    return data;
++}
++
++void shared_visual_close(HANDLE handle, struct shared_visual_data *data)
++{
++    if (data)
++        UnmapViewOfFile(data);
++    if (handle)
++        CloseHandle(handle);
++}
++
++void shared_producer_destroy(struct shared_frame_producer *producer)
++{
++    if (producer->dc)
++    {
++        SelectObject(producer->dc, producer->old_bitmap);
++        DeleteDC(producer->dc);
++    }
++    if (producer->bitmap)
++        DeleteObject(producer->bitmap);
++    if (producer->view)
++        UnmapViewOfFile(producer->view);
++    if (producer->section)
++        CloseHandle(producer->section);
++    memset(producer, 0, sizeof(*producer));
++}
++
++static HBITMAP create_dib(LONG width, LONG height, HANDLE section, void **bits)
++{
++    BITMAPINFO info;
++
++    memset(&info, 0, sizeof(info));
++    info.bmiHeader.biSize = sizeof(info.bmiHeader);
++    info.bmiHeader.biWidth = width;
++    info.bmiHeader.biHeight = -height;
++    info.bmiHeader.biPlanes = 1;
++    info.bmiHeader.biBitCount = 32;
++    info.bmiHeader.biCompression = BI_RGB;
++    return CreateDIBSection(NULL, &info, DIB_RGB_COLORS, bits, section, 0);
++}
++
++/* Makes the producer's private frame and the published frame width x height. */
++BOOL shared_producer_resize(struct shared_visual_data *data, struct shared_frame_producer *producer,
++                            LONG width, LONG height)
++{
++    WCHAR name[64];
++    LONG gen;
++
++    if (producer->dc && producer->width == width && producer->height == height)
++        return TRUE;
++
++    shared_producer_destroy(producer);
++
++    gen = InterlockedIncrement(&data->last_gen);
++    frame_name(data, gen, name, ARRAY_SIZE(name));
++    producer->section = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0,
++                                           width * height * 4, name);
++    if (!producer->section)
++    {
++        ERR("Failed to create frame section %s, error %lu.\n", debugstr_w(name), GetLastError());
++        return FALSE;
++    }
++    producer->view = MapViewOfFile(producer->section, FILE_MAP_ALL_ACCESS, 0, 0, width * height * 4);
++    producer->bitmap = create_dib(width, height, NULL, &producer->bits);
++    producer->dc = CreateCompatibleDC(NULL);
++    if (!producer->view || !producer->bitmap || !producer->dc)
++    {
++        ERR("Failed to create a %ldx%ld frame, error %lu.\n", width, height, GetLastError());
++        shared_producer_destroy(producer);
++        return FALSE;
++    }
++    producer->old_bitmap = SelectObject(producer->dc, producer->bitmap);
++    producer->width = width;
++    producer->height = height;
++
++    data->width = width;
++    data->height = height;
++    InterlockedExchange(&data->gen, gen);
++    FIXME("Publishing a %ldx%ld shared visual frame as %s.\n", width, height, debugstr_w(name));
++    return TRUE;
++}
++
++void shared_producer_clear(struct shared_frame_producer *producer)
++{
++    GdiFlush();
++    memset(producer->bits, 0, producer->width * producer->height * 4);
++}
++
++void shared_producer_publish(struct shared_visual_data *data, struct shared_frame_producer *producer)
++{
++    GdiFlush();
++    memcpy(producer->view, producer->bits, producer->width * producer->height * 4);
++    InterlockedIncrement(&data->seq);
++}
++
++void shared_consumer_destroy(struct shared_frame_consumer *consumer)
++{
++    if (consumer->dc)
++    {
++        SelectObject(consumer->dc, consumer->old_bitmap);
++        DeleteDC(consumer->dc);
++    }
++    if (consumer->bitmap)
++        DeleteObject(consumer->bitmap);
++    if (consumer->section)
++        CloseHandle(consumer->section);
++    memset(consumer, 0, sizeof(*consumer));
++}
++
++/* Returns a DC holding the most recent frame, or NULL when nothing was published yet. */
++HDC shared_consumer_get_dc(struct shared_visual_data *data, struct shared_frame_consumer *consumer,
++                           LONG *width, LONG *height)
++{
++    LONG gen = data->gen;
++    WCHAR name[64];
++    void *bits;
++
++    if (!gen)
++        return NULL;
++
++    if (gen != consumer->gen || !consumer->dc)
++    {
++        LONG w = data->width, h = data->height;
++
++        shared_consumer_destroy(consumer);
++        if (w <= 0 || h <= 0)
++            return NULL;
++
++        frame_name(data, gen, name, ARRAY_SIZE(name));
++        if (!(consumer->section = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, name)))
++        {
++            WARN("Failed to open frame section %s, error %lu.\n", debugstr_w(name), GetLastError());
++            return NULL;
++        }
++        consumer->bitmap = create_dib(w, h, consumer->section, &bits);
++        consumer->dc = CreateCompatibleDC(NULL);
++        if (!consumer->bitmap || !consumer->dc)
++        {
++            ERR("Failed to create a %ldx%ld frame view, error %lu.\n", w, h, GetLastError());
++            shared_consumer_destroy(consumer);
++            return NULL;
++        }
++        consumer->old_bitmap = SelectObject(consumer->dc, consumer->bitmap);
++        consumer->width = w;
++        consumer->height = h;
++        consumer->gen = gen;
++        FIXME("Showing %ldx%ld shared visual frame %s.\n", w, h, debugstr_w(name));
++    }
++
++    *width = consumer->width;
++    *height = consumer->height;
++    return consumer->dc;
++}
++
++/* Window surface, from IDCompositionDevice::CreateSurfaceFromHwnd(). It stands for everything
++ * that is composed into the window and its children by targets of this process. */
++
++const GUID IID_wine_dcomp_hwnd_surface = {0x6b7a4f0e, 0x3c52, 0x4d0b, {0x9d, 0x1e, 0x57, 0x49, 0x4e, 0x45, 0x48, 0x53}};
++
++struct hwnd_surface
++{
++    IUnknown IUnknown_iface;
++    HWND hwnd;
++    LONG ref;
++};
++
++static HRESULT STDMETHODCALLTYPE hwnd_surface_QueryInterface(IUnknown *iface, REFIID iid, void **out)
++{
++    if (IsEqualGUID(iid, &IID_IUnknown) || IsEqualGUID(iid, &IID_wine_dcomp_hwnd_surface))
++    {
++        IUnknown_AddRef(iface);
++        *out = iface;
++        return S_OK;
++    }
++
++    *out = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG STDMETHODCALLTYPE hwnd_surface_AddRef(IUnknown *iface)
++{
++    struct hwnd_surface *surface = CONTAINING_RECORD(iface, struct hwnd_surface, IUnknown_iface);
++    return InterlockedIncrement(&surface->ref);
++}
++
++static ULONG STDMETHODCALLTYPE hwnd_surface_Release(IUnknown *iface)
++{
++    struct hwnd_surface *surface = CONTAINING_RECORD(iface, struct hwnd_surface, IUnknown_iface);
++    ULONG ref = InterlockedDecrement(&surface->ref);
++
++    if (!ref)
++        free(surface);
++    return ref;
++}
++
++static const struct IUnknownVtbl hwnd_surface_vtbl =
++{
++    hwnd_surface_QueryInterface,
++    hwnd_surface_AddRef,
++    hwnd_surface_Release,
++};
++
++HRESULT create_hwnd_surface(HWND hwnd, IUnknown **out)
++{
++    struct hwnd_surface *surface;
++
++    if (!out)
++        return E_INVALIDARG;
++    *out = NULL;
++    if (!IsWindow(hwnd))
++        return E_INVALIDARG;
++
++    if (!(surface = calloc(1, sizeof(*surface))))
++        return E_OUTOFMEMORY;
++    surface->IUnknown_iface.lpVtbl = &hwnd_surface_vtbl;
++    surface->hwnd = hwnd;
++    surface->ref = 1;
++    *out = &surface->IUnknown_iface;
++    return S_OK;
++}
++
++/* Returns the window of a window surface, NULL for anything else */
++HWND get_hwnd_surface_window(IUnknown *unknown)
++{
++    IUnknown *surface;
++    HWND hwnd;
++
++    if (!unknown || FAILED(IUnknown_QueryInterface(unknown, &IID_wine_dcomp_hwnd_surface, (void **)&surface)))
++        return NULL;
++    hwnd = CONTAINING_RECORD(surface, struct hwnd_surface, IUnknown_iface)->hwnd;
++    IUnknown_Release(surface);
++    return hwnd;
++}
++
++/* Scale transform. The values are kept but not applied. */
++
++struct scale_transform
++{
++    IDCompositionScaleTransform IDCompositionScaleTransform_iface;
++    float scale_x, scale_y, center_x, center_y;
++    LONG ref;
++};
++
++static inline struct scale_transform *impl_from_IDCompositionScaleTransform(IDCompositionScaleTransform *iface)
++{
++    return CONTAINING_RECORD(iface, struct scale_transform, IDCompositionScaleTransform_iface);
++}
++
++static HRESULT STDMETHODCALLTYPE scale_transform_QueryInterface(IDCompositionScaleTransform *iface,
++        REFIID iid, void **out)
++{
++    if (IsEqualGUID(iid, &IID_IUnknown) || IsEqualGUID(iid, &IID_IDCompositionEffect)
++            || IsEqualGUID(iid, &IID_IDCompositionTransform3D) || IsEqualGUID(iid, &IID_IDCompositionTransform)
++            || IsEqualGUID(iid, &IID_IDCompositionScaleTransform))
++    {
++        IDCompositionScaleTransform_AddRef(iface);
++        *out = iface;
++        return S_OK;
++    }
++
++    FIXME("%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(iid));
++    *out = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG STDMETHODCALLTYPE scale_transform_AddRef(IDCompositionScaleTransform *iface)
++{
++    return InterlockedIncrement(&impl_from_IDCompositionScaleTransform(iface)->ref);
++}
++
++static ULONG STDMETHODCALLTYPE scale_transform_Release(IDCompositionScaleTransform *iface)
++{
++    struct scale_transform *transform = impl_from_IDCompositionScaleTransform(iface);
++    ULONG ref = InterlockedDecrement(&transform->ref);
++
++    if (!ref)
++        free(transform);
++    return ref;
++}
++
++static HRESULT STDMETHODCALLTYPE scale_transform_SetAnimation(IDCompositionScaleTransform *iface,
++        IDCompositionAnimation *animation)
++{
++    FIXME("iface %p, animation %p stub!\n", iface, animation);
++    return S_OK;
++}
++
++static HRESULT STDMETHODCALLTYPE scale_transform_SetScaleX(IDCompositionScaleTransform *iface, float scale)
++{
++    if (scale != 1.0f)
++        FIXME("iface %p, scale %f is not applied.\n", iface, scale);
++    impl_from_IDCompositionScaleTransform(iface)->scale_x = scale;
++    return S_OK;
++}
++
++static HRESULT STDMETHODCALLTYPE scale_transform_SetScaleY(IDCompositionScaleTransform *iface, float scale)
++{
++    if (scale != 1.0f)
++        FIXME("iface %p, scale %f is not applied.\n", iface, scale);
++    impl_from_IDCompositionScaleTransform(iface)->scale_y = scale;
++    return S_OK;
++}
++
++static HRESULT STDMETHODCALLTYPE scale_transform_SetCenterX(IDCompositionScaleTransform *iface, float center)
++{
++    TRACE("iface %p, center %f.\n", iface, center);
++    impl_from_IDCompositionScaleTransform(iface)->center_x = center;
++    return S_OK;
++}
++
++static HRESULT STDMETHODCALLTYPE scale_transform_SetCenterY(IDCompositionScaleTransform *iface, float center)
++{
++    TRACE("iface %p, center %f.\n", iface, center);
++    impl_from_IDCompositionScaleTransform(iface)->center_y = center;
++    return S_OK;
++}
++
++static const struct IDCompositionScaleTransformVtbl scale_transform_vtbl =
++{
++    scale_transform_QueryInterface,
++    scale_transform_AddRef,
++    scale_transform_Release,
++    scale_transform_SetAnimation,
++    scale_transform_SetScaleX,
++    scale_transform_SetAnimation,
++    scale_transform_SetScaleY,
++    scale_transform_SetAnimation,
++    scale_transform_SetCenterX,
++    scale_transform_SetAnimation,
++    scale_transform_SetCenterY,
++};
++
++HRESULT create_scale_transform(IDCompositionScaleTransform **out)
++{
++    struct scale_transform *transform;
++
++    if (!out)
++        return E_INVALIDARG;
++    if (!(transform = calloc(1, sizeof(*transform))))
++        return E_OUTOFMEMORY;
++    transform->IDCompositionScaleTransform_iface.lpVtbl = &scale_transform_vtbl;
++    transform->scale_x = transform->scale_y = 1.0f;
++    transform->ref = 1;
++    *out = &transform->IDCompositionScaleTransform_iface;
++    return S_OK;
++}
+diff --color -urN a/dlls/dcomp/target.c b/dlls/dcomp/target.c
+--- a/dlls/dcomp/target.c	2026-11-09 12:19:27.057257446 -0800
++++ b/dlls/dcomp/target.c	2026-11-09 12:19:27.058371259 -0800
+@@ -22,7 +22,6 @@
+ #include "windef.h"
+ #include "winbase.h"
+ #include "dcomp_private.h"
+-#include "wine/server.h"
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(dcomp);
+@@ -80,30 +79,17 @@
+             root_visual->is_root = FALSE;
+             IDCompositionVisual_Release(target->root);
+         }
+-        if (target->shared_visual_handle)
+-            CloseHandle(target->shared_visual_handle);
++        /* Nothing is published any more */
++        if (target->shared_data && target->producer.dc)
++            InterlockedExchange(&target->shared_data->gen, 0);
++        shared_producer_destroy(&target->producer);
++        shared_visual_close(target->shared_visual_handle, target->shared_data);
+         free(target);
+     }
+ 
+     return ref;
+ }
+ 
+-static void shared_visual_target_set_root(HANDLE shared_visual_handle, IDCompositionVisual *root)
+-{
+-    NTSTATUS status;
+-
+-    SERVER_START_REQ(dcomp_set_shared_visual_info)
+-    {
+-        req->handle = wine_server_obj_handle(shared_visual_handle);
+-        req->target_root = wine_server_client_ptr(root);
+-        status = wine_server_call(req);
+-    }
+-    SERVER_END_REQ;
+-
+-    if (status)
+-        ERR("dcomp_set_shared_visual_info failed, not in the same process? status %#lx.\n", status);
+-}
+-
+ static HRESULT STDMETHODCALLTYPE target_SetRoot(IDCompositionTarget *iface,
+         IDCompositionVisual *visual)
+ {
+@@ -135,9 +121,6 @@
+     }
+     target->root = visual;
+ 
+-    if (target->shared_visual_handle)
+-        shared_visual_target_set_root(target->shared_visual_handle, target->root);
+-
+     dcomp_unlock();
+     return S_OK;
+ }
+@@ -194,21 +177,19 @@
+ HRESULT create_target_from_shared_visual_handle(struct composition_device *device, HANDLE shared_visual_handle, void **new_target)
+ {
+     struct composition_target *target;
++    struct shared_visual_data *data;
+     HANDLE handle;
+ 
+-    if (!DuplicateHandle(GetCurrentProcess(), shared_visual_handle, GetCurrentProcess(), &handle, 0,
+-                         FALSE, DUPLICATE_SAME_ACCESS))
+-    {
+-        ERR("Cannot duplicate handle, last error %lu.\n", GetLastError());
+-        return E_FAIL;
+-    }
++    if (!(data = shared_visual_open(shared_visual_handle, &handle)))
++        return E_HANDLE;
+ 
+     target = calloc(1, sizeof(*target));
+     if (!target)
+     {
+-        CloseHandle(handle);
++        shared_visual_close(handle, data);
+         return E_OUTOFMEMORY;
+     }
++    target->shared_data = data;
+ 
+     IDCompositionDevice_AddRef(&device->IDCompositionDevice_iface);
+     dcomp_lock();
+diff --color -urN a/dlls/dcomp/visual.c b/dlls/dcomp/visual.c
+--- a/dlls/dcomp/visual.c	2026-11-09 12:19:27.054516601 -0800
++++ b/dlls/dcomp/visual.c	2026-11-09 12:19:27.055595614 -0800
+@@ -74,8 +74,8 @@
+             ID2D1DeviceContext_Release(visual->device_context);
+         if (visual->content)
+             IUnknown_Release(visual->content);
+-        if (visual->shared_visual_handle)
+-            CloseHandle(visual->shared_visual_handle);
++        shared_consumer_destroy(&visual->consumer);
++        shared_visual_close(visual->shared_visual_handle, visual->shared_data);
+         dcomp_lock();
+         if (visual->is_child)
+             list_remove(&visual->entry);
+@@ -118,22 +118,36 @@
+ 
+ static HRESULT STDMETHODCALLTYPE visual_SetOffsetY(IDCompositionVisualUnknown *iface, float offset_y)
+ {
+-    FIXME("iface %p, offset_y %f stub!\n", iface, offset_y);
+-    return E_NOTIMPL;
++    struct composition_visual *visual = impl_from_IDCompositionVisualUnknown(iface);
++
++    TRACE("iface %p, offset_y %f.\n", iface, offset_y);
++
++    visual->offset_y = offset_y;
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE visual_SetTransformObject(IDCompositionVisualUnknown *iface,
+         IDCompositionTransform *transform)
+ {
+     FIXME("iface %p, transform %p stub!\n", iface, transform);
+-    return E_NOTIMPL;
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE visual_SetTransform(IDCompositionVisualUnknown *iface,
+         const D2D_MATRIX_3X2_F *matrix)
+ {
+-    FIXME("iface %p, matrix %p stub!\n", iface, matrix);
+-    return E_NOTIMPL;
++    struct composition_visual *visual = impl_from_IDCompositionVisualUnknown(iface);
++
++    FIXME("iface %p, matrix %p semi-stub!\n", iface, matrix);
++
++    if (!matrix)
++        return E_INVALIDARG;
++    if (matrix->_11 != 1.0f || matrix->_12 != 0.0f || matrix->_21 != 0.0f || matrix->_22 != 1.0f)
++        FIXME("Only the translation of {%f, %f, %f, %f, %f, %f} is applied.\n", matrix->_11, matrix->_12,
++              matrix->_21, matrix->_22, matrix->_31, matrix->_32);
++    visual->transform_dx = matrix->_31;
++    visual->transform_dy = matrix->_32;
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE visual_SetTransformParent(IDCompositionVisualUnknown *iface,
+@@ -186,24 +200,24 @@
+         IDCompositionClip *clip)
+ {
+     FIXME("iface %p, clip %p stub!\n", iface, clip);
+-    return E_NOTIMPL;
++    return S_OK;
+ }
+ 
+ /* C++ method: SetClip(THIS_ const D2D_RECT_F &rect).  Use pointer instead of reference */
+ static HRESULT STDMETHODCALLTYPE visual_SetClip(IDCompositionVisualUnknown *iface, const D2D_RECT_F *rect)
+ {
+     FIXME("iface %p, rect %p stub!\n", iface, rect);
+-    return E_NOTIMPL;
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE visual_SetContent(IDCompositionVisualUnknown *iface, IUnknown *content)
+ {
+     struct composition_visual *visual = impl_from_IDCompositionVisualUnknown(iface);
+-    ID2D1GdiInteropRenderTarget *interop;
+-    ID2D1DeviceContext *device_context;
++    ID2D1GdiInteropRenderTarget *interop = NULL;
++    ID2D1DeviceContext *device_context = NULL;
+     IDXGISwapChain1 *dxgi_swapchain;
+     IDCompositionSurface *suface;
+-    IDXGIDevice *dxgi_device;
++    IDXGIDevice *dxgi_device = NULL;
+     ID2D1Device *d2d_device;
+     const GUID *iid = NULL;
+     HRESULT hr;
+@@ -212,7 +226,11 @@
+ 
+     dcomp_lock();
+ 
+-    if (content)
++    if (content && get_hwnd_surface_window(content))
++    {
++        iid = &IID_wine_dcomp_hwnd_surface;
++    }
++    else if (content)
+     {
+         if (SUCCEEDED(IUnknown_QueryInterface(content, &IID_IDXGISwapChain1,
+                 (void **)&dxgi_swapchain)))
+@@ -1188,24 +1206,36 @@
+ HRESULT create_visual_from_shared_visual_handle(HANDLE shared_visual_handle, void **new_visual)
+ {
+     struct composition_visual *visual_impl;
++    struct shared_visual_data *data;
+     HANDLE handle;
+     HRESULT hr;
+ 
+-    if (!DuplicateHandle(GetCurrentProcess(), shared_visual_handle, GetCurrentProcess(), &handle, 0,
+-                         FALSE, DUPLICATE_SAME_ACCESS))
+-    {
+-        ERR("Cannot duplicate handle, last error %lu.\n", GetLastError());
+-        return E_FAIL;
+-    }
++    if (!(data = shared_visual_open(shared_visual_handle, &handle)))
++        return E_HANDLE;
+ 
+     hr = create_visual(2, &IID_IDCompositionVisual, (void **)new_visual);
+     if (FAILED(hr))
+     {
+-        CloseHandle(handle);
++        shared_visual_close(handle, data);
+         return hr;
+     }
+ 
+     visual_impl = impl_from_IDCompositionVisualUnknown(*new_visual);
+     visual_impl->shared_visual_handle = handle;
++    visual_impl->shared_data = data;
+     return S_OK;
+ }
++
++/* Returns the shared visual handle of a visual made by this library, without duplicating it. */
++HANDLE get_visual_shared_handle(IUnknown *unknown)
++{
++    IDCompositionVisual *visual;
++    HANDLE handle = NULL;
++
++    if (!unknown || FAILED(IUnknown_QueryInterface(unknown, &IID_IDCompositionVisual, (void **)&visual)))
++        return NULL;
++    if ((void *)visual->lpVtbl == (void *)&visual_unknown_vtbl)
++        handle = impl_from_IDCompositionVisual(visual)->shared_visual_handle;
++    IDCompositionVisual_Release(visual);
++    return handle;
++}
