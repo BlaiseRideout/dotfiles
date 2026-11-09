@@ -141,6 +141,11 @@ if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]] && hyprlock_ready; then
   # Already locked: nothing to do. A hyprlock that's been up a while without the
   # session being locked is a hung leftover, which would otherwise swallow every
   # lock request, so clear it out.
+  # "Locked" is logind's LockedHint, which hyprlock never sets itself, so this
+  # script does (below) for as long as the hyprlock it started runs. Without
+  # that the hint was always "no", and a second lock request (hypridle's
+  # timeout, Mod+L) SIGKILLed the live lock screen: Hyprland showed its
+  # "lockscreen crashed" screen until the new hyprlock came up (2026-11-08).
   if pid=$(pidof hyprlock); then
     locked=$(loginctl show-session "${XDG_SESSION_ID:-auto}" -p LockedHint --value 2>/dev/null)
     up=$(ps -o etimes= -p "${pid%% *}" 2>/dev/null)
@@ -149,9 +154,20 @@ if [[ -n $HYPRLAND_INSTANCE_SIGNATURE ]] && hyprlock_ready; then
     fi
     pkill -9 -x hyprlock
   fi
+  locked_hint() {
+    busctl call org.freedesktop.login1 /org/freedesktop/login1/session/auto \
+      org.freedesktop.login1.Session SetLockedHint b "$1" >/dev/null 2>&1
+  }
+  args=()
   conf=$(yoga_lock_conf)
-  if [[ -n $conf ]]; then exec hyprlock -c "$conf"; fi
-  exec hyprlock
+  [[ -n $conf ]] && args=(-c "$conf")
+  locked_hint true
+  # not exec: the hint is cleared when hyprlock goes (unlock, or killed)
+  hyprlock "${args[@]}"
+  rc=$?
+  # (not if a newer lock.sh has already replaced this hyprlock with its own)
+  pidof hyprlock >/dev/null || locked_hint false
+  exit $rc
 fi
 
 if [[ "$XDG_SESSION_TYPE" == "wayland" ]]; then
