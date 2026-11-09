@@ -65,12 +65,14 @@ make_bottle() { # name runner
   # DXVK/vkd3d on; CSP's own canvas does not use them, only its UI/WebView parts might
   cli edit -b "$name" --params dxvk:true
   cli edit -b "$name" --params vkd3d:true
-  # The CJK fonts CSP wants for Japanese UI text and brush names (~15 downloads, a few minutes).
+  # corefonts + tahoma: Wine's "MS Shell Dlg" maps to Tahoma, and without it menus and dialogs fall back
+  # to a mismatched, badly hinted font. cjkfonts: the CJK fonts CSP wants for Japanese UI text and brush
+  # names (~15 downloads, a few minutes).
   # bottles-cli's own `shell` runs Windows commands, so call the Flatpak's winetricks directly.
   flatpak run --command=sh "$APP" -c "export WINEPREFIX='$data/bottles/$name' \
       WINE='$data/runners/$runner/bin/wine' WINESERVER='$data/runners/$runner/bin/wineserver' \
       WINEDLLOVERRIDES='mscoree,mshtml=d;winemenubuilder.exe=d' WINEDEBUG=-all; \
-      winetricks -q cjkfonts" || echo "cjkfonts failed: install it from Bottles > bottle > Dependencies"
+      winetricks -q corefonts tahoma cjkfonts" || echo "font install failed: install corefonts, tahoma, cjkfonts from Bottles > bottle > Dependencies"
 }
 
 case ${1:-} in

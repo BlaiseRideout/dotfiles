@@ -833,6 +833,64 @@ hl.window_rule({
     no_focus = true,
 })
 
+-- Wine's menus, drop-downs and tooltips (Clip Studio Paint's, run from its
+-- Bottles bottle) reach Hyprland as ordinary floating XWayland windows with
+-- no title, so each got its own border, shadow and blur, a frame around every
+-- menu. Dialogs and the main window have titles and keep theirs.
+hl.window_rule({
+    name  = "wine-popups-undecorated",
+    match = { class = ".*\\.exe", title = "^$", xwayland = true, float = true },
+    border_size = 0,
+    rounding = 0,
+    no_shadow = true,
+    no_blur = true,
+    no_anim = true,
+    -- Wine closes a menu when its window loses keyboard focus. These popups are
+    -- managed windows (not override-redirect), so Hyprland focused each one as it
+    -- opened, then moved focus back to the editor as the pointer left it (follow_mouse),
+    -- and the menu vanished. Never focusing them keeps the editor focused.
+    no_focus = true,
+})
+
+-- CSP (Wine) opens a lot of untitled windows, and the rule above can't tell them
+-- apart (a rule can't match on size), so this runs as each one opens, once its size
+-- is known:
+--  * Keep them all on the editor's workspace. Hyprland puts a new window on whichever
+--    workspace is active, so switching away while CSP loads split its windows across
+--    workspaces (the start-up window on one, its dialogs on another).
+--  * Give the real dialogs focus back: the start-up/activation window and its login
+--    pages must take focus so they can be typed into and closed from the keyboard.
+--    Menus and drop-downs are narrow (<450) and stay unfocusable. Wine's invisible
+--    640x400 WebView host windows stay unfocusable too (nothing to see or type into).
+-- Only focuses a dialog already on the workspace you're looking at, so it never
+-- pulls you across workspaces.
+hl.on("window.open", function(w)
+    if not (w.xwayland and (w.class or ""):lower():match("%.exe$")) then return end
+
+    local editor
+    for _, o in ipairs(hl.get_windows() or {}) do
+        if o.address ~= w.address and o.xwayland and o.mapped and not o.floating
+            and (o.class or ""):lower() == (w.class or ""):lower() then
+            editor = o
+            break
+        end
+    end
+    if editor and editor.workspace and w.workspace and editor.workspace.id ~= w.workspace.id then
+        hl.dispatch(hl.dsp.window.move({ workspace = tostring(editor.workspace.id), follow = false,
+                                         window = "address:" .. w.address }))
+    end
+
+    if (w.title or "") == "" and w.size and w.size.x >= 450
+        and not (w.size.x == 640 and w.size.y == 400) then
+        hl.dispatch(hl.dsp.window.set_prop({ prop = "no_focus", value = "false", window = "address:" .. w.address }))
+        local active = hl.get_active_workspace()
+        local ws = (editor and editor.workspace) or w.workspace
+        if active and ws and active.id == ws.id then
+            hl.dispatch(hl.dsp.focus({ window = "address:" .. w.address }))
+        end
+    end
+end)
+
 -- clipboard.sh's picker: centered over everything, rounded like fuzzel
 hl.window_rule({
     name  = "clipboard-picker",
