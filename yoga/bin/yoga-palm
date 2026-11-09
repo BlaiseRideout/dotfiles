@@ -32,7 +32,7 @@ Knobs (environment; `systemctl --user edit yoga-palm` to set them for the servic
                              The firmware goes silent on a resting palm and reports only as it lands and peels
                              off, so this is how long the palm is covered; a normal contact always sends its lift
   YOGA_PALM_PEN=1            0 = no pen proximity rule
-  YOGA_PALM_PEN_TAIL_MS=600  how long a node stays off after the pen leaves its range
+  YOGA_PALM_PEN_TAIL_MS=250  how long a node stays off after the pen leaves its range
   YOGA_PALM_RATE_HZ=125      the controller's frame rate
   YOGA_PALM_HIDRAW=/dev/...  the touch interface (default: found by USB id 17ef:6161 + its report ids)
 """
@@ -62,7 +62,7 @@ JUMP = _f("YOGA_PALM_JUMP", 1500)
 HOLD = _f("YOGA_PALM_HOLD_MS", 600) / 1000
 SILENCE = _f("YOGA_PALM_SILENCE_MS", 5000) / 1000
 USE_PEN = os.environ.get("YOGA_PALM_PEN", "1") == "1"
-PEN_TAIL = _f("YOGA_PALM_PEN_TAIL_MS", 600) / 1000
+PEN_TAIL = _f("YOGA_PALM_PEN_TAIL_MS", 250) / 1000
 RATE = _f("YOGA_PALM_RATE_HZ", 125)
 
 PEN_WATCHDOG = 2.0       # a pen "in range" that stops reporting for this long is taken as gone
