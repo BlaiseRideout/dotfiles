@@ -29,7 +29,10 @@ let
     "yoga-launcher"           # launcher the on-screen keyboard can type into
     "yoga-launch"             # its fuzzel --launch-prefix
     "yoga-platform-status"    # platform health in one screen; docs/yoga-book/platform.md
-  ] ++ lib.optional cfg.clipStudio.enable "clip-studio-paint";
+  ] ++ lib.optionals cfg.clipStudio.enable [
+    "clip-studio-paint"
+    "csp-profiles"            # menu for switching its saved sessions (accounts, a fresh one)
+  ];
 
   # yoga/systemd, linked into ~/.config/systemd/user and wanted by the graphical
   # session like the Noctalia tray unit

@@ -81,6 +81,18 @@ and moves the modified copies aside. The Roaming appdata (logged in, trial) is i
   `WINEDLLOVERRIDES=mscoree=d;d3d8,d3d9,d3d10core,d3d11,dxgi=b;winemenubuilder=''`, `DXVK_CONFIG_FILE`, `WEBVIEW2_*`,
   `LD_PRELOAD`.
 
+## Sessions (accounts): `csp-profiles`
+
+A session is the three folders `CELSYS`, `CELSYS_EN` and `CELSYSUserData` in the bottle's
+`drive_c/users/blaise/AppData/Roaming` (login, licence state, preferences, workspace). `csp-profiles`
+(`yoga/bin/csp-profiles`, a terminal menu) keeps several and moves the chosen one into the bottle; the others wait in
+`~/.var/app/com.usebottles.bottles/data/bottles/csp-profiles/CSP-wine11/<id>/`. **n** makes an empty one (CSP then
+runs its first-time setup, logged out) for when a session breaks, **d** copies one as a backup, **x** moves one to
+`.trash/` there. It shows the account of each from `LoginInfo.sqlite`. Also `csp-profiles list | switch NAME |
+new LABEL | add LABEL DIR`. Set up on 2026-11-09 with `blaise@blaiserideout.com`, `blaiserideout@gmail.com` (from
+`csp-appdata-account1-after-menu-test-20261108`) and a logged-out fresh one (from
+`csp-appdata-fresh-instance-d2d1-test-20261108`); the older `csp-appdata-*` folders are untouched.
+
 ## In-app web pages (Try for free, welcome dialog): fixed 2026-11-09 with a patched `dcomp.dll`
 
 CSP 5.1.5 hosts these WebView2 pages through a DirectComposition visual shared between CSP and the browser process,
