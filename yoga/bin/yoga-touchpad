@@ -596,6 +596,14 @@ def hypr_poke():
         pass
 
 
+def hypr_pointer_off_bottom():
+    try:
+        subprocess.run(["hyprctl", "repl", "if yoga_pointer_off_bottom then yoga_pointer_off_bottom() end"],
+                       capture_output=True, timeout=5, env=hypr_env())
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def verbose():
     """Notifications are opt-in: YOGA_VERBOSE=1 in the environment, or a file ~/.config/yoga/verbose
     (the service does not see your shell's environment, the file is the way for it)."""
@@ -763,6 +771,9 @@ class Active:
             time.sleep(0.02)
         os.set_blocking(self.dev.fd, False)
         self.dev.grab()
+        # touches that reached Hyprland before the grab (the keyboard sliding over the screen
+        # while it was let go) may have left the pointer on the reserved, parked bottom panel
+        hypr_pointer_off_bottom()
         log(f"grabbed {self.dev.path} ({self.dev.name}); strip {self.rect} "
             f"[{self.key}: {STRIP_LABEL.get(self.key, '')}]"
             + (f"; buttons {', '.join(f'{n} {r}' for n, r in self.button_rects)}" if self.button_rects else ""))

@@ -26,7 +26,7 @@ Install steps: [install.md](install.md) section 3.
 | 2 | docked at the front edge |
 
 Sliding between 1 and 2 passes through 0 for about a second. **Debounce 0 for 1.5 s before treating it as
-undocked.** Every read runs an ACPI method, so exactly one process (`yoga-posture`, 4 Hz) reads it and publishes
+undocked**, except right after position 1 (0.4 s: the everyday undock; a slide 1 -> 2 then shows as a brief undock). Every read runs an ACPI method, so exactly one process (`yoga-posture`, 4 Hz) reads it and publishes
 `$XDG_RUNTIME_DIR/yoga/state.json` for the others ([state-machine.md](state-machine.md)). Right after a resume
 the read fails for ~30 s; the tracker keeps the last value.
 

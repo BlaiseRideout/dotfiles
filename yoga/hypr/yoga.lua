@@ -494,6 +494,13 @@ return function(host)
         hl.dispatch(hl.dsp.cursor.move({ x = x, y = y }))
     end
 
+    -- For a caller that took the touchscreen over late (yoga-touchpad, after the keyboard has
+    -- finished sliding over it): a touch that got through to Hyprland before then puts the
+    -- pointer on the parked panel, where it is stuck. A no-op unless the panel is reserved.
+    function yoga_pointer_off_bottom()
+        if yoga_bottom_reserved then keep_cursor_off_bottom() end
+    end
+
     function yoga_set_reserved(on)
         on = on and true or false
         if on == yoga_bottom_reserved then return "unchanged" end

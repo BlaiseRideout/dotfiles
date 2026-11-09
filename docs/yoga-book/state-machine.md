@@ -13,8 +13,10 @@ than 3 s (daemon down or stalled) they compute the same thing themselves with th
 
 ## Definitions (all constants in `yoga_state.py`)
 
-- `dock_eff`: a non-zero reading is believed at once; **0 only after 1.5 s of continuous 0** (`DOCK_DEBOUNCE_S`).
-  The first reading is believed immediately. An unreadable file keeps the last value (resume).
+- `dock_eff`: a non-zero reading is believed at once; **0 only after continuous 0 for 1.5 s** (`DOCK_DEBOUNCE_S`),
+  **or 0.4 s when the position before it was 1** (`DOCK_DEBOUNCE_FROM_1_S`; undocking from the hinge position is
+  the normal case and should be quick). So a slide 2 -> 1 never reads as undocked, but a slide 1 -> 2 shows as a
+  brief undock (the on-screen keyboard may flash up) before 2 is read. The first reading is believed immediately. An unreadable file keeps the last value (resume).
 - `osk.held`: the keyboard counts as visible at once and gone only after 1 s without its layer (`OSK_HOLD_S`), so
   restarting it in another mode doesn't flicker the bar.
 - Derived (a pure function): `osk_allowed` (never while docked), `reserved` (the bottom screen's workspaces move

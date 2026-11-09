@@ -384,7 +384,7 @@ class DockRef:
                 self.eff_v = 0
 
     def eff(self, now):
-        if self.raw == 0 and self.eff_v and self.zero_at is not None and now - self.zero_at >= 1.5:
+        if self.raw == 0 and self.eff_v and self.zero_at is not None and now - self.zero_at >= (0.4 if self.eff_v == 1 else 1.5):
             self.eff_v = 0
         return self.eff_v or 0
 
@@ -451,10 +451,10 @@ def dock_undock_osk_hidden():
     check(not s.world.bar_hidden, "the bar is not hidden by a docked keyboard (no on-screen keyboard)")
     s.run(5)
     s.set_dock(0)
-    s.run(1.0)
-    check(s.td.active and s.world.reserved, "still docked 1 s after the position reads 0 (debounce 1.5 s)")
-    s.run(1.5)
-    check(not s.td.active and not s.world.reserved, "released once the 0 has lasted the debounce")
+    s.run(0.2)
+    check(s.td.active and s.world.reserved, "still docked 0.2 s after position 1 reads 0")
+    s.run(0.8)
+    check(not s.td.active and not s.world.reserved, "released within 1 s of 0 after position 1 (debounce 0.4 s)")
     finish(s)
     return s
 
@@ -507,22 +507,38 @@ def dock_with_osk_float_mode():
 
 
 @scenario
-def slide_1_0_2():
-    """Sliding the keyboard from position 1 to 2 passes through 0 for about a second."""
-    s = Sim("slide_1_0_2", dock=1)
+def slide_2_0_1():
+    """Sliding the keyboard from position 2 to 1 passes through 0 for about a second: the full debounce holds."""
+    s = Sim("slide_2_0_1", dock=2)
     s.run(3)
-    check(s.td.active and s.td.active.key == "dock1", "dock1 strip")
+    check(s.td.active and s.td.active.key == "dock2", "dock2 strip")
     n0 = len(s.world.events)
     s.set_dock(0)
     s.run(1.0)
     s.world.user_show()                      # someone taps the OSK button in the gap
-    s.set_dock(2)
+    s.set_dock(1)
     s.run(4)
     ev = [e for _, e in s.world.events[n0:]]
-    check(s.td.active and s.td.active.key == "dock2", "strip changed dock1 -> dock2 without going off")
+    check(s.td.active and s.td.active.key == "dock1", "strip changed dock2 -> dock1 without going off")
     check("osk-show-refused" in ev and not s.world.osk, f"the on-screen keyboard cannot appear in the gap ({ev})")
     check("reserved->False" not in ev, f"no reserve bounce in the slide ({ev})")
-    check(s.daemon.dock.eff == 2, "effective dock never read 0")
+    check(s.daemon.dock.eff == 1, "effective dock never read 0")
+    finish(s)
+    return s
+
+
+@scenario
+def slide_1_0_2():
+    """Sliding from 1 to 2 is the trade for a quick undock: it shows as a short undock, then settles on 2."""
+    s = Sim("slide_1_0_2", dock=1)
+    s.run(3)
+    s.set_dock(0)
+    s.run(1.0)
+    s.set_dock(2)
+    s.run(4)
+    check(s.daemon.dock.eff == 2, "settles on position 2")
+    check(s.td.active and s.td.active.key == "dock2", "strip ends on dock2")
+    check(not s.world.osk and s.world.reserved, "no on-screen keyboard left over, bottom screen reserved")
     finish(s)
     return s
 

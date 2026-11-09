@@ -31,6 +31,12 @@ from pathlib import Path
 # position 1 and 2 (and a detach reads 0 for good). A non-zero reading is believed at
 # once; "detached" is believed only after 0 has been read this long.
 DOCK_DEBOUNCE_S = 1.5
+# ...but the keyboard is nearly always docked at position 1 (near the hinge) and taken off
+# from there, so a 0 that follows position 1 is believed after this much shorter time: three
+# consecutive 4 Hz reads of 0 (~0.5 s). The price is that a deliberate slide 1 -> 2 now shows
+# as a brief undock (the on-screen keyboard may flash up) before 2 is read. A slide 2 -> 1,
+# or a detach from 2, still gets the full DOCK_DEBOUNCE_S.
+DOCK_DEBOUNCE_FROM_1_S = 0.4
 # The on-screen keyboard's layer disappears for a moment when wvkbd is restarted (mode
 # change) and the bars/workspaces must not bounce with it: "visible" is held this long
 # after the layer was last seen.
@@ -190,13 +196,16 @@ class DockTracker:
     """keyboard_position -> the effective dock position `eff`.
 
     Non-zero: believed at once. 0: believed only after DOCK_DEBOUNCE_S of 0 (a slide
-    1 -> 0 -> 2 therefore reads as 1 -> 2 and never as "undocked"). The first reading
-    is believed at once. An unreadable file keeps the last reading (right after a resume the
+    2 -> 0 -> 1 therefore reads as 2 -> 1 and never as "undocked"); when the position
+    before the 0 was 1 only DOCK_DEBOUNCE_FROM_1_S (the usual undock, which must be quick,
+    so a slide 1 -> 2 does show as a short undock). The first reading is believed at once. An unreadable file keeps the last reading (right after a resume the
     dock's WMI query fails for a while, and counting that as "detached" raised the on-screen
     keyboard over a docked keyboard); with no reading yet it counts as 0."""
 
     def __init__(self, debounce=None, initial=None):
+        # an explicit `debounce` applies to both positions (tests, tools)
         self.debounce = DOCK_DEBOUNCE_S if debounce is None else debounce
+        self.debounce_from_1 = DOCK_DEBOUNCE_FROM_1_S if debounce is None else debounce
         self.raw = None
         self.eff = initial
         self.zero_since = None
@@ -210,7 +219,8 @@ class DockTracker:
         else:
             if self.zero_since is None:
                 self.zero_since = now
-            if self.eff != 0 and now - self.zero_since >= self.debounce:
+            wait = self.debounce_from_1 if self.eff == 1 else self.debounce
+            if self.eff != 0 and now - self.zero_since >= wait:
                 self.eff = 0
         return self.eff
 

@@ -902,7 +902,8 @@ class Daemon:
             log(f"keyboard_position {old_raw} -> {self.dock.raw}")
         if self.dock.eff != old_eff:
             log(f"keyboard dock {'-' if old_eff is None else old_eff} -> {self.dock.eff}"
-                + (f" (0 for {yoga_state.DOCK_DEBOUNCE_S} s)" if self.dock.eff == 0 and old_eff is not None else ""))
+                + (f" (0 for {self.dock.debounce_from_1 if old_eff == 1 else self.dock.debounce} s)"
+                   if self.dock.eff == 0 and old_eff is not None else ""))
         self.osk_seen = yoga_state.osk_visible()
         self.osk_hold.update(self.osk_seen, now)
         want = self.derived()
