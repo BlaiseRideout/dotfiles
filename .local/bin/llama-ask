@@ -9,6 +9,10 @@
 # Tool calls and their output go to stderr as they happen (-q hides them and the banner), the answer to stdout.
 set -euo pipefail
 
+# Source environment.d to get LLAMA_URL (remote router URL if set)
+. "${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/llama-remote.conf" 2>/dev/null || true
+export LLAMA_URL
+
 . "${LLAMA_LIB:-$HOME/.local/lib/llama.sh}"
 OPENCODE_CONFIG=${OPENCODE_CONFIG:-$HOME/.config/opencode/opencode.json}
 harness=pi model="" quiet=0 which=0 pick=0
