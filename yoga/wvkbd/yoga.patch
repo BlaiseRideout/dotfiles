@@ -315,7 +315,7 @@ index 0000000..f709e6b
 +}
 +#endif
 diff --git a/keyboard.c b/keyboard.c
-index ea3be7e..baa4715 100644
+index ea3be7e..30e6ad9 100644
 --- a/keyboard.c
 +++ b/keyboard.c
 @@ -5,6 +5,8 @@
@@ -425,7 +425,13 @@ index ea3be7e..baa4715 100644
      case Compose:
          // switch to the associated layout determined by the *next* keypress
          if (kb->compose == 0) {
-@@ -721,8 +778,13 @@ kbd_draw_layout(struct kbd *kb)
+@@ -716,13 +773,18 @@ kbd_draw_layout(struct kbd *kb)
+     }
+ 
+     while (next_key->type != Last) {
+-        if ((next_key->type == Pad) || (next_key->type == EndRow)) {
++        if ((next_key->type == Pad) || (next_key->type == EndRow) || next_key->width <= 0) {
+             next_key++;
              continue;
          }
          if ((next_key->type == Mod && kb->mods & next_key->code) ||
@@ -440,7 +446,7 @@ index ea3be7e..baa4715 100644
              kbd_draw_key(kb, next_key, None);
          }
 diff --git a/keyboard.h b/keyboard.h
-index f1cf4c0..954d63f 100644
+index f1cf4c0..58b29d0 100644
 --- a/keyboard.h
 +++ b/keyboard.h
 @@ -24,6 +24,9 @@ enum key_type {
@@ -453,6 +459,15 @@ index f1cf4c0..954d63f 100644
  	EndRow,    // Incidates the end of a key row
  	Last,      // Indicated the end of a layout
  };
+@@ -64,7 +67,7 @@ struct clr_scheme {
+ struct key {
+ 	const char *label;       // primary label
+ 	const char *shift_label; // secondary label
+-	const double width;      // relative width (1.0)
++	double width;            // relative width (1.0) (not const: --fixed removes the Move key)
+ 	const enum key_type type;
+ 
+ 	const uint32_t
 @@ -132,6 +135,11 @@ struct kbd {
  	uint32_t last_popup_x, last_popup_y, last_popup_w, last_popup_h;
  };
@@ -894,7 +909,7 @@ index d42c19f..e37bc49 100644
    {"⌨͕", "⌨͔", 1.0, NextLayer, .scheme = 1},
    {"Ctr", "Ctr", 1.0, Mod, Ctrl, .scheme = 1},
 diff --git a/main.c b/main.c
-index be7fb07..98115a2 100644
+index be7fb07..5824709 100644
 --- a/main.c
 +++ b/main.c
 @@ -70,10 +70,40 @@ static bool run_display = true;
@@ -1079,15 +1094,36 @@ index be7fb07..98115a2 100644
      struct wl_registry *registry = wl_display_get_registry(display);
      wl_registry_add_listener(registry, &registry_listener, NULL);
      wl_display_roundtrip(display);
-@@ -1256,6 +1348,7 @@ main(int argc, char **argv)
+@@ -1254,8 +1346,28 @@ main(int argc, char **argv)
+     keyboard.shift_space_is_tab = false;
+     #endif
  
++    if (fixed_edge) {
++        /* --fixed: the Move key does nothing, so drop it from every layer and give its width to
++         * the widest key of its row (the space bar), keeping the other keys' sizes */
++        for (int li = 0; li < NumLayouts - 1; li++) {
++            struct key *row = layouts[li].keys, *mv = NULL, *widest = NULL;
++            for (struct key *k = layouts[li].keys; ; k++) {
++                if (k->type == Move) mv = k;
++                else if (k->type != Pad && k->type != EndRow && k->type != Last &&
++                         (!widest || k->width > widest->width)) widest = k;
++                if (k->type == EndRow || k->type == Last) {
++                    if (mv && widest) { widest->width += mv->width; mv->width = 0; }
++                    mv = widest = NULL;
++                    row = k + 1;
++                    if (k->type == Last) break;
++                }
++            }
++            (void) row;
++        }
++    }
      kbd_init(&keyboard, (struct layout *)&layouts, layer_names_list,
               landscape_layer_names_list);
 +    kbd_autocorrect_init(ac_words, ac_known, ac_state);
  
      if (im_mgr != NULL) {
          struct zwp_input_method_v2 *input_method =
-@@ -1287,7 +1380,13 @@ main(int argc, char **argv)
+@@ -1287,7 +1399,13 @@ main(int argc, char **argv)
      sigaddset(&signal_mask, SIGUSR1);
      sigaddset(&signal_mask, SIGUSR2);
      sigaddset(&signal_mask, SIGRTMIN);
@@ -1101,7 +1137,7 @@ index be7fb07..98115a2 100644
      if (sigprocmask(SIG_BLOCK, &signal_mask, NULL) == -1) {
          die("Failed to disable handled signals: %d\n", errno);
      }
-@@ -1321,11 +1420,32 @@ main(int argc, char **argv)
+@@ -1321,11 +1439,32 @@ main(int argc, char **argv)
                  show();
              else if (si.ssi_signo == SIGRTMIN)
                  toggle_visibility();
