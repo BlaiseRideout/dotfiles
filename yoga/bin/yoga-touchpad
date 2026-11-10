@@ -81,10 +81,10 @@ DEFAULTS = {
         # hinge, starting below Noctalia's 48-logical-px bar (0.053 of 900)
         "dock2": {"x": [0.0, 1.0], "y": [0.06, 0.435]},
         # on-screen keyboard: yoga-bottom-reserve hides the bottom screen's bar while it
-        # shows, so its 420 px of wvkbd sit at the very top and end at 420 of 900 logical
-        # px (0.467); the strip starts just below it, so keyboard and touchpad
-        # together fill the bottom screen
-        "osk": {"x": [0.0, 1.0], "y": [0.475, 1.0]},
+        # shows, so its 480 px of wvkbd (a third of the 1440 logical px width, square keys)
+        # sit at the very top and end at 480 of 900 logical px (0.533); the strip starts
+        # just below it, so keyboard and touchpad together fill the bottom screen
+        "osk": {"x": [0.0, 1.0], "y": [0.54, 1.0]},
         # `yoga-touchpad on` with no keyboard docked and no OSK
         "manual": {"x": [0.0, 1.0], "y": [0.615, 1.0]},
     },

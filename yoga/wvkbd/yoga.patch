@@ -1,5 +1,321 @@
+diff --git a/autocorrect.h b/autocorrect.h
+new file mode 100644
+index 0000000..f709e6b
+--- /dev/null
++++ b/autocorrect.h
+@@ -0,0 +1,310 @@
++/* Autocorrect for the Yoga on-screen keyboard (included by keyboard.c).
++ *
++ * The keyboard only sends key events, so it cannot read the text field. It keeps its own
++ * buffer of the letters typed since the last word break and, when a space / Enter / . , ; ! ? )
++ * is pressed after a word that is not in the dictionary, replaces that word (backspaces, then
++ * the corrected letters) by the most frequent dictionary word one edit away (a letter missing,
++ * extra, wrong or two swapped). Then the delimiter goes through as usual.
++ *
++ * It stays out of the way: nothing is touched after digits or symbols inside a token (paths, URLs,
++ * identifiers), with Ctrl/Alt/Super/AltGr held, for words shorter than 3 letters, for words with
++ * capitals past the first letter, or when the buffer went stale (5 s idle, arrows, a layer switch).
++ * Backspace pressed right after a correction undoes it, and the word is added to the "known" file so
++ * it is never corrected again. The Auto key (or SIGRTMIN+2, re-reading the state file) turns it on
++ * and off; the state is a file so it survives restarts of the keyboard.
++ *
++ *   words file: one word per line, most frequent first   known file: one word per line
++ */
++#ifndef YOGA_AUTOCORRECT_H
++#define YOGA_AUTOCORRECT_H
++#include <stdlib.h>
++#include <stdint.h>
++#include <stdbool.h>
++#include <string.h>
++#include <stdio.h>
++#include <ctype.h>
++#include <time.h>
++
++#define AC_MAXW 24
++#define AC_IDLE_MS 5000
++#define AC_NONE UINT32_MAX
++
++struct ac_ent { char *w; uint32_t rank; };
++static struct {
++    struct ac_ent *tab;
++    size_t cap, n;
++    bool loaded, enabled;
++    char *state_path, *known_path;
++    char word[AC_MAXW + 2];
++    bool up[AC_MAXW + 2];
++    size_t len;
++    bool poison, nocorrect;
++    int64_t last_ms;
++    bool undo_ok, undo_cap;
++    char undo_orig[AC_MAXW + 2], undo_fixed[AC_MAXW + 4];
++} ac = { .enabled = true };
++
++static uint32_t
++ac_hash(const char *s)
++{
++    uint32_t h = 2166136261u;
++    while (*s) {
++        h ^= (unsigned char)*s++;
++        h *= 16777619u;
++    }
++    return h;
++}
++
++static void
++ac_put(const char *w, uint32_t rank)
++{
++    if (ac.n * 2 >= ac.cap) {
++        struct ac_ent *old = ac.tab;
++        size_t oldcap = ac.cap;
++        ac.cap = oldcap ? oldcap * 2 : 1 << 16;
++        ac.tab = calloc(ac.cap, sizeof(*ac.tab));
++        for (size_t i = 0; i < oldcap; i++) {
++            if (!old[i].w) continue;
++            size_t j = ac_hash(old[i].w) & (ac.cap - 1);
++            while (ac.tab[j].w) j = (j + 1) & (ac.cap - 1);
++            ac.tab[j] = old[i];
++        }
++        free(old);
++    }
++    size_t i = ac_hash(w) & (ac.cap - 1);
++    while (ac.tab[i].w) {
++        if (!strcmp(ac.tab[i].w, w)) {
++            if (rank < ac.tab[i].rank) ac.tab[i].rank = rank;
++            return;
++        }
++        i = (i + 1) & (ac.cap - 1);
++    }
++    ac.tab[i].w = strdup(w);
++    ac.tab[i].rank = rank;
++    ac.n++;
++}
++
++static uint32_t
++ac_rank(const char *w)
++{
++    if (!ac.cap) return AC_NONE;
++    size_t i = ac_hash(w) & (ac.cap - 1);
++    while (ac.tab[i].w) {
++        if (!strcmp(ac.tab[i].w, w)) return ac.tab[i].rank;
++        i = (i + 1) & (ac.cap - 1);
++    }
++    return AC_NONE;
++}
++
++static void
++ac_load(const char *path, bool known)
++{
++    FILE *f = fopen(path, "r");
++    if (!f) return;
++    char line[128];
++    uint32_t rank = 1;
++    while (fgets(line, sizeof line, f)) {
++        size_t l = strcspn(line, " \t\r\n");
++        line[l] = 0;
++        if (!l || l > AC_MAXW) continue;
++        bool ok = true;
++        for (size_t i = 0; i < l; i++) {
++            line[i] = tolower((unsigned char)line[i]);
++            if (!(line[i] >= 'a' && line[i] <= 'z') && line[i] != '\'') ok = false;
++        }
++        if (ok) ac_put(line, known ? 0 : rank++);
++    }
++    fclose(f);
++    if (ac.n) ac.loaded = true;
++}
++
++/* the most frequent dictionary word one edit away from w */
++static bool
++ac_fix(const char *w, char *out)
++{
++    static const char al[] = "abcdefghijklmnopqrstuvwxyz'";
++    size_t n = strlen(w);
++    char t[AC_MAXW + 4];
++    uint32_t best = AC_NONE;
++#define AC_TRY() do { uint32_t r = ac_rank(t); if (r < best) { best = r; strcpy(out, t); } } while (0)
++    for (size_t i = 0; i <= n; i++) {                /* dont -> don't: a missing apostrophe first, */
++        memcpy(t, w, i); t[i] = '\''; memcpy(t + i + 1, w + i, n - i + 1);  /* no plain word beats it */
++        if (ac_rank(t) != AC_NONE) { strcpy(out, t); return true; }
++    }
++    for (size_t i = 0; i < n; i++) {                 /* a letter too many */
++        memcpy(t, w, i); memcpy(t + i, w + i + 1, n - i); AC_TRY();
++    }
++    for (size_t i = 0; i + 1 < n; i++) {             /* two letters swapped */
++        memcpy(t, w, n + 1); t[i] = w[i + 1]; t[i + 1] = w[i]; AC_TRY();
++    }
++    for (size_t i = 0; i < n; i++)                   /* a wrong letter */
++        for (const char *c = al; *c; c++) {
++            if (*c == w[i]) continue;
++            memcpy(t, w, n + 1); t[i] = *c; AC_TRY();
++        }
++    for (size_t i = 0; i <= n; i++)                  /* a letter missing */
++        for (const char *c = al; *c; c++) {
++            memcpy(t, w, i); t[i] = *c; memcpy(t + i + 1, w + i, n - i + 1); AC_TRY();
++        }
++#undef AC_TRY
++    return best != AC_NONE;
++}
++
++static int64_t
++ac_now_ms(void)
++{
++    struct timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
++}
++
++static void
++ac_reset_word(void)
++{
++    ac.len = 0;
++    ac.poison = false;
++    ac.nocorrect = false;
++}
++
++static uint32_t
++ac_code(char c)
++{
++    static const uint16_t L[26] = { KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I,
++        KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T, KEY_U, KEY_V,
++        KEY_W, KEY_X, KEY_Y, KEY_Z };
++    return c == '\'' ? KEY_APOSTROPHE : L[c - 'a'];
++}
++
++static void
++ac_tap(struct kbd *kb, uint32_t time, uint32_t code)
++{
++    zwp_virtual_keyboard_v1_key(kb->vkbd, time, code, WL_KEYBOARD_KEY_STATE_PRESSED);
++    zwp_virtual_keyboard_v1_key(kb->vkbd, time, code, WL_KEYBOARD_KEY_STATE_RELEASED);
++}
++
++/* replace the last `erase` characters by s (first letter capital if cap0) */
++static void
++ac_replace(struct kbd *kb, uint32_t time, size_t erase, const char *s, bool cap0)
++{
++    zwp_virtual_keyboard_v1_modifiers(kb->vkbd, 0, 0, 0, 0);
++    for (size_t i = 0; i < erase; i++) ac_tap(kb, time, KEY_BACKSPACE);
++    for (size_t i = 0; s[i]; i++) {
++        zwp_virtual_keyboard_v1_modifiers(kb->vkbd, (i == 0 && cap0) ? Shift : 0, 0, 0, 0);
++        ac_tap(kb, time, dvorak_pos(ac_code(s[i])));
++    }
++    zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
++}
++
++static void
++ac_learn(const char *w)
++{
++    ac_put(w, 0);
++    if (!ac.known_path) return;
++    FILE *f = fopen(ac.known_path, "a");
++    if (f) { fprintf(f, "%s\n", w); fclose(f); }
++}
++
++static bool
++ac_undo(struct kbd *kb, uint32_t time)
++{
++    /* the delimiter and the corrected word go; the typed word comes back and is not corrected again */
++    ac_replace(kb, time, 1 + strlen(ac.undo_fixed), ac.undo_orig, ac.undo_cap);
++    ac_learn(ac.undo_orig);
++    ac.len = strlen(ac.undo_orig);
++    memcpy(ac.word, ac.undo_orig, ac.len);
++    memset(ac.up, 0, sizeof ac.up);
++    ac.up[0] = ac.undo_cap;
++    ac.poison = false;
++    ac.nocorrect = true;
++    return true;
++}
++
++static void
++ac_try_correct(struct kbd *kb, uint32_t time)
++{
++    ac.word[ac.len] = 0;
++    if (ac.word[ac.len - 1] == '\'') return;
++    for (size_t i = 1; i < ac.len; i++)
++        if (ac.up[i]) return;                         /* ALLCAPS, camelCase */
++    if (ac_rank(ac.word) != AC_NONE) return;          /* a word we know */
++    char fix[AC_MAXW + 4];
++    if (!ac_fix(ac.word, fix)) return;
++    ac_replace(kb, time, ac.len, fix, ac.up[0]);
++    strcpy(ac.undo_orig, ac.word);
++    strcpy(ac.undo_fixed, fix);
++    ac.undo_cap = ac.up[0];
++    ac.undo_ok = true;
++}
++
++/* Called for every key press before it is sent. Returns true when the press was handled here. */
++static bool
++ac_on_key(struct kbd *kb, struct key *k, uint32_t time)
++{
++    if (!ac.enabled || !ac.loaded) return false;
++    bool undo = ac.undo_ok;
++    ac.undo_ok = false;
++    if (k->type == Mod) return false;
++    int64_t now = ac_now_ms();
++    if (ac.len && now - ac.last_ms > AC_IDLE_MS) ac_reset_word();
++    ac.last_ms = now;
++    if (k->type != Code || k->code_mod || (kb->mods & (Ctrl | Alt | Super | AltGr))) {
++        ac_reset_word();
++        return false;
++    }
++    if (k->code == KEY_BACKSPACE) {
++        if (undo) return ac_undo(kb, time);
++        if (ac.len) ac.len--;
++        if (!ac.len) ac.nocorrect = false;
++        return false;
++    }
++    const char *lab = ((kb->mods & Shift) && k->shift_label && *k->shift_label) ? k->shift_label : k->label;
++    if (lab[0] && !lab[1] && isascii((unsigned char)lab[0]) && isalpha((unsigned char)lab[0])) {
++        if (ac.poison) return false;
++        if (ac.len >= AC_MAXW) { ac.poison = true; return false; }
++        ac.word[ac.len] = tolower((unsigned char)lab[0]);
++        ac.up[ac.len++] = (kb->mods & (Shift | CapsLock)) != 0;
++        return false;
++    }
++    if (k->code == KEY_APOSTROPHE && !(kb->mods & Shift)) {
++        if (!ac.poison && ac.len && ac.len < AC_MAXW) ac.word[ac.len++] = '\'';
++        return false;
++    }
++    bool white = k->code == KEY_SPACE || k->code == KEY_ENTER;
++    bool punct = lab[0] && !lab[1] && strchr(".,;!?)", lab[0]);
++    if (white || punct) {
++        /* before a period only longer words: www. e.g. i.e. */
++        if (ac.len >= (lab[0] == '.' ? 4 : 3) && !ac.poison && !ac.nocorrect) ac_try_correct(kb, time);
++        ac_reset_word();
++        ac.poison = !white && lab[0] == '.';          /* file.txt, e.g., www.x.com: until the next space */
++        return false;
++    }
++    ac_reset_word();                                    /* digit, symbol, arrow...: not a plain word */
++    ac.poison = true;
++    return false;
++}
++
++static void
++ac_read_state(void)
++{
++    ac.enabled = true;
++    if (!ac.state_path) return;
++    FILE *f = fopen(ac.state_path, "r");
++    if (!f) return;
++    char b[16] = "";
++    if (fgets(b, sizeof b, f) && !strncmp(b, "off", 3)) ac.enabled = false;
++    fclose(f);
++    ac_reset_word();
++    ac.undo_ok = false;
++}
++
++static void
++ac_set_enabled(bool on)
++{
++    ac.enabled = on;
++    ac_reset_word();
++    ac.undo_ok = false;
++    if (!ac.state_path) return;
++    FILE *f = fopen(ac.state_path, "w");
++    if (f) { fputs(on ? "on\n" : "off\n", f); fclose(f); }
++}
++#endif
 diff --git a/keyboard.c b/keyboard.c
-index ea3be7e..4d46b41 100644
+index ea3be7e..baa4715 100644
 --- a/keyboard.c
 +++ b/keyboard.c
 @@ -5,6 +5,8 @@
@@ -11,7 +327,7 @@ index ea3be7e..4d46b41 100644
  #include "keyboard.h"
  #include <linux/input-event-codes.h>
  
-@@ -277,6 +279,21 @@ kbd_get_layer_index(struct kbd *kb, struct layout *l)
+@@ -277,6 +279,46 @@ kbd_get_layer_index(struct kbd *kb, struct layout *l)
      return 0;
  }
  
@@ -30,10 +346,35 @@ index ea3be7e..4d46b41 100644
 +    return code;
 +}
 +
++#include "autocorrect.h"
++
++void
++kbd_autocorrect_init(const char *words, const char *known, const char *state)
++{
++    if (state) ac.state_path = strdup(state);
++    if (known) ac.known_path = strdup(known);
++    if (words) ac_load(words, false);
++    if (known) ac_load(known, true);
++    ac_read_state();
++}
++
++void
++kbd_autocorrect_reload(void)
++{
++    ac_read_state();
++}
++
++void
++kbd_autocorrect_reset(void)
++{
++    ac_reset_word();
++    ac.undo_ok = false;
++}
++
  void
  zwp_virtual_keyboard_v1_key_mods(struct zwp_virtual_keyboard_v1 *vkbd, uint32_t time, uint32_t mods, enum wl_keyboard_key_state state)
  {
-@@ -321,8 +338,8 @@ kbd_unpress_key(struct kbd *kb, uint32_t time)
+@@ -321,8 +363,8 @@ kbd_unpress_key(struct kbd *kb, uint32_t time)
                                              WL_KEYBOARD_KEY_STATE_RELEASED);
              } else {
                  zwp_virtual_keyboard_v1_key(kb->vkbd, time,
@@ -44,7 +385,17 @@ index ea3be7e..4d46b41 100644
                                              WL_KEYBOARD_KEY_STATE_RELEASED);
              }
          }
-@@ -461,8 +478,8 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
+@@ -437,6 +479,9 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
+         }
+     }
+ 
++    if (ac_on_key(kb, k, time))
++        return;
++
+     switch (k->type) {
+     case Code:
+         if (k->code_mod) {
+@@ -461,8 +506,8 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
              zwp_virtual_keyboard_v1_key(kb->vkbd, time, KEY_TAB,
                                          WL_KEYBOARD_KEY_STATE_PRESSED);
          } else {
@@ -55,13 +406,17 @@ index ea3be7e..4d46b41 100644
                                          WL_KEYBOARD_KEY_STATE_PRESSED);
          }
          if (kb->print || kb->print_intersect)
-@@ -507,6 +524,14 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
+@@ -507,6 +552,18 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
              kb->last_abc_layout = &kb->layouts[kb->layers[0]];
          }
          break;
 +    case Move:
 +        // main.c handles SIGRTMIN+1 as move (blocked and read from a signalfd)
 +        kill(getpid(), SIGRTMIN + 1);
++        break;
++    case Auto:
++        ac_set_enabled(!ac.enabled);
++        kbd_draw_layout(kb);
 +        break;
 +    case Hide:
 +        // main.c handles SIGUSR1 as hide (it is blocked and read from a signalfd)
@@ -70,19 +425,46 @@ index ea3be7e..4d46b41 100644
      case Compose:
          // switch to the associated layout determined by the *next* keypress
          if (kb->compose == 0) {
+@@ -721,8 +778,13 @@ kbd_draw_layout(struct kbd *kb)
+             continue;
+         }
+         if ((next_key->type == Mod && kb->mods & next_key->code) ||
++            (next_key->type == Auto && ac.enabled && ac.loaded) ||
+             (next_key->type == Compose && kb->compose)) {
++            /* (a lit Auto key is not a key press: no popup bubble above it) */
++            bool popup = kb->show_popup;
++            if (next_key->type == Auto) kb->show_popup = false;
+             kbd_draw_key(kb, next_key, Press);
++            kb->show_popup = popup;
+         } else {
+             kbd_draw_key(kb, next_key, None);
+         }
 diff --git a/keyboard.h b/keyboard.h
-index f1cf4c0..9f73294 100644
+index f1cf4c0..954d63f 100644
 --- a/keyboard.h
 +++ b/keyboard.h
-@@ -24,6 +24,8 @@ enum key_type {
+@@ -24,6 +24,9 @@ enum key_type {
  	NextLayer, // Layout switch to the next layout in the layers sequence
  	Compose,   // Compose modifier key, switches to a specific associated layout
  	           // upon next keypress
 +	Move,      // Move the keyboard to the other (top/bottom) edge of the output (SIGRTMIN+1)
 +	Hide,      // Hide the keyboard (like SIGUSR1), shown again with SIGUSR2
++	Auto,      // Turn autocorrect on/off (autocorrect.h)
  	EndRow,    // Incidates the end of a key row
  	Last,      // Indicated the end of a layout
  };
+@@ -132,6 +135,11 @@ struct kbd {
+ 	uint32_t last_popup_x, last_popup_y, last_popup_w, last_popup_h;
+ };
+ 
++/* autocorrect (autocorrect.h) */
++void kbd_autocorrect_init(const char *words, const char *known, const char *state);
++void kbd_autocorrect_reload(void);
++void kbd_autocorrect_reset(void);
++
+ void draw_inset(struct drwsurf *ds, uint32_t x, uint32_t y, uint32_t width,
+                 uint32_t height, uint32_t border, Color color, int rounding);
+ void draw_over_inset(struct drwsurf *ds, uint32_t x, uint32_t y, uint32_t width,
 diff --git a/keymap.mobintl.h b/keymap.mobintl.h
 index aae951d..084eef9 100644
 --- a/keymap.mobintl.h
@@ -170,7 +552,7 @@ index aae951d..084eef9 100644
          key <RTSH>               {	[         Shift_R ] };\
          key <KPMU>               {\
 diff --git a/layout.mobintl.h b/layout.mobintl.h
-index d42c19f..2458693 100644
+index d42c19f..e37bc49 100644
 --- a/layout.mobintl.h
 +++ b/layout.mobintl.h
 @@ -174,17 +174,6 @@ static struct layout layouts[NumLayouts] = {
@@ -191,7 +573,7 @@ index d42c19f..2458693 100644
    {"1", "!", 1.0, Code, KEY_1},
    {"2", "@", 1.0, Code, KEY_2},
    {"3", "#", 1.0, Code, KEY_3},
-@@ -193,52 +182,70 @@ static struct key keys_full[] = {
+@@ -193,52 +182,69 @@ static struct key keys_full[] = {
    {"6", "^", 1.0, Code, KEY_6},
    {"7", "&", 1.0, Code, KEY_7},
    {"8", "*", 1.0, Code, KEY_8},
@@ -254,7 +636,7 @@ index d42c19f..2458693 100644
 +  {"\\", "|", 1.5, Code, KEY_BACKSLASH},
 +  {"", "", 0.0, EndRow},
 +
-+  {"Caps", "Caps", 1.75, Mod, CapsLock, .scheme = 1},
++  {"Fn", "Fn", 1.75, NextLayer, .scheme = 1},
 +  {"a", "A", 1.0, Code, KEY_A},
 +  {"o", "O", 1.0, Code, KEY_O},
 +  {"e", "E", 1.0, Code, KEY_E},
@@ -291,12 +673,11 @@ index d42c19f..2458693 100644
 +
 +  {"Hide", "Hide", 1.0, Hide, .scheme = 1},
 +  {"Move", "Move", 1.0, Move, .scheme = 1},
-+  {"Fn", "Fn", 1.0, NextLayer, .scheme = 1},
-+  {"Ctrl", "Ctrl", 1.25, Mod, Ctrl, .scheme = 1},
-+  {"Super", "Super", 1.25, Mod, Super, .scheme = 1},
-+  {"Alt", "Alt", 1.25, Mod, Alt, .scheme = 1},
-+  {"", "", 4.25, Code, KEY_SPACE},
-+  {"AltGr", "AltGr", 1.0, Mod, AltGr, .scheme = 1},
++  {"Ctrl", "Ctrl", 1.0, Mod, Ctrl, .scheme = 1},
++  {"Super", "Super", 1.0, Mod, Super, .scheme = 1},
++  {"Alt", "Alt", 1.0, Mod, Alt, .scheme = 1},
++  {"", "", 6.0, Code, KEY_SPACE},
++  {"Auto", "Auto", 1.0, Auto, .scheme = 1},
 +  {"←", "←", 0.75, Code, KEY_LEFT, .scheme = 1},
 +  {"↓", "↓", 0.75, Code, KEY_DOWN, .scheme = 1},
 +  {"↑", "↑", 0.75, Code, KEY_UP, .scheme = 1},
@@ -304,7 +685,7 @@ index d42c19f..2458693 100644
  
    /* end of layout */
    {"", "", 0.0, Last},
-@@ -319,16 +326,20 @@ static struct key keys_full_wide[] = {
+@@ -319,16 +325,20 @@ static struct key keys_full_wide[] = {
  };
  
  static struct key keys_special[] = {
@@ -335,7 +716,7 @@ index d42c19f..2458693 100644
    {"", "", 0.0, EndRow},
  
    {"1", "!", 1.0, Code, KEY_1},
-@@ -366,6 +377,8 @@ static struct key keys_special[] = {
+@@ -366,6 +376,8 @@ static struct key keys_special[] = {
    {"⌫", "⌫", 1.0, Code, KEY_BACKSPACE, .scheme = 1},
    {"", "", 0.0, EndRow},
  
@@ -344,7 +725,7 @@ index d42c19f..2458693 100644
    {"Abc", "Abc", 1.0, BackLayer, .scheme = 1},
    {"⌨͕", "⌨͔", 1.0, NextLayer, .scheme = 1},
    {",", "'", 1.0, Code, KEY_COMMA, &layouts[ComposeMath]},
-@@ -1103,79 +1116,98 @@ static struct key keys_index[] = {
+@@ -1103,79 +1115,97 @@ static struct key keys_index[] = {
  
  static struct key keys_landscape[] = {
    {"Esc", "Esc", 1.0, Code, KEY_ESC, .scheme = 1},
@@ -406,7 +787,7 @@ index d42c19f..2458693 100644
 +  {"\\", "|", 1.5, Code, KEY_BACKSLASH},
 +  {"", "", 0.0, EndRow},
 +
-+  {"Caps", "Caps", 1.75, Mod, CapsLock, .scheme = 1},
++  {"Fn", "Fn", 1.75, NextLayer, .scheme = 1},
 +  {"a", "A", 1.0, Code, KEY_A},
 +  {"o", "O", 1.0, Code, KEY_O},
 +  {"e", "E", 1.0, Code, KEY_E},
@@ -437,12 +818,11 @@ index d42c19f..2458693 100644
 +
 +  {"Hide", "Hide", 1.0, Hide, .scheme = 1},
 +  {"Move", "Move", 1.0, Move, .scheme = 1},
-+  {"Fn", "Fn", 1.0, NextLayer, .scheme = 1},
-+  {"Ctrl", "Ctrl", 1.25, Mod, Ctrl, .scheme = 1},
-+  {"Super", "Super", 1.25, Mod, Super, .scheme = 1},
-+  {"Alt", "Alt", 1.25, Mod, Alt, .scheme = 1},
-+  {"", "", 4.25, Code, KEY_SPACE},
-+  {"AltGr", "AltGr", 1.0, Mod, AltGr, .scheme = 1},
++  {"Ctrl", "Ctrl", 1.0, Mod, Ctrl, .scheme = 1},
++  {"Super", "Super", 1.0, Mod, Super, .scheme = 1},
++  {"Alt", "Alt", 1.0, Mod, Alt, .scheme = 1},
++  {"", "", 6.0, Code, KEY_SPACE},
++  {"Auto", "Auto", 1.0, Auto, .scheme = 1},
    {"←", "←", 0.75, Code, KEY_LEFT, .scheme = 1},
 +  {"↓", "↓", 0.75, Code, KEY_DOWN, .scheme = 1},
 +  {"↑", "↑", 0.75, Code, KEY_UP, .scheme = 1},
@@ -504,7 +884,7 @@ index d42c19f..2458693 100644
    {"", "", 0.0, EndRow},
  
    {"⇈", "⇈", 1.0, Code, KEY_PAGEUP, .scheme = 1},
-@@ -1207,6 +1239,8 @@ static struct key keys_landscape_special[] = {
+@@ -1207,6 +1237,8 @@ static struct key keys_landscape_special[] = {
    {"⌫", "⌫", 1.5, Code, KEY_BACKSPACE, .scheme = 1},
    {"", "", 0.0, EndRow},
  
@@ -514,10 +894,10 @@ index d42c19f..2458693 100644
    {"⌨͕", "⌨͔", 1.0, NextLayer, .scheme = 1},
    {"Ctr", "Ctr", 1.0, Mod, Ctrl, .scheme = 1},
 diff --git a/main.c b/main.c
-index be7fb07..147f6ea 100644
+index be7fb07..98115a2 100644
 --- a/main.c
 +++ b/main.c
-@@ -70,10 +70,39 @@ static bool run_display = true;
+@@ -70,10 +70,40 @@ static bool run_display = true;
  static int cur_x = -1, cur_y = -1;
  static bool cur_press = false;
  static struct kbd keyboard;
@@ -533,6 +913,7 @@ index be7fb07..147f6ea 100644
 + * (e.g. eDP-2) instead of letting the compositor pick one */
 +static char *want_output = NULL;
 +static bool fixed_edge = false;  /* --fixed: the Move key / SIGRTMIN+1 do nothing */
++static char *ac_words = NULL, *ac_known = NULL, *ac_state = NULL; /* autocorrect files */
 +static bool anchor_top = false; /* --top: dock to the top edge instead of the bottom */
 +static struct wl_output *target_output = NULL;
 +static uint32_t target_output_global = 0;
@@ -557,7 +938,7 @@ index be7fb07..147f6ea 100644
  static uint32_t custom_width = 0;
  static double width_ratio = 1.0;
  static enum { DOCK_FULL = 0, DOCK_LEFT = 1, DOCK_RIGHT = 2 } dock_mode = DOCK_FULL;
-@@ -471,12 +500,19 @@ handle_global(void *data, struct wl_registry *registry, uint32_t name,
+@@ -471,12 +501,19 @@ handle_global(void *data, struct wl_registry *registry, uint32_t name,
              registry, name, &zwp_virtual_keyboard_manager_v1_interface, 1);
      } else if (im_auto && strcmp(interface, zwp_input_method_manager_v2_interface.name) == 0) {
          im_mgr = wl_registry_bind(registry, name, &zwp_input_method_manager_v2_interface, 1);
@@ -577,7 +958,7 @@ index be7fb07..147f6ea 100644
  }
  
  static void
-@@ -658,6 +694,7 @@ layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *surface,
+@@ -658,6 +695,7 @@ layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *surface,
  void
  layer_surface_closed(void *data, struct zwlr_layer_surface_v1 *surface)
  {
@@ -585,17 +966,20 @@ index be7fb07..147f6ea 100644
      zwlr_layer_surface_v1_destroy(surface);
      wl_surface_destroy(draw_surf.surf);
      run_display = false;
-@@ -680,6 +717,9 @@ usage(char *argv0)
+@@ -680,6 +718,12 @@ usage(char *argv0)
      fprintf(stderr, "  -R [int]    - Rounding radius in pixels\n");
      fprintf(stderr, "  --fn [font] - Set font (e.g: DejaVu Sans 20)\n");
      fprintf(stderr, "  --hidden    - Start hidden (send SIGUSR2 to show)\n");
 +    fprintf(stderr, "  --fixed     - Keep the edge: ignore the Move key / SIGRTMIN+1\n");
 +    fprintf(stderr, "  --top       - Dock to the top edge of the output (default: bottom)\n");
++    fprintf(stderr, "  --words FILE - Autocorrect dictionary, one word per line, most frequent first\n");
++    fprintf(stderr, "  --known FILE - Words autocorrect leaves alone (undone corrections are added)\n");
++    fprintf(stderr, "  --ac-state FILE - Autocorrect on/off state (SIGRTMIN+2 re-reads it)\n");
 +    fprintf(stderr, "  --output NAME - Show on this output (e.g. eDP-2); also $WVKBD_OUTPUT\n");
      fprintf(stderr, "  --no-popup             - Disable the key-press popup\n");
      fprintf(stderr, "  --no-highlight         - Don't highlight a key while pressed\n");
      fprintf(stderr, "  --no-feedback          - Disable all key-press feedback "
-@@ -738,6 +778,25 @@ list_layers()
+@@ -738,6 +782,25 @@ list_layers()
      }
  }
  
@@ -621,20 +1005,21 @@ index be7fb07..147f6ea 100644
  void
  hide()
  {
-@@ -749,6 +808,12 @@ hide()
+@@ -748,6 +811,13 @@ hide()
+     // Ensure active keys are released, so they're not repeated infinitely.
      uint32_t time = (uint32_t) (monotime() + keyboard.last_press_offset);
      kbd_unpress_key(&keyboard, time);
- 
++    kbd_autocorrect_reset();
++
 +    // A latched modifier (Shift tapped, then the keyboard put away: docking the physical
 +    // keyboard while this one was up does exactly that) would stay down for the whole
 +    // session, with nothing on screen to show or clear it, and it silently broke every
 +    // hyprgrass gesture (they bind with no modifier). Release them when the keyboard goes.
 +    release_latched_mods();
-+
+ 
      if (wfs_draw_surf) {
          wp_fractional_scale_v1_destroy(wfs_draw_surf);
-         wfs_draw_surf = NULL;
-@@ -812,12 +877,13 @@ show()
+@@ -812,12 +882,13 @@ show()
              wp_viewporter_get_viewport(viewporter, draw_surf.surf);
      }
  
@@ -650,7 +1035,7 @@ index be7fb07..147f6ea 100644
      uint32_t req_w = 0;
      if (dock_mode == DOCK_LEFT) {
          anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
-@@ -880,7 +946,7 @@ refresh_available_dimension()
+@@ -880,7 +951,7 @@ refresh_available_dimension()
  {
      struct wl_surface *surface = wl_compositor_create_surface(compositor);
      struct zwlr_layer_surface_v1 *layer_surface = zwlr_layer_shell_v1_get_layer_surface(
@@ -659,7 +1044,7 @@ index be7fb07..147f6ea 100644
      zwlr_layer_surface_v1_set_anchor(layer_surface,
                                       ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
                                       ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
-@@ -1084,6 +1150,16 @@ main(int argc, char **argv)
+@@ -1084,6 +1155,25 @@ main(int argc, char **argv)
                  exit(1);
              }
              fc_font_pattern = estrdup(argv[++i]);
@@ -667,6 +1052,15 @@ index be7fb07..147f6ea 100644
 +            fixed_edge = true;
 +        } else if (!strcmp(argv[i], "--top")) {
 +            anchor_top = true;
++        } else if (!strcmp(argv[i], "--words") || !strcmp(argv[i], "--known") ||
++                   !strcmp(argv[i], "--ac-state")) {
++            if (i >= argc - 1) {
++                usage(argv[0]);
++                exit(1);
++            }
++            char **dst = !strcmp(argv[i], "--words") ? &ac_words :
++                         !strcmp(argv[i], "--known") ? &ac_known : &ac_state;
++            *dst = estrdup(argv[++i]);
 +        } else if (!strcmp(argv[i], "--output")) {
 +            if (i >= argc - 1) {
 +                usage(argv[0]);
@@ -676,7 +1070,7 @@ index be7fb07..147f6ea 100644
          } else if (!strcmp(argv[i], "-o")) {
              keyboard.print = true;
          } else if (!strcmp(argv[i], "-O")) {
-@@ -1217,6 +1293,8 @@ main(int argc, char **argv)
+@@ -1217,6 +1307,8 @@ main(int argc, char **argv)
      keyboard.surf = &draw_surf;
      keyboard.popup_surf = &popup_draw_surf;
  
@@ -685,11 +1079,20 @@ index be7fb07..147f6ea 100644
      struct wl_registry *registry = wl_display_get_registry(display);
      wl_registry_add_listener(registry, &registry_listener, NULL);
      wl_display_roundtrip(display);
-@@ -1287,7 +1365,12 @@ main(int argc, char **argv)
+@@ -1256,6 +1348,7 @@ main(int argc, char **argv)
+ 
+     kbd_init(&keyboard, (struct layout *)&layouts, layer_names_list,
+              landscape_layer_names_list);
++    kbd_autocorrect_init(ac_words, ac_known, ac_state);
+ 
+     if (im_mgr != NULL) {
+         struct zwp_input_method_v2 *input_method =
+@@ -1287,7 +1380,13 @@ main(int argc, char **argv)
      sigaddset(&signal_mask, SIGUSR1);
      sigaddset(&signal_mask, SIGUSR2);
      sigaddset(&signal_mask, SIGRTMIN);
 +    sigaddset(&signal_mask, SIGRTMIN + 1);
++    sigaddset(&signal_mask, SIGRTMIN + 2);
      sigaddset(&signal_mask, SIGPIPE);
 +    // end on these like a normal exit (the default action would die with a modifier held)
 +    sigaddset(&signal_mask, SIGTERM);
@@ -698,7 +1101,7 @@ index be7fb07..147f6ea 100644
      if (sigprocmask(SIG_BLOCK, &signal_mask, NULL) == -1) {
          die("Failed to disable handled signals: %d\n", errno);
      }
-@@ -1321,11 +1404,26 @@ main(int argc, char **argv)
+@@ -1321,11 +1420,32 @@ main(int argc, char **argv)
                  show();
              else if (si.ssi_signo == SIGRTMIN)
                  toggle_visibility();
@@ -711,6 +1114,12 @@ index be7fb07..147f6ea 100644
 +                        show();
 +                    }
 +                }
++            }
++            else if (si.ssi_signo == SIGRTMIN + 2) {
++                /* autocorrect state file changed (yoga-osk autocorrect on|off|toggle) */
++                kbd_autocorrect_reload();
++                if (layer_surface && !hidden)
++                    kbd_draw_layout(&keyboard);
 +            }
              else if (si.ssi_signo == SIGPIPE)
                  pipewarn();

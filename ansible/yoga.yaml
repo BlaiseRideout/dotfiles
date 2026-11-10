@@ -226,7 +226,7 @@
     name: [ hyprpm, cmake, glm, meson, ninja, cpio, pkgconf, git, gcc, make, wayland, wayland-protocols, pango, cairo, libxkbcommon ]
     state: present
 
-# wvkbd is not packaged: build v0.21 plus yoga/wvkbd/yoga.patch (Dvorak, a Hide key,
+# wvkbd is not packaged: build v0.21 plus yoga/wvkbd/yoga.patch (Dvorak, a Hide key, autocorrect,
 # --output so it opens on the bottom panel) into ~/.local/bin/wvkbd-yoga as the
 # user. Rebuilt when the patch or build script changes.
 - name: Build the Yoga on-screen keyboard (wvkbd-yoga)
@@ -234,7 +234,7 @@
   ansible.builtin.shell: |
     set -eu
     stamp="$HOME/.local/share/wvkbd-yoga.sha"
-    want=$(cat "{{ playbook_dir }}/../yoga/wvkbd/yoga.patch" "{{ playbook_dir }}/../yoga/wvkbd/build.sh" | sha256sum | cut -d' ' -f1)
+    want=$(cat "{{ playbook_dir }}/../yoga/wvkbd/yoga.patch" "{{ playbook_dir }}/../yoga/wvkbd/build.sh" "{{ playbook_dir }}/../yoga/wvkbd/make-wordlist.py" | sha256sum | cut -d' ' -f1)
     if [ -x "$HOME/.local/bin/wvkbd-yoga" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$want" ]; then exit 0; fi
     "{{ playbook_dir }}/../yoga/wvkbd/build.sh" >&2
     mkdir -p "$(dirname "$stamp")"

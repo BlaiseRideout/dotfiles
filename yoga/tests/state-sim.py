@@ -249,6 +249,7 @@ class Sim:
         reserve.apply_reserved = self.world.set_reserved
         reserve.apply_bar = self.world.set_bar
         reserve.apply_dock = self.world.set_dock
+        reserve.apply_notifs = lambda hidden: True
         reserve.hide_osk = self.world.hide_osk
         touchpad.source_info = self._no_device
         self.start_daemon()

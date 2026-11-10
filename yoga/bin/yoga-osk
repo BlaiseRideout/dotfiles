@@ -10,13 +10,17 @@
 #   yoga-osk stop     # end wvkbd gracefully (it releases any latched modifier first)
 #   (show/toggle do nothing while the physical keyboard is docked or a USB keyboard is
 #   connected (a connected but undocked Bluetooth keyboard does not block it); see blocked() below and `yoga_state.py keyboard`)
+#   yoga-osk autocorrect [on|off|toggle|status]   # autocorrect of the typed words (the Auto key does
+#                     # the same); off for a terminal. Remembered across restarts of the keyboard
 #   yoga-osk move     # floating (single-screen) keyboard: jump between the bottom and the top
 #                     # of the screen, to uncover a text box (the Move key does the same)
 #
 # It opens on the bottom panel: the monitor whose description contains
 # $YOGA_OSK_DESC (default "0x4182", the bottom Samsung panel), falling back to
 # whatever monitor the compositor picks. Override the connector directly with
-# $YOGA_OSK_OUTPUT (e.g. eDP-2). Height in logical pixels: $YOGA_OSK_HEIGHT (420).
+# $YOGA_OSK_OUTPUT (e.g. eDP-2). Height in logical pixels: $YOGA_OSK_HEIGHT; by default a third of the
+# panel's logical width (480 on the 1440-wide Yoga panel): the 5 rows of 15 key-units then make every
+# 1.0-wide key as high as it is wide.
 # It docks to the TOP of that panel (the edge nearest the hinge), leaving the front
 # part of the bottom screen for the virtual touchpad; $YOGA_OSK_POSITION=bottom
 # docks it to the bottom edge instead.
@@ -37,9 +41,15 @@ set -u
 
 bin=${YOGA_OSK_WVKBD:-wvkbd-yoga}   # (a stub in the tests)
 desc=${YOGA_OSK_DESC:-0x4182}
-height=${YOGA_OSK_HEIGHT:-420}
+height=${YOGA_OSK_HEIGHT:-}
 position=${YOGA_OSK_POSITION:-top}
 float_height=${YOGA_OSK_FLOAT_HEIGHT:-340}
+# autocorrect (wvkbd.patch autocorrect.h): dictionary built by yoga/wvkbd/build.sh, the words the
+# user keeps (undone corrections are added), and the on/off state
+ac_words=${YOGA_AUTOCORRECT_WORDS:-$HOME/.local/share/yoga/autocorrect-words.txt}
+ac_dir=${XDG_CONFIG_HOME:-$HOME/.config}/yoga
+ac_known=$ac_dir/autocorrect-known.txt
+ac_state=$ac_dir/autocorrect
 top_desc=${YOGA_TOP_DESC:-0x4167}
 mode_file=${XDG_RUNTIME_DIR:-/tmp}/yoga-osk.mode
 lock_file=${XDG_RUNTIME_DIR:-/tmp}/yoga-osk.lock
@@ -65,6 +75,21 @@ try:
             print(m["name"]); break
 except Exception:
     pass' "$desc"
+}
+
+# the docked keyboard's height: a third of the panel's logical width (see above)
+dock_height() {
+  [ -n "$height" ] && { echo "$height"; return; }
+  hyprctl monitors -j 2>/dev/null | python3 -I -c '
+import sys, json
+out = sys.argv[1]
+try:
+    for m in json.load(sys.stdin):
+        if m["name"] == out:
+            w = m["width"] if m.get("transform", 0) % 2 == 0 else m["height"]
+            print(round(w / m.get("scale", 1) / 3)); break
+except Exception:
+    pass' "$1"
 }
 
 # prints the connector of the Yoga panel that is lit when exactly one is (tent, tablet)
@@ -116,7 +141,7 @@ start() {
     echo "yoga-osk: $bin not found; run ~/.dotfiles/yoga/wvkbd/build.sh" >&2
     return 1
   fi
-  local one out mode
+  local one out mode h
   one=$(float_output)
   if [ -n "$one" ]; then mode="float:$one"; else mode="dock:$(bottom_output)"; fi
   if running; then
@@ -128,10 +153,13 @@ start() {
     args=(--hidden -H "$((float_height + 60))" -L "$float_height" --non-exclusive --fn "Sans 14")
   else
     out=$(bottom_output)
-    args=(--hidden -H "$height" -L "$height" --fixed --fn "Sans 14")
+    h=$(dock_height "$out"); h=${h:-480}
+    args=(--hidden -H "$h" -L "$h" --fixed --fn "Sans 14")
     [ "$position" = top ] && args+=(--top)
   fi
   [ -n "$out" ] && args+=(--output "$out")
+  mkdir -p "$ac_dir"
+  [ -r "$ac_words" ] && args+=(--words "$ac_words" --known "$ac_known" --ac-state "$ac_state")
   echo "$mode" > "$mode_file"
   setsid -f "$bin" "${args[@]}" >/dev/null 2>&1 </dev/null 9>&-    # (does not inherit the lock)
   for _ in $(seq 1 30); do
@@ -204,6 +232,18 @@ case "${1:-toggle}" in
     running && visible && kill -USR1 "$(pid)"; exit 0 ;;
   start) take_lock; start ;;
   stop) take_lock; stop_wvkbd; exit 0 ;;
+  autocorrect)
+    mkdir -p "$ac_dir"
+    cur=on; [ "$(head -c3 "$ac_state" 2>/dev/null)" = off ] && cur=off
+    case "${2:-status}" in
+      on|off) new=$2 ;;
+      toggle) if [ "$cur" = on ]; then new=off; else new=on; fi ;;
+      status) echo "$cur"; [ -r "$ac_words" ] || echo "(no dictionary: run yoga/wvkbd/build.sh)" >&2; [ "$cur" = on ]; exit ;;
+      *) echo "usage: yoga-osk autocorrect [on|off|toggle|status]" >&2; exit 2 ;;
+    esac
+    echo "$new" > "$ac_state"
+    running && kill -s RTMIN+2 "$(pid)"   # (re-reads the file)
+    echo "$new"; exit 0 ;;
   move)
     running && kill -s RTMIN+1 "$(pid)"; exit 0 ;;
   status)

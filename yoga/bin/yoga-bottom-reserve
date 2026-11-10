@@ -8,7 +8,8 @@ where it was); when the bottom screen is free again they move back. The moving i
 yoga_set_reserved() in yoga/hypr/yoga.lua, which also keeps the pointer off the bottom screen
 for as long as it is reserved. The bottom screen's Noctalia dock is hidden for the same time
 (the keyboard and the touchpad strip cover it), and while the on-screen keyboard shows, its
-Noctalia bar is hidden too (the keyboard then starts at the top edge of the screen).
+Noctalia bar is hidden too (the keyboard then starts at the top edge of the screen) and notification
+toasts are kept off that screen (noctalia notification.monitors lists only the other outputs).
 With only one panel lit (tent, tablet) nothing is reserved: the floating keyboard leaves the
 dock and the pointer alone.
 
@@ -25,7 +26,7 @@ and, as the daemon would, puts the on-screen keyboard away while the physical on
   yoga-bottom-reserve status
 
 Knobs: YOGA_RESERVE_DOCK=0 / YOGA_RESERVE_OSK=0 leave the dock / the on-screen keyboard out of
-the decision; YOGA_RESERVE_HIDE_BAR=0 leaves the bar alone; YOGA_RESERVE_HIDE_DOCK=0 leaves the dock alone. The bottom panel is the monitor
+the decision; YOGA_RESERVE_HIDE_BAR=0 leaves the bar alone; YOGA_RESERVE_HIDE_DOCK=0 leaves the dock alone; YOGA_RESERVE_HIDE_NOTIFS=0 keeps notification toasts on the bottom screen while the on-screen keyboard shows. The bottom panel is the monitor
 whose description contains $YOGA_OSK_DESC (default 0x4182).
 """
 import json
@@ -49,6 +50,7 @@ use_dock = os.environ.get("YOGA_RESERVE_DOCK", "1") == "1"
 use_osk = os.environ.get("YOGA_RESERVE_OSK", "1") == "1"
 hide_bar = os.environ.get("YOGA_RESERVE_HIDE_BAR", "1") == "1"
 hide_dock = os.environ.get("YOGA_RESERVE_HIDE_DOCK", "1") == "1"
+hide_notifs = os.environ.get("YOGA_RESERVE_HIDE_NOTIFS", "1") == "1"
 DESC = os.environ.get("YOGA_OSK_DESC", "0x4182")
 HERE = os.path.dirname(os.path.realpath(__file__))
 
@@ -99,6 +101,28 @@ def apply_dock(hidden):
     try:
         p = subprocess.run(["noctalia", "msg", "config-set", f"dock.monitor.{out}.enabled",
                             "false" if hidden else "true"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return p.returncode == 0 and "error" not in (p.stdout + p.stderr).lower()
+
+
+def apply_notifs(hidden):
+    """Keep notification toasts off the bottom screen while the on-screen keyboard is up: Noctalia
+    shows them on the outputs listed in notification.monitors (empty = all), so list every other
+    output while hidden and empty the list again afterwards."""
+    out = bottom_output()
+    if not out:
+        return False
+    names = []
+    if hidden:
+        d = yoga_state.hypr_json("monitors")
+        names = [m["name"] for m in (d if isinstance(d, list) else []) if m["name"] != out and not m.get("disabled")]
+        if not names:
+            return True     # nowhere else to show them: leave it
+    value = "[" + ", ".join(f'"{n}"' for n in names) + "]"
+    try:
+        p = subprocess.run(["noctalia", "msg", "config-set", "notification.monitors", value],
                            capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -184,6 +208,8 @@ class Watcher:
         self.bar_due = 0.0
         self.dock_applied = None
         self.dock_due = 0.0
+        self.notif_applied = None
+        self.notif_due = 0.0
         self.asserted_at = 0.0
 
     def tick(self, now, reassert=False):
@@ -193,10 +219,12 @@ class Watcher:
             hide_osk()      # the daemon would have; without it this is the safety net
         if reassert or now - self.asserted_at >= REASSERT_S:
             self.asserted_at = now
-            self.res_due = self.bar_due = self.dock_due = 0.0
+            self.res_due = self.bar_due = self.dock_due = self.notif_due = 0.0
             self.res_applied = None                 # yoga_set_reserved() answers "unchanged" when nothing is to do
             if bar_hidden:
                 self.bar_applied = None             # a reloaded bar comes back visible
+            if hide_notifs:
+                self.notif_applied = None
             if hide_dock:
                 self.dock_applied = None            # (and a restarted Noctalia may not have the override)
         if reserved != self.res_applied and now >= self.res_due:
@@ -218,6 +246,12 @@ class Watcher:
                 self.dock_applied = dock_hidden
             else:
                 self.dock_due = now + RETRY_S
+        # (the toasts follow the on-screen keyboard, which is when the bar is hidden too)
+        if hide_notifs and bar_hidden != self.notif_applied and now >= self.notif_due:
+            if apply_notifs(bar_hidden):
+                self.notif_applied = bar_hidden
+            else:
+                self.notif_due = now + RETRY_S
         return reserved, bar_hidden, dock_hidden
 
     def run(self):
@@ -242,6 +276,8 @@ class Watcher:
                 apply_bar(False)     # never leave the bar hidden behind
             if hide_dock and self.dock_applied:
                 apply_dock(False)    # nor the dock
+            if hide_notifs and self.notif_applied:
+                apply_notifs(False)  # nor the notifications
             log("yoga-bottom-reserve stopped")
 
 
