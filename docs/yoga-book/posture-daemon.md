@@ -81,6 +81,13 @@ iio-sensor-proxy next to it. Hyprland 0.57's Lua config is why it's `hyprctl rep
 Both halves share the X (hinge) axis; Y is the screen normal in laptop pose. Per-posture raw recordings and the
 replay file are in `survey-output/postures.*`; `yoga-posture replay` runs the classifier on them.
 
+## Sensor reading and its fallbacks
+
+The daemon reads both accelerometers and gyros from their IIO buffers (`/dev/iio:deviceN`, needs the udev rule
+`65-yoga-accel-revive.rules`). If the buffers cannot be opened it polls sysfs instead. If they open but deliver no
+accelerometer sample for 4 s (seen once after restarts: the sensor hub stayed silent, the daemon never judged the
+hinge and tablet mode never came), it logs that, polls sysfs for 60 s, then tries the buffers again.
+
 ## Unverified
 
 Tablet/tent rotation directions on the top panel, and book mode turned the other way (derived by symmetry).

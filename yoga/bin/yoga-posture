@@ -170,6 +170,8 @@ HINGE_SIGN = 0
 # nodes (yoga/udev/65-yoga-accel-revive.rules); without it the daemon polls sysfs as before.
 USE_STREAM = True
 STREAM_BUFFER_LEN = 128
+STREAM_STALL_S = 4.0       # no accelerometer sample for this long: the buffers are dead, poll sysfs instead
+STREAM_RETRY_S = 60.0      # ...and try the buffers again after this long
 SIGN_EVIDENCE_DEG = 40.0
 # After a resume from suspend the sensor hub wakes up slowly: the first samples are far from 1 g
 # (seen: 0.47 g) and one half can stay frozen for a while (the 2.5 Hz clock of the freeze check
@@ -351,6 +353,8 @@ class Sensors:
         self.revive_note = None
         self.streams = None              # [accel top, accel bottom, gyro top, gyro bottom] when streaming
         self.stream_note = None
+        self.stream_rx = 0.0             # when an accelerometer sample last arrived (or the streams started)
+        self.stream_off_until = 0.0      # polling sysfs until then after a stall
         self.stream_latest = [None, None]
         self.gyro_latest = [0, 0]        # last X raw of the top and bottom gyro
         self.dirs = None
@@ -367,23 +371,30 @@ class Sensors:
             for d in self.dirs:
                 self.scales[d] = float(read_text(d / "in_accel_scale", "0.000009806"))
         self.close()
-        if USE_STREAM and self.dirs and self.gyros:
-            streams = [IioStream(self.dirs[0], "accel"), IioStream(self.dirs[1], "accel"),
-                       IioStream(self.gyros[0], "anglvel"), IioStream(self.gyros[1], "anglvel")]
-            bad = [st for st in streams if not st.start()]
-            if bad:
-                for st in streams:
-                    st.stop()
-                note = f"not streaming ({bad[0].error}); polling sysfs"
-                if note != self.stream_note:
-                    self.stream_note = note
-                    log(note)
-            else:
-                self.streams = streams
-                self.stream_latest = [None, None]
-                self.stream_note = None
-                log("streaming the accelerometers and gyros from the IIO buffers")
+        self._open_streams()
         return self.dirs
+
+    def _open_streams(self):
+        if not (USE_STREAM and self.dirs and self.gyros) or time.monotonic() < self.stream_off_until:
+            return
+        streams = [IioStream(self.dirs[0], "accel"), IioStream(self.dirs[1], "accel"),
+                   IioStream(self.gyros[0], "anglvel"), IioStream(self.gyros[1], "anglvel")]
+        bad = [st for st in streams if not st.start()]
+        if bad:
+            for st in streams:
+                st.stop()
+            note = f"not streaming ({bad[0].error}); polling sysfs"
+            if note != self.stream_note:
+                self.stream_note = note
+                log(note)
+            self.stream_off_until = time.monotonic() + STREAM_RETRY_S
+        else:
+            self.streams = streams
+            self.stream_latest = [None, None]
+            self.stream_rx = time.monotonic()
+            self.stream_note = None
+            self.stream_prev_t = None
+            log("streaming the accelerometers and gyros from the IIO buffers")
 
     def close(self):
         for st in self.streams or []:
@@ -471,6 +482,8 @@ class Sensors:
         """-> (top, bottom) as (x, y, z) in g, or None (and rediscovers after repeated failures)."""
         if not self.dirs and not self.discover():
             return None
+        if not self.streams and time.monotonic() >= self.stream_off_until:
+            self._open_streams()
         if self.streams:
             return self._read_stream()
         try:
@@ -503,6 +516,13 @@ class Sensors:
             if samples[i]:
                 x, y, z, _ = samples[i][-1]
                 self.stream_latest[i] = (x, y, z)
+        if samples[0] or samples[1]:
+            self.stream_rx = now
+        elif now - self.stream_rx >= STREAM_STALL_S:     # open but silent: the sensor hub is wedged
+            log(f"no accelerometer sample for {STREAM_STALL_S:.0f} s from the buffers; polling sysfs for {STREAM_RETRY_S:.0f} s")
+            self.close()
+            self.stream_off_until = now + STREAM_RETRY_S
+            return None
         if self.stream_latest[0] is None or self.stream_latest[1] is None:
             return None
         self._hinge_from_stream(samples[2], samples[3], now)
