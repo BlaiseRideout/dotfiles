@@ -34,6 +34,9 @@ RADIUS = 18
 # the pad: semi-transparent grey (r, g, b, alpha); the outline and label stay white
 FILL = (0.32, 0.32, 0.34, 0.8)
 LINE = 3.0
+PRESSED = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "yoga-touchpad", "pressed.json")
+# a button's fill while a finger holds it: lighter than the pad
+FILL_PRESSED = (0.62, 0.62, 0.65, 0.9)
 
 
 def find_monitor(display):
@@ -54,6 +57,7 @@ class Indicator(Gtk.Window):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
         self.monitor = monitor
         self.label = ""
+        self.pressed = ()    # names of the buttons held down ("left", "right")
         self.bar = None      # (px from the top of the window where the button bar starts, px of the left/right split)
         self.set_app_paintable(True)
         self.set_decorated(False)
@@ -98,6 +102,19 @@ class Indicator(Gtk.Window):
         cr.stroke()
         if self.bar:
             top, split = self.bar
+            for name, bx0, bx1 in (("left", x, split), ("right", split, x + rw)):
+                if name in self.pressed:
+                    cr.save()
+                    cr.rectangle(bx0, top, bx1 - bx0, y + rh - top + LINE)
+                    cr.clip()
+                    cr.new_sub_path()
+                    for cx, cy, a0 in ((x + rw - RADIUS, y + RADIUS, -90), (x + rw - RADIUS, y + rh - RADIUS, 0),
+                                       (x + RADIUS, y + rh - RADIUS, 90), (x + RADIUS, y + RADIUS, 180)):
+                        cr.arc(cx, cy, RADIUS, a0 * 3.14159265 / 180, (a0 + 90) * 3.14159265 / 180)
+                    cr.close_path()
+                    cr.set_source_rgba(*FILL_PRESSED)
+                    cr.fill()
+                    cr.restore()
             cr.set_source_rgba(1, 1, 1, 0.45)
             cr.set_line_width(LINE / 2)
             cr.move_to(x, top)
@@ -113,6 +130,12 @@ class Indicator(Gtk.Window):
             cr.move_to((w - ext.width) / 2 - ext.x_bearing, 28)
             cr.show_text(self.label)
         return False
+
+    def set_pressed(self, names):
+        names = tuple(names)
+        if names != self.pressed:
+            self.pressed = names
+            self.queue_draw()
 
     def place(self, fx, fy, label="", buttons=None):
         g = self.monitor.get_geometry()   # logical px
@@ -136,6 +159,15 @@ class Indicator(Gtk.Window):
         self.set_size_request(width, height)
         self.resize(width, height)
         self.queue_draw()
+
+
+def read_pressed():
+    try:
+        with open(PRESSED) as f:
+            v = json.load(f)
+        return v if isinstance(v, list) else []
+    except (OSError, ValueError):
+        return []
 
 
 def read_state():
@@ -176,7 +208,23 @@ def main():
             ind = None
         return True
 
+    pmt = [None]
+
+    def tick_pressed():
+        # fast poll of a tiny file: button feedback has to feel immediate
+        if ind is None:
+            return True
+        try:
+            mt = os.stat(PRESSED).st_mtime_ns
+        except OSError:
+            mt = None
+        if mt != pmt[0]:
+            pmt[0] = mt
+            ind.set_pressed(read_pressed())
+        return True
+
     GLib.timeout_add(250, tick)
+    GLib.timeout_add(20, tick_pressed)
     tick()
     Gtk.main()
 

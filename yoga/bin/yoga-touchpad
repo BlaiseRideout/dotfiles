@@ -402,9 +402,10 @@ class ButtonSink:
 
     NAMES = {"left": "BTN_LEFT", "right": "BTN_RIGHT"}
 
-    def __init__(self, out):
+    def __init__(self, out, publish=True):
         _, self.e = ev()
         self.out = out
+        self.publish = publish  # tell yoga-touchpad-indicator which buttons are down (pressed.json)
         self.held = {}          # source slot -> button name
         self.state = {}         # button name -> 0 | 1 as last written
         self.dirty = False
@@ -442,6 +443,19 @@ class ButtonSink:
         if changed:
             self.out.syn()
             self.frames += 1
+            self.write_pressed()
+
+    def write_pressed(self):
+        if not self.publish:
+            return
+        try:
+            p = runtime_dir() / "yoga-touchpad" / "pressed.json"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(sorted(n for n, v in self.state.items() if v)))
+            os.replace(tmp, p)
+        except OSError:
+            pass
 
     def close(self):        # the device belongs to the pad, which closes it
         self.lift_all()
@@ -748,7 +762,7 @@ class Active:
         self.pad = make_pad(cfg, self.src, self.rect)
         self.screen = make_screen(cfg, self.src)
         if cfg["buttons"]["enabled"]:
-            self.buttons = ButtonSink(self.pad.out)
+            self.buttons = ButtonSink(self.pad.out, publish=not self.dry)
         self.router = Router(self.pad, self.screen, self.rect, buttons=self.buttons, button_rects=self.button_rects)
         # let Hyprland find the new devices and bind the touchscreen before it receives touches
         if wait_hypr:
@@ -764,10 +778,12 @@ class Active:
             if cfg["hyprland"]["poke"]:
                 hypr_poke()
         # never grab in the middle of a touch: the compositor would be left
-        # holding a contact it never sees lifted
+        # holding a contact it never sees lifted. Short wait: docking the keyboard leaves
+        # BTN_TOUCH set for the whole time the keyboard sits on the screen, so a long one just
+        # delays the touchpad (it used to be 2.0 s, always hit when docking)
         _, e = ev()
         t0 = time.monotonic()
-        while e.BTN_TOUCH in self.dev.active_keys() and time.monotonic() - t0 < 2.0:
+        while e.BTN_TOUCH in self.dev.active_keys() and time.monotonic() - t0 < 0.25:
             time.sleep(0.02)
         os.set_blocking(self.dev.fd, False)
         self.dev.grab()
