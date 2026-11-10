@@ -275,6 +275,7 @@
         - audacity
         - keepassxc
         - smplayer          # the default video player (video_mimes)
+        - mplayer
         - dropbox
         - spotify-client
         - flatpak
@@ -283,6 +284,7 @@
         - audacity
         - keepassxc
         - smplayer          # the default video player (video_mimes)
+        - mplayer
         - spotify-launcher
         - discord
         - flatpak
