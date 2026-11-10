@@ -46,24 +46,26 @@ Edges are the edges **as the user sees them after rotation**.
 | Swipe right from the left edge | launcher (`yoga-launcher apps`) |
 | Swipe left from the right edge | control center |
 | Two fingers down from the top edge | close the window |
-| Three fingers sideways | switch workspace (live) |
-| Four fingers up | window switcher |
+| Three fingers sideways | switch workspace (live). Book pose: slides the two-screen pair one slot (left = next); a Lua gesture in touch.lua takes over from the built-in swipe, which finds no neighbours there. Tablet and tent keep the live swipe: entering them lands on a workspace with windows (the nearest below, else above) so it has neighbours |
+| Five fingers up | window switcher |
 | Three-finger hold, drag | move the window |
 | Hold on a border/gap | resize |
 | Three-finger pinch (apart) / (together) | fullscreen / leave fullscreen, or float toggle |
 | Three-finger tap | float toggle |
-| Five fingers left/right | window to next/previous workspace |
-| Five fingers up/down | window to the screen above/below |
+| Four fingers left/right | window to next/previous workspace. Book pose, no external monitor: towards the other screen = window to that screen; away from it (left on the left screen, right on the right) = slide both screens one slot along the workspace list, taking the window along. A slot is a workspace with windows; a block of empty ones counts as two (one per screen) |
+| Four fingers up/down | window to the screen above/below |
 
 Edit the table in `touch.lua`; `hyprctl reload` applies it.
 
 Things that bit:
 - **Gestures bind with no modifier, so they stop while any modifier is held.** A latched Shift on the on-screen
   keyboard (fixed: it clears on hide) or on keyd's virtual keyboard (`sudo keyd reload`) kills them.
+- **Gesture log:** `~/.local/state/yoga-touch/gesture.log` records the 3-finger book swipes (start / end with the summed delta) and the 4-finger swipes, to tell "the gesture never arrived" from "it arrived and did nothing".
+- **Pinch after any swipe:** every swipe handler calls `yoga_swipe_mark()` and a pinch within 1.5 s of one is ignored, not only after a workspace change (a book swipe at the end of the list, or a window sent to the other screen, changes none and the drift toggled the window's floating state).
 - **Pinch after a swipe:** the fingers drift together at the end of a three-finger swipe and read as a pinch. A
   guard ignores a pinch within a second of a workspace change (`~/.local/state/yoga-touch/pinch.log` says why).
   hyprgrass names the pinch directions opposite to what you would think on this screen.
-- **Rotation:** touch devices get their panel's transform with `rotation_sense = -1`; in portrait the 5-finger
+- **Rotation:** touch devices get their panel's transform with `rotation_sense = 1`; in portrait the 5-finger
   gestures were inverted before that.
 
 ## On-screen keyboard (wvkbd, patched)

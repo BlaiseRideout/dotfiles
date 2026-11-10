@@ -1,0 +1,18 @@
+# Yoga Book 9i posture daemon (yoga/bin/yoga-posture): let it revive a frozen lid accelerometer.
+# After a fold the top accelerometer (HID-SENSOR-200073.19) can stop updating until its driver is
+# reloaded (`modprobe -r hid_sensor_accel_3d && modprobe hid_sensor_accel_3d`, seen through a fold and an
+# unfold, ten minutes, a laptop thought to be a tent). The daemon unbinds and binds that one device again,
+# which needs write access to the driver's bind / unbind files. Those belong to the driver, not to a
+# device, so the rule opens them (group wheel) when a sensor binds; a module reload makes the files anew
+# and the new bind event opens them again. Worst a wheel user can do with it: switch the accelerometers
+# off and on.
+#
+# Installed to /etc/udev/rules.d by ansible/yoga.yaml on yoga-linux only.
+ACTION=="add|bind", SUBSYSTEM=="platform", KERNEL=="HID-SENSOR-200073.*", \
+  RUN+="/bin/sh -c 'chgrp wheel /sys/bus/platform/drivers/hid_sensor_accel_3d/bind /sys/bus/platform/drivers/hid_sensor_accel_3d/unbind; chmod 0220 /sys/bus/platform/drivers/hid_sensor_accel_3d/bind /sys/bus/platform/drivers/hid_sensor_accel_3d/unbind'"
+
+# Streaming the sensors (yoga/bin/yoga-posture, USE_STREAM): the kernel pushes samples into an IIO buffer that the daemon
+# reads from /dev/iio:deviceN, instead of one sysfs request to the sensor hub per value (~13 ms each, eight per sample).
+# That needs the device nodes and the buffer controls to be writable by the same group.
+ACTION=="add|change", SUBSYSTEM=="iio", ATTR{name}=="accel_3d|gyro_3d", GROUP="wheel", MODE="0660", \
+  RUN+="/bin/sh -c 'cd /sys%p && chgrp wheel buffer/enable buffer/length scan_elements/*_en && chmod g+w buffer/enable buffer/length scan_elements/*_en'"

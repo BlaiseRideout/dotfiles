@@ -12,7 +12,7 @@ All Hyprland-side logic is in `yoga/hypr/yoga.lua`; the values you may need to c
 | `panels.scale` | `2` | 1440x900 logical per panel (1.5 gives 1920x1200) |
 | `touch.follows_panel` | `true` | give each touch/pen node its panel's current transform |
 | `touch.top_offset` | `0` | extra turn for the top digitiser (was 2 while the panel transform was 2) |
-| `touch.rotation_sense` | `-1` | device transforms turn the opposite way to monitor transforms |
+| `touch.rotation_sense` | `1` | device transforms turn the same way as monitor transforms (-1 inverted all touches in book mode) |
 | `touch.swap` | `false` | set true if "Touchscreen Top" turns out to be on the bottom panel |
 
 ## Rotation: kernel flag, no Hyprland transform

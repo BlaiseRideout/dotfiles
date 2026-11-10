@@ -359,6 +359,7 @@ return function(host)
         if clean and not (clean.top.on and clean.bottom.on) and yoga_bottom_reserved then
             pcall(yoga_set_reserved, false)
         end
+        local was_book = yoga_posture and yoga_posture.posture == "book"
         yoga_posture = clean
         if clean then
             local f = io.open(YOGA_POSTURE_FILE, "w")
@@ -376,8 +377,50 @@ return function(host)
         local top = yoga_panels()
         if not top then return "no yoga panels" end
         yoga_layout()
+        -- leaving book: the pair of workspaces was placed freely, put 1-10 back on their screens
+        if was_book and not (clean and clean.posture == "book") and host.place_workspaces then
+            host.place_workspaces(true)
+            -- the numbers past 10 have no home screen: gather them on the top panel
+            for _, w in ipairs(hl.get_workspaces() or {}) do
+                if w.id and w.id > 10 and w.monitor and w.monitor.name ~= top.name then
+                    hl.dispatch(hl.dsp.workspace.move({ workspace = w.id, monitor = top.name }))
+                end
+            end
+        end
         yoga_apply_devices()
         if host.refresh_bar then host.refresh_bar() end   -- the bar lists depend on the posture (book split)
+        -- Tablet and tent show one screen: land on a workspace with windows rather than an empty
+        -- one (the nearest below the current number, else the nearest above), once the panels
+        -- have settled
+        if clean and (clean.posture == "tablet" or clean.posture == "tent")
+            and not (clean.top.on and clean.bottom.on) then
+            hl.timer(function()
+                local ok, err = pcall(function()
+                    local cur = hl.get_active_workspace()
+                    if not cur or #(cur:get_windows() or {}) > 0 then return end
+                    local below, above
+                    for _, w in ipairs(hl.get_workspaces() or {}) do
+                        if w.id and w.id > 0 and #(w:get_windows() or {}) > 0 then
+                            if w.id < cur.id and (not below or w.id > below) then below = w.id end
+                            if w.id > cur.id and (not above or w.id < above) then above = w.id end
+                        end
+                    end
+                    local target = below or above
+                    if target then hl.dispatch(hl.dsp.focus({ workspace = target })) end
+                end)
+                if not ok then hl.notification.create({ text = "yoga: tablet workspace: " .. tostring(err), timeout = 6000 }) end
+            end, { timeout = 400, type = "oneshot" })
+        end
+        if yoga_touch_ws_gesture then   -- 3-finger workspace swipe: its own handler in book pose
+            local ok, res = pcall(yoga_touch_ws_gesture, clean and yoga_lua_ws_swipe(clean.posture))
+            if not ok or (type(res) == "string" and res:find("failed")) then
+                hl.notification.create({ text = "yoga: workspace gesture: " .. tostring(res), timeout = 6000 })
+            end
+        end
+        if clean and clean.posture == "book" and not was_book and yoga_book_normalize then
+            local ok, err = pcall(yoga_book_normalize)
+            if not ok then hl.notification.create({ text = "yoga: book workspaces: " .. tostring(err), timeout = 6000 }) end
+        end
         return "ok " .. (clean and clean.posture or "default")
     end
 
@@ -631,10 +674,181 @@ return function(host)
     -- you were working on (not the bottom screen reserved for the keyboard, which is also
     -- never a destination while it is reserved)
     function yoga_win_step(delta)
+        if yoga_swipe_mark then yoga_swipe_mark() end
         yoga_focus_back()
         host.ws_step(delta, true)
     end
+
+    -- Book pose with no external monitor: the two screens are a two-wide window into the
+    -- workspace list, ignoring the usual 1-8 / 9 / 10 placement. Returns the left and right
+    -- panel, or nothing when this does not apply (other posture, an external monitor, the
+    -- bottom screen reserved for the keyboard).
+    local function book_pair()
+        if not (yoga_posture and yoga_posture.posture == "book"
+                and yoga_posture.top.on and yoga_posture.bottom.on) or yoga_bottom_reserved then
+            return nil
+        end
+        local top, bottom = yoga_panels()
+        if not (top and bottom) then return nil end
+        for _, m in ipairs(hl.get_monitors() or {}) do
+            if m.name ~= top.name and m.name ~= bottom.name then return nil end
+        end
+        if yoga_posture.arrange == "row_bottom_left" then return bottom, top end
+        return top, bottom
+    end
+
+    -- one line per gesture event in $XDG_STATE_HOME/yoga-touch/gesture.log (for finding out why a
+    -- gesture does nothing); the file is cut when it grows past 64 kB
+    function yoga_glog(msg)
+        local dir = (os.getenv("XDG_STATE_HOME") or (os.getenv("HOME") .. "/.local/state")) .. "/yoga-touch"
+        local path = dir .. "/gesture.log"
+        local f = io.open(path, "a")
+        if not f then return end
+        if f:seek("end") > 65536 then f:close(); f = io.open(path, "w") end
+        f:write(os.date("%H:%M:%S "), tostring(msg), "\n")
+        f:close()
+    end
+    function yoga_book_active() return book_pair() ~= nil end
+    -- The 3-finger workspace swipe uses the Lua handler (touch.lua) in book pose only: Hyprland's
+    -- own swipe (live, follows the fingers) only knows the neighbouring numbers on the touched
+    -- screen, which is nothing in the book pair. Tablet and tent land on a workspace with windows
+    -- (above), so the built-in swipe has neighbours there
+    function yoga_lua_ws_swipe(posture)
+        posture = posture or (yoga_posture and yoga_posture.posture)
+        return posture == "book"
+    end
+    function yoga_host_ws_step(delta) host.ws_step(delta, false) end
+
+    -- The slots the pair moves over, in order: every workspace with windows is one slot, and
+    -- a block of empty workspaces (before the first, between two, after the last) is two, one
+    -- per screen (one if the gap has room for only one). Empty slots are the numbers next to
+    -- the populated workspace they border.
+    local function book_slots()
+        local pop = {}
+        for _, w in ipairs(hl.get_workspaces() or {}) do
+            if w.id and w.id > 0 and #(w:get_windows() or {}) > 0 then pop[#pop + 1] = w.id end
+        end
+        table.sort(pop)
+        if #pop == 0 then return { 1, 2 } end
+        local E = {}
+        for k = 2, 1, -1 do
+            if pop[1] - k > 0 then E[#E + 1] = pop[1] - k end
+        end
+        for i, p in ipairs(pop) do
+            E[#E + 1] = p
+            local nxt = pop[i + 1] or (p + 3)
+            for id = p + 1, math.min(p + 2, nxt - 1) do E[#E + 1] = id end
+        end
+        return E
+    end
+
+    -- Slide the pair one slot (delta +1 = towards higher numbers). With carry, the focused
+    -- window goes to the new workspace on the screen it was on, and keeps the focus.
+    -- Show pair = { lower, higher } on the left and right screen (the lower number on the
+    -- left, so the workspaces read in order across the two screens), then focus the screen
+    -- `focus_mon` is on, on its workspace.
+    local function book_show(L, R, pair, focus_right)
+        local mons = { L, R }
+        -- 1. workspaces that exist go to their screen first, without being focused (focusing
+        --    one that sits on the other screen would switch that screen to it, and the empty
+        --    slot just made active there would be gone as soon as the view moved on)
+        for i, mon in ipairs(mons) do
+            local ws = hl.get_workspace(pair[i])
+            if ws and ws.monitor and ws.monitor.name ~= mon.name then
+                hl.dispatch(hl.dsp.workspace.move({ workspace = pair[i], monitor = mon.name }))
+            end
+        end
+        -- 2. then each screen shows its workspace; a new one is made on the focused screen
+        --    (or on the screen a numbered workspace is pinned to: move it over)
+        for i, mon in ipairs(mons) do
+            hl.dispatch(hl.dsp.focus({ monitor = mon.name }))
+            hl.dispatch(hl.dsp.focus({ workspace = pair[i] }))
+            local ws = hl.get_workspace(pair[i])
+            if ws and ws.monitor and ws.monitor.name ~= mon.name then
+                hl.dispatch(hl.dsp.workspace.move({ workspace = pair[i], monitor = mon.name }))
+                hl.dispatch(hl.dsp.focus({ monitor = mon.name }))
+                hl.dispatch(hl.dsp.focus({ workspace = pair[i] }))
+            end
+        end
+        hl.dispatch(hl.dsp.focus({ monitor = (focus_right and R or L).name }))
+        hl.dispatch(hl.dsp.focus({ workspace = pair[focus_right and 2 or 1] }))
+    end
+
+    -- Where the pair is now: the index in E of the lower of the two shown workspaces (the
+    -- first slot at or after it when that one is not a slot), and whether it is one
+    local function book_base(E, L, R)
+        local a = L.active_workspace and L.active_workspace.id or 1
+        local b = R.active_workspace and R.active_workspace.id or a
+        a = math.min(a, b)
+        for i, id in ipairs(E) do
+            if id >= a then return i, E[i] == a end
+        end
+        return #E, false
+    end
+
+    function yoga_book_step(delta, carry)
+        local L, R = book_pair()
+        yoga_glog("book step " .. delta .. (carry and " carry" or "") .. (L and "" or " (no pair)"))
+        if not L then return false end
+        local E = book_slots()
+        local base, exact = book_base(E, L, R)
+        local nb
+        if exact then nb = base + delta
+        elseif delta > 0 then nb = base
+        else nb = base - 1 end
+        nb = math.max(1, math.min(nb, #E - 1))
+        local pair = { E[nb], E[nb + 1] }
+        local cur = hl.get_active_workspace()
+        local on_right = cur and cur.monitor and cur.monitor.name == R.name
+        if carry then
+            hl.dispatch(hl.dsp.window.move({ workspace = pair[on_right and 2 or 1], follow = false }))
+        end
+        book_show(L, R, pair, on_right)
+        return true
+    end
+
+    -- On entering book pose (yoga_set_posture) and whenever the shown pair is not in order:
+    -- two adjacent slots with the focused workspace in them, lower number on the left
+    function yoga_book_normalize()
+        local L, R = book_pair()
+        if not L then return false end
+        local cur = hl.get_active_workspace()
+        local f = (cur and cur.id and cur.id > 0) and cur.id or 1
+        local E = book_slots()
+        local i = #E
+        for k, id in ipairs(E) do
+            if id >= f then i = k; break end
+        end
+        if i >= #E then i = #E - 1 end
+        book_show(L, R, { E[i], E[i + 1] }, E[i + 1] == f)
+        return true
+    end
+
+    -- Four-finger sideways swipe (touch.lua), dir = "left" | "right" as the user sees it.
+    -- Book pose, no external monitor: towards the other screen sends the window there; away
+    -- from it (left on the left screen, right on the right one) slides the pair of
+    -- workspaces and takes the window along. Otherwise the plain workspace step.
+    function yoga_win_swipe(dir)
+        if yoga_swipe_mark then yoga_swipe_mark() end
+        yoga_glog("4-finger swipe " .. dir)
+        yoga_focus_back()
+        local L, R = book_pair()
+        if not L then
+            host.ws_step(dir == "left" and 1 or -1, true)
+            return
+        end
+        local cur = hl.get_active_workspace()
+        local on_left = cur and cur.monitor and cur.monitor.name == L.name
+        if on_left and dir == "left" then
+            yoga_book_step(1, true)
+        elseif not on_left and dir == "right" then
+            yoga_book_step(-1, true)
+        else
+            hl.dispatch(hl.dsp.window.move({ monitor = dir == "left" and "l" or "r" }))
+        end
+    end
     function yoga_win_to_monitor(dir)
+        if yoga_swipe_mark then yoga_swipe_mark() end
         yoga_focus_back()
         if dir == "d" and yoga_bottom_reserved then return end
         hl.dispatch(hl.dsp.window.move({ monitor = dir }))

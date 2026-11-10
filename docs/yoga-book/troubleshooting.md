@@ -55,7 +55,7 @@ Symptom, cause, fix. Everything here happened during the first bring-up.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Wrong posture, or "accelerometer frozen" in the log | sensors polled too fast (>3 Hz) freeze one | the daemon polls at 2.5 Hz; reloading `hid_sensor_accel_3d` (root) revives a frozen one |
+| Wrong posture, or "accelerometer frozen" in the log | sensors polled too fast (>3 Hz) freeze one | the daemon polls at 2.5 Hz; the daemon unbinds and binds a frozen one again itself (udev rule 65); by hand: `sudo modprobe -r hid_sensor_accel_3d && sudo modprobe hid_sensor_accel_3d` |
 | Posture jumps to "flat" right after resume | sensor hub wakes slowly | 10 s resume grace is built in |
 | Book mode screens in the wrong order | which panel is left depends on the way the device is turned | `BOOK_BOTTOM_LEFT_WHEN = "right-up"` |
 | Lid closed while folded back suspends | lid reads closed falsely when folded | fold guard holds the lid inhibitor (`LID_GLITCH_ABOVE`) |

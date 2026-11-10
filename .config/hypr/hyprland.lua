@@ -216,6 +216,7 @@ local function focus_ws(id)
     hl.dispatch(hl.dsp.focus({ workspace = id }))
 end
 yoga_host.focus_ws = focus_ws
+yoga_host.place_workspaces = function(...) return place_workspaces(...) end   -- defined further down
 
 -- Noctalia uses workspace names for its icon labels; numeric IDs and binds stay the same.
 local workspace_icons = { "", "", "", "", "", "", "", "", "", "" }
@@ -453,7 +454,14 @@ local function ws_step(delta, move)
     if delta > 0 then
         if after then
             -- Populated here and a gap ahead: its first workspace, then the next populated one
-            n = (windows > 0 and after > id + 1 and free(id + 1)) and id + 1 or after
+            -- (the first free number in the gap: id + 1 may be pinned to another screen, like 9
+            -- and 10 from the top panel, and the step must not then jump over the whole gap)
+            n = after
+            if windows > 0 then
+                for c = id + 1, after - 1 do
+                    if free(c) then n = c; break end
+                end
+            end
         elseif windows > 0 then
             n = id + 1
             while not free(n) do n = n + 1 end
@@ -462,11 +470,20 @@ local function ws_step(delta, move)
         end
     else
         if before then
-            n = (windows > 0 and before < id - 1 and free(id - 1)) and id - 1 or before
-        elseif windows > 0 and free(id - 1) then
-            n = id - 1   -- before the first populated workspace: the empty one next to it
+            n = before
+            if windows > 0 then
+                for c = id - 1, before + 1, -1 do
+                    if free(c) then n = c; break end
+                end
+            end
         else
-            n = pop[#pop] or id
+            n = nil
+            if windows > 0 then   -- before the first populated workspace: the empty one next to it
+                for c = id - 1, 1, -1 do
+                    if free(c) then n = c; break end
+                end
+            end
+            n = n or pop[#pop] or id
         end
     end
     if n == id then return end
@@ -780,9 +797,9 @@ hl.animation({ leaf = "layersIn",      enabled = true, speed = 4,    bezier = "e
 hl.animation({ leaf = "layersOut",     enabled = true, speed = 1.5,  bezier = "linear",       style = "fade" })
 hl.animation({ leaf = "fadeLayersIn",  enabled = true, speed = 1.79, bezier = "almostLinear" })
 hl.animation({ leaf = "fadeLayersOut", enabled = true, speed = 1.39, bezier = "almostLinear" })
-hl.animation({ leaf = "workspaces",    enabled = true, speed = 1.94, bezier = "almostLinear", style = "fade" })
-hl.animation({ leaf = "workspacesIn",  enabled = true, speed = 1.21, bezier = "almostLinear", style = "fade" })
-hl.animation({ leaf = "workspacesOut", enabled = true, speed = 1.94, bezier = "almostLinear", style = "fade" })
+hl.animation({ leaf = "workspaces",    enabled = true, speed = 1.94, bezier = "almostLinear", style = "slide" })
+hl.animation({ leaf = "workspacesIn",  enabled = true, speed = 1.21, bezier = "almostLinear", style = "slide" })
+hl.animation({ leaf = "workspacesOut", enabled = true, speed = 1.94, bezier = "almostLinear", style = "slide" })
 hl.animation({ leaf = "zoomFactor",    enabled = true, speed = 7,    bezier = "quick" })
 
 

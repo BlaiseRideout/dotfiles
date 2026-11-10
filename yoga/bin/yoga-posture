@@ -140,6 +140,37 @@ SENSOR_BAD_AFTER_S = 2.0
 # from the live half alone, assuming the hinge is flat (both halves share its
 # orientation), which gives both screens on and the right rotation for a book or a stand.
 FROZEN_AFTER_S, FROZEN_OTHER_S = 5.0, 2.0
+# While a frozen half is held at its folded-back opening (see the main loop), the half that still
+# reports lying flat (|z| at least this) for this long ends the hold.
+FOLD_HOLD_FLAT_Z, FOLD_HOLD_FLAT_S = 0.95, 3.0
+# A frozen half is revived by unbinding and binding its driver again (what `modprobe -r` + `modprobe
+# hid_sensor_accel_3d` did by hand, for that one sensor). Needs write access to the driver's
+# bind / unbind files, which yoga/udev/65-yoga-accel-revive.rules gives the wheel group. Tried
+# once the half has been frozen this long (on top of FROZEN_AFTER_S), then at most every
+# REVIVE_COOLDOWN_S.
+ACCEL_DRIVER = "/sys/bus/platform/drivers/hid_sensor_accel_3d"
+REVIVE_AFTER_S, REVIVE_COOLDOWN_S = 3.0, 30.0
+# Gyros. The two gyro_3d devices (one per half, same instance order as the accelerometers) share
+# the hinge as their X axis, so the difference of their X rates is how fast the hinge opens or
+# closes (the common motion of the whole machine cancels). Sampled at 2.5 Hz that is far too coarse to
+# integrate into an angle, but it says reliably THAT the hinge moved, even when an accelerometer is
+# stuck: summed over a burst of movement it is the "hinge travel". A burst ends after
+# HINGE_STILL_S without rate above HINGE_DEADBAND_DPS (which also is the gyro noise floor).
+HINGE_DEADBAND_DPS, HINGE_STILL_S = 6.0, 2.0
+# A frozen accelerometer with the hinge having moved this much since it froze is stale for sure:
+# the fold hold ends and the sensor is revived at once, without waiting for REVIVE_AFTER_S.
+HINGE_MOVED_DEG = 30.0
+# Which way the gyro rate (top X minus bottom X) turns the opening: +1, -1, or 0 = learn it. It is
+# learnt while both accelerometers work, from rate against the change of the accelerometer
+# opening; SIGN_EVIDENCE_DEG of agreement settles it.
+HINGE_SIGN = 0
+# Stream the sensors from the kernel's IIO buffers (/dev/iio:deviceN) instead of reading sysfs each cycle:
+# a sysfs read is a request to the sensor hub (~13 ms, eight of them per sample), the stream is the hub's
+# own reports pushed into a buffer, read for free. Needs write access to the buffer controls and the device
+# nodes (yoga/udev/65-yoga-accel-revive.rules); without it the daemon polls sysfs as before.
+USE_STREAM = True
+STREAM_BUFFER_LEN = 128
+SIGN_EVIDENCE_DEG = 40.0
 # After a resume from suspend the sensor hub wakes up slowly: the first samples are far from 1 g
 # (seen: 0.47 g) and one half can stay frozen for a while (the 2.5 Hz clock of the freeze check
 # does not advance in suspend). Seen on 2026-11-07: resuming in the laptop pose, the top half
@@ -226,6 +257,76 @@ def find_accels():
     return top, bottom
 
 
+def find_gyros():
+    """-> (top_dir, bottom_dir) of the two gyro_3d devices (lower HID instance = lid), or None."""
+    found = []
+    for d in Path(IIO_DIR).glob("iio:device*"):
+        if read_text(d / "name") != "gyro_3d":
+            continue
+        m = re.search(r"HID-SENSOR-[^.]+\.(\d+)\.auto", str(d.resolve()))
+        found.append((int(m.group(1)) if m else 10**6 + int(d.name.split("device")[-1]), d))
+    if len(found) != 2:
+        return None
+    found.sort()
+    top, bottom = found[0][1], found[1][1]
+    return (bottom, top) if SWAP_ACCELS else (top, bottom)
+
+
+class IioStream:
+    """One IIO device's buffered samples: x, y, z (s32) and a timestamp (s64), 24 bytes each."""
+    REC = struct.Struct("<3i4xq")
+
+    def __init__(self, d, kind):
+        self.d, self.kind, self.fd, self.rest, self.error = d, kind, None, b"", None
+
+    def start(self):
+        d = self.d
+        try:
+            (d / "buffer" / "enable").write_text("0")      # a buffer that is on cannot be reconfigured
+            for a in "xyz":
+                (d / "scan_elements" / f"in_{self.kind}_{a}_en").write_text("1")
+            (d / "scan_elements" / "in_timestamp_en").write_text("1")
+            (d / "buffer" / "length").write_text(str(STREAM_BUFFER_LEN))
+            (d / "buffer" / "enable").write_text("1")
+            self.fd = os.open(f"/dev/{d.name}", os.O_RDONLY | os.O_NONBLOCK)
+        except OSError as e:
+            self.error = f"{d.name}: {e.strerror}"
+            self.stop()
+            return False
+        return True
+
+    def drain(self):
+        """-> the new samples as (x, y, z, timestamp_ns); None when the stream is broken."""
+        if self.fd is None:
+            return None
+        try:
+            while True:
+                chunk = os.read(self.fd, 4096)
+                if not chunk:
+                    break
+                self.rest += chunk
+        except BlockingIOError:
+            pass
+        except OSError:
+            return None
+        n = len(self.rest) // self.REC.size * self.REC.size
+        out = [self.REC.unpack_from(self.rest, o) for o in range(0, n, self.REC.size)]
+        self.rest = self.rest[n:]
+        return out
+
+    def stop(self):
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+        try:
+            (self.d / "buffer" / "enable").write_text("0")
+        except OSError:
+            pass
+
+
 class Sensors:
     """Reads both accelerometers (m/s^2 -> g), one raw read after the other: parallel reads
     made one of the two sensors freeze (see read())."""
@@ -236,17 +337,58 @@ class Sensors:
         self.last_change = [time.monotonic(), time.monotonic()]
         self.grace_until = 0.0
         self.frozen = (False, False)
+        self.frozen_since = [None, None]
+        self.gyros = None
+        self.gyro_scale = 0.0
+        self.hinge_rate = None           # deg/s, top minus bottom, X axis; None = no gyros
+        self.hinge_travel = 0.0          # degrees summed over the current burst of movement
+        self.travel_since_frozen = 0.0   # degrees of hinge movement since a half froze
+        self.still_since = None
+        self.hinge_int = 0.0             # degrees: the rate summed over time (sampled, rough), never reset
+        self.last_sample_t = None
+        self.stream_prev_t = None
+        self.last_revive = 0.0
+        self.revive_note = None
+        self.streams = None              # [accel top, accel bottom, gyro top, gyro bottom] when streaming
+        self.stream_note = None
+        self.stream_latest = [None, None]
+        self.gyro_latest = [0, 0]        # last X raw of the top and bottom gyro
         self.dirs = None
         self.scales = {}
         self.fail = 0
 
     def discover(self):
         self.dirs = find_accels()
+        self.gyros = find_gyros()
+        if self.gyros:
+            self.gyro_scale = float(read_text(self.gyros[0] / "in_anglvel_scale", "0.000000174"))
         self.scales = {}
         if self.dirs:
             for d in self.dirs:
                 self.scales[d] = float(read_text(d / "in_accel_scale", "0.000009806"))
+        self.close()
+        if USE_STREAM and self.dirs and self.gyros:
+            streams = [IioStream(self.dirs[0], "accel"), IioStream(self.dirs[1], "accel"),
+                       IioStream(self.gyros[0], "anglvel"), IioStream(self.gyros[1], "anglvel")]
+            bad = [st for st in streams if not st.start()]
+            if bad:
+                for st in streams:
+                    st.stop()
+                note = f"not streaming ({bad[0].error}); polling sysfs"
+                if note != self.stream_note:
+                    self.stream_note = note
+                    log(note)
+            else:
+                self.streams = streams
+                self.stream_latest = [None, None]
+                self.stream_note = None
+                log("streaming the accelerometers and gyros from the IIO buffers")
         return self.dirs
+
+    def close(self):
+        for st in self.streams or []:
+            st.stop()
+        self.streams = None
 
     def describe(self):
         if not self.dirs:
@@ -259,10 +401,78 @@ class Sensors:
         m = re.search(r"HID-SENSOR-[^.]+\.(\d+)\.auto", str(d.resolve()))
         return f"hid{m.group(1)}" if m else "?"
 
+    def revive(self, i):
+        """Unbind and bind half i's accelerometer driver again; True when it was done. The IIO device
+        numbers can change, so the sensors are looked up afresh after it."""
+        now = time.monotonic()
+        if not self.dirs or now - self.last_revive < REVIVE_COOLDOWN_S:
+            return False
+        self.last_revive = now
+        m = re.search(r"(HID-SENSOR-[^/]+\.\d+\.auto)", str(self.dirs[i].resolve()))
+        if not m:
+            return False
+        try:
+            Path(ACCEL_DRIVER, "unbind").write_text(m.group(1))
+            time.sleep(0.3)
+            Path(ACCEL_DRIVER, "bind").write_text(m.group(1))
+        except OSError as e:
+            note = f"cannot revive {m.group(1)}: {e.strerror} (yoga/udev/65-yoga-accel-revive.rules installed?)"
+            if note != self.revive_note:
+                self.revive_note = note
+                log(note)
+            return False
+        self.revive_note = None
+        log(f"revived {m.group(1)} (unbound and bound again)")
+        time.sleep(0.5)
+        self.close()
+        self.dirs = None
+        self.stream_prev_t = None
+        self.last_change = [time.monotonic()] * 2
+        self.raw_prev = [None, None]
+        self.frozen = (False, False)
+        self.frozen_since = [None, None]
+        self.travel_since_frozen = 0.0
+        self.hinge_travel = 0.0
+        self.gyros = None
+        return True
+
+    def _read_hinge(self, now):
+        """Hinge rate from the gyros' X axes, and the travel summed over a burst of movement."""
+        dt = 0.4 if self.last_sample_t is None else min(now - self.last_sample_t, 1.0)
+        self.last_sample_t = now
+        self.hinge_rate = None
+        if self.gyros:
+            try:
+                wt = int((self.gyros[0] / "in_anglvel_x_raw").read_text())
+                wb = int((self.gyros[1] / "in_anglvel_x_raw").read_text())
+                self.hinge_rate = (wt - wb) * self.gyro_scale * 57.29578
+            except (OSError, ValueError):
+                self.gyros = None        # renumbered: found again with the accelerometers
+        if self.hinge_rate is None:
+            return
+        self._hinge_step(self.hinge_rate, dt, now)
+
+    def _hinge_step(self, rate, dt, now):
+        """One rate sample of the hinge (deg/s) lasting dt seconds."""
+        self.hinge_rate = rate
+        if abs(rate) >= HINGE_DEADBAND_DPS:
+            step = abs(rate) * dt
+            self.hinge_int += rate * dt
+            self.hinge_travel += step
+            if any(self.frozen):
+                self.travel_since_frozen += step
+            self.still_since = None
+        elif self.still_since is None:
+            self.still_since = now
+        elif now - self.still_since >= HINGE_STILL_S:
+            self.hinge_travel = 0.0
+
     def read(self):
         """-> (top, bottom) as (x, y, z) in g, or None (and rediscovers after repeated failures)."""
         if not self.dirs and not self.discover():
             return None
+        if self.streams:
+            return self._read_stream()
         try:
             # One read at a time. The reads used to run in parallel threads (a sysfs read costs ~13 ms),
             # and then one of the two accelerometers kept returning bit-identical values: the sensor
@@ -277,6 +487,43 @@ class Sensors:
             return None
         self.fail = 0
         now = time.monotonic()
+        self._read_hinge(now)
+        return self._judge(vals, now)
+
+    def _read_stream(self):
+        """Same result as the sysfs path, from the buffers: the newest sample of each accelerometer, with
+        the freeze judgement on what arrived; the gyros' samples are integrated one by one."""
+        now = time.monotonic()
+        samples = [st.drain() for st in self.streams]
+        if any(sm is None for sm in samples):          # a device went away (resume, rebind)
+            self.close()
+            self.dirs = None
+            return None
+        for i in range(2):
+            if samples[i]:
+                x, y, z, _ = samples[i][-1]
+                self.stream_latest[i] = (x, y, z)
+        if self.stream_latest[0] is None or self.stream_latest[1] is None:
+            return None
+        self._hinge_from_stream(samples[2], samples[3], now)
+        vals = list(self.stream_latest[0]) + list(self.stream_latest[1])
+        return self._judge(vals, now)
+
+    def _hinge_from_stream(self, gt, gb, now):
+        """Integrate the relative X rate over the gyros' own timestamps (10 Hz, not our 2.5)."""
+        ev = sorted([(t, 0, x) for x, _, _, t in gt] + [(t, 1, x) for x, _, _, t in gb])
+        if not ev:
+            return
+        prev_t = self.stream_prev_t
+        for t, which, x in ev:
+            self.gyro_latest[which] = x
+            rate = (self.gyro_latest[0] - self.gyro_latest[1]) * self.gyro_scale * 57.29578
+            dt = 0.1 if prev_t is None else max(0.0, min((t - prev_t) / 1e9, 0.5))
+            prev_t = t
+            self._hinge_step(rate, dt, now)
+        self.stream_prev_t = prev_t
+
+    def _judge(self, vals, now):
         if self.grace_until and now < self.grace_until:      # just resumed: judge the sensors afresh
             self.last_change = [now, now]
         for i in range(2):
@@ -287,6 +534,21 @@ class Sensors:
         self.frozen = tuple(
             now - self.last_change[i] >= FROZEN_AFTER_S and now - self.last_change[1 - i] < FROZEN_OTHER_S
             for i in range(2))
+        for i in range(2):
+            if not self.frozen[i]:
+                self.frozen_since[i] = None
+            elif self.frozen_since[i] is None:
+                self.frozen_since[i] = now
+                if self.streams:
+                    # which path is stuck? one sysfs read of the same half, for the log
+                    try:
+                        sysfs = tuple(int((self.dirs[i] / f"in_accel_{a}_raw").read_text()) for a in "xyz")
+                        log(f"half {i} frozen in the stream; sysfs read says "
+                            f"{'the same' if sysfs == self.raw_prev[i] else 'something different: ' + str(sysfs)}")
+                    except (OSError, ValueError):
+                        pass
+        if not any(self.frozen):
+            self.travel_since_frozen = 0.0
         out = []
         for i, d in enumerate(self.dirs):
             sc = self.scales[d] / G
@@ -353,7 +615,7 @@ class Classifier:
             return new
         return tuple(o + EMA * (n - o) for o, n in zip(old, new))
 
-    def update(self, top, bottom, lid, force=None):
+    def update(self, top, bottom, lid, force=None, hold=False, opening=None):
         self.top = self._smooth(self.top, top)
         self.bottom = self._smooth(self.bottom, bottom)
         xt, yt, zt = self.top
@@ -380,7 +642,9 @@ class Classifier:
             r.lid = False
         if lid:
             self.opening = LID_CLOSED_OPENING
-        elif r.reliable:
+        elif hold and opening is not None:
+            self.opening = max(0.0, min(360.0, opening))      # dead reckoned from the gyros
+        elif r.reliable and not (hold and self.opening is not None):
             raw = (180.0 - wrap180(math.degrees(math.atan2(yt, zt) - math.atan2(yb, zb)))) % 360.0
             if self.opening is None:
                 # no history: next to 0/360 with the lid open is back to back, not almost closed
@@ -699,6 +963,10 @@ class Daemon:
         self.switch = TabletSwitch(dry=dry, enabled=switch)
         self.osk = Osk(dry=dry, enabled=osk)
         self.inhibit_proc = None         # systemd-inhibit holding logind's lid-switch handling off
+        self.fold_flat_since = None          # see FOLD_HOLD_FLAT_S
+        self.hold_ref = None                 # (hinge_int, opening) when a fold hold began
+        self.sign_corr = 0.0                 # evidence for the gyro rate's sign, see HINGE_SIGN
+        self.last_cal = None                 # (hinge_int, opening) of the previous healthy sample
         self.committed = None            # (posture, facing, quad) in force
         self.pending = None
         self.pending_since = 0.0
@@ -814,7 +1082,12 @@ class Daemon:
             f"{'visible' if self.osk_seen else 'hidden'}   screens {self.derived()['screens']}   sensors {self.sensor_status}",
             "want      " + " ".join(f"{k}={int(v) if isinstance(v, bool) else v}" for k, v in self.derived().items()),
             f"switch    {self.switch.note}; SW_TABLET_MODE={self.switch.state}",
-            f"sensors   {self.sensors.describe()}" + ("   [dry-run]" if self.dry else ""),
+            f"sensors   {self.sensors.describe()}   " + ("streaming (IIO buffers)" if self.sensors.streams else
+                                                          f"polling sysfs ({self.sensors.stream_note or 'stream off'})")
+            + ("   [dry-run]" if self.dry else ""),
+            "gyros     " + ("none" if self.sensors.hinge_rate is None and not self.sensors.gyros else
+                            f"hinge rate {self.sensors.hinge_rate or 0:.0f} deg/s   sign "
+                            f"{self.gyro_sign_text()}"),
         ]
         return "\n".join(lines)
 
@@ -830,11 +1103,15 @@ class Daemon:
                 key[2] = quad
         return tuple(key)
 
-    def classify(self, top_bottom, lid):
+    def classify(self, top_bottom, lid, hold=False, opening=None):
         force = self.forced[0] if self.forced else None
-        r = self.cls.update(*top_bottom, lid, force=force)
+        r = self.cls.update(*top_bottom, lid, force=force, hold=hold, opening=opening)
         self.last = r
         return r
+
+    def gyro_sign_text(self):
+        sign = HINGE_SIGN or (1 if self.sign_corr >= SIGN_EVIDENCE_DEG else -1 if self.sign_corr <= -SIGN_EVIDENCE_DEG else 0)
+        return {1: "+1", -1: "-1", 0: f"not learnt yet ({self.sign_corr:+.0f} of {SIGN_EVIDENCE_DEG:.0f} deg)"}[sign]
 
     def set_inhibit(self, on):
         """Hold (or drop) an inhibitor on logind's lid-switch handling: while the hinge is
@@ -965,11 +1242,62 @@ class Daemon:
             log(f"accelerometers back: {self.sensors.describe()}")
             self.sensor_fail_logged = False
         fr = self.sensors.frozen
+        for i in range(2):
+            since = self.sensors.frozen_since[i]
+            moved = self.sensors.travel_since_frozen >= HINGE_MOVED_DEG
+            if (fr[i] and since is not None and not self.dry
+                    and (moved or time.monotonic() - since >= REVIVE_AFTER_S)):
+                if moved:
+                    log(f"hinge moved ~{self.sensors.travel_since_frozen:.0f} deg (gyros) while a sensor is frozen")
+                if self.sensors.revive(i):
+                    return
         if fr != getattr(self, "_frozen_logged", (False, False)):
             self._frozen_logged = fr
             log("accelerometer frozen: " + ("top" if fr[0] else "bottom" if fr[1] else "none") +
-                (" (using the other half, assuming the hinge is flat)" if any(fr) else " (recovered)"))
-        if fr[0] and not fr[1]:
+                (" (using the other half, assuming the hinge is flat; held if folded back)" if any(fr) else " (recovered)"))
+        # Folded back (tent, tablet) a frozen half must NOT be replaced by "the hinge is flat": that
+        # read as a laptop 5 s after folding (seen: the top sensor froze at 293 deg and tablet mode
+        # dropped). Hold the last opening instead; a real unfold is seen when the sensor revives.
+        # The hold needs an end: a frozen sensor may not revive when the lid moves (seen: top
+        # frozen for ten minutes through a fold and an unfold), and the hold then kept the tent
+        # for ever. The half that still reports tells a device lying flat (a laptop on a desk,
+        # most likely) from one in the hand: flat for FOLD_HOLD_FLAT_S seconds ends the hold, and
+        # the plain "assume the hinge is flat" fallback takes over.
+        fold_hold = (any(fr) and not all(fr) and self.cls.opening is not None
+                     and self.cls.opening >= TENT_OUT)
+        sign = HINGE_SIGN or (1 if self.sign_corr >= SIGN_EVIDENCE_DEG else -1 if self.sign_corr <= -SIGN_EVIDENCE_DEG else 0)
+        est = None
+        if fold_hold and sign and self.sensors.hinge_rate is not None:
+            # dead reckoning: the opening when the hold began plus the hinge movement the gyros
+            # saw since (rough: 2.5 Hz sampling), which also follows an unfold or a further fold
+            if self.hold_ref is None:
+                self.hold_ref = (self.sensors.hinge_int, self.cls.opening)
+            est = self.hold_ref[1] + sign * (self.sensors.hinge_int - self.hold_ref[0])
+            if est < TENT_OUT - 15:
+                fold_hold = False
+                log(f"gyros: the hinge is back to about {est:.0f} deg: not holding the fold any longer")
+        elif fold_hold and self.sensors.travel_since_frozen >= HINGE_MOVED_DEG:
+            # no direction known: any real movement since the sensor froze makes the held opening stale
+            fold_hold = False
+            self.fold_flat_since = None
+            log("hinge moved while a sensor is frozen: not holding the fold any longer")
+        elif fold_hold:
+            live = top_bottom[1] if fr[0] else top_bottom[0]
+            if abs(live[2]) >= FOLD_HOLD_FLAT_Z:
+                if self.fold_flat_since is None:
+                    self.fold_flat_since = now
+                elif now - self.fold_flat_since >= FOLD_HOLD_FLAT_S:
+                    fold_hold = False
+                    log("frozen sensor and the other half flat: not holding the fold any longer")
+            else:
+                self.fold_flat_since = None
+        if not fold_hold:
+            self.hold_ref = None
+            if not any(fr):
+                self.fold_flat_since = None
+        if fold_hold:
+            pass
+        elif fr[0] and not fr[1]:
             top_bottom = (top_bottom[1], top_bottom[1])
         elif fr[1] and not fr[0]:
             top_bottom = (top_bottom[0], top_bottom[0])
@@ -977,7 +1305,16 @@ class Daemon:
         in_grace = now < self.grace_until
         if in_grace:
             self.cls.bad_since = None
-        r = self.classify(top_bottom, lid)
+        r = self.classify(top_bottom, lid, hold=fold_hold, opening=est)
+        if not any(fr) and self.sensors.hinge_rate is not None and not r.sensor_bad:
+            cur = (self.sensors.hinge_int, r.opening)
+            if self.last_cal is not None:
+                dI, dO = cur[0] - self.last_cal[0], cur[1] - self.last_cal[1]
+                if abs(dI) > 2.0 and abs(dO) > 2.0 and abs(dO) < 90:     # (not across a seam jump)
+                    self.sign_corr += math.copysign(min(abs(dI), abs(dO)), dI * dO)
+            self.last_cal = cur
+        else:
+            self.last_cal = None
         if r.sensor_bad:
             self.sensor_status = "implausible"
         self.set_inhibit(r.opening >= LID_GLITCH_ABOVE or r.posture in ("tablet", "tent"))
@@ -1117,6 +1454,7 @@ class Daemon:
         self.set_inhibit(False)
         self.set_fold_guard(False)
         self.switch.set(False)
+        self.sensors.close()
         self.switch.close()
         if self.sock:
             try:

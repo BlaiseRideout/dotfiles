@@ -169,6 +169,17 @@
       ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=hidraw --action=change
       when: yoga_palm_udev.changed
 
+    - name: Let the posture daemon revive a frozen lid accelerometer (bind / unbind of its driver) and stream the sensors (IIO buffers)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/udev/65-yoga-accel-revive.rules"
+        dest: /etc/udev/rules.d/65-yoga-accel-revive.rules
+        mode: "0644"
+      register: yoga_accel_udev
+
+    - name: Apply the accelerometer revive udev rule
+      ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=platform --action=add && udevadm trigger --subsystem-match=iio --action=add
+      when: yoga_accel_udev.changed
+
     - name: Keep the Bluetooth controller out of USB autosuspend, so the keyboard can reconnect and wake the screens
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/../yoga/udev/63-yoga-bluetooth.rules"

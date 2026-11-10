@@ -80,9 +80,10 @@ return {
         top_offset = 0,   -- was 2 while panels.top.transform was 2; the panel transform now excludes the mounting flip
         -- Which way the device transform turns relative to the monitor's: 1 = the same
         -- number, -1 = the opposite quarter turn (1 <-> 3; 0 and 2 are unaffected).
-        -- Checked in the side-by-side portrait pose: with 1 every gesture came out
-        -- inverted (a half turn off), so the touch devices need the opposite sense.
-        rotation_sense = -1,
+        -- Re-checked 2026-11-09 in the side-by-side (book) pose: with -1 every touch on
+        -- both screens came out inverted on both axes (a half turn off), so back to 1.
+        -- (An earlier check had found the opposite for the 5-finger gestures.)
+        rotation_sense = 1,
         -- the virtual touchscreen made by yoga-touchpad (docs/yoga-book/touchpad.md)
         -- carries the bottom panel's touches outside the touchpad strip: same panel,
         -- same transform (named without the prefix)
