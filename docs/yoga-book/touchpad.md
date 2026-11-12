@@ -81,6 +81,16 @@ Full width keeps palm rejection at the pad's edges. Measure your strip by draggi
 edge in `yoga-touchpad log -f` or with an evdev reader on the node (finger-centre readings sit ~5 mm short of
 the real edge).
 
+## Gestures on the pad
+
+hyprgrass only sees touchscreens, so `yoga/hypr/touch.lua` binds the same multi-finger swipes as Hyprland's own
+touchpad gestures (`hl.gesture`, fed by libinput from the virtual touchpad). They fire once when the swipe is
+recognised (no live following): **3 fingers left/right** = workspace step (the book-pair step in book pose),
+**4 fingers left/right/up/down** = move the window (same handlers as the touchscreen: `yoga_win_swipe`,
+`yoga_win_to_monitor`), **5 fingers up** = window switcher. Not ported: pinches (libinput pinches take two fingers)
+and the 3-finger hold-and-drag. Each swipe is logged in `gesture.log` as `touchpad N-finger swipe <dir>`. If libinput
+never reports 5-finger swipes the 5-finger bind simply does nothing.
+
 ## Pitfalls
 
 - **Cursor looks backwards on the top panel**: that is the hardware cursor plane, not the pad ([display.md](display.md)).

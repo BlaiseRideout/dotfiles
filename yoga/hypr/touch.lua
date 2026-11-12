@@ -92,6 +92,34 @@ hl.on("hyprland.start", function()
     hl.exec_cmd(touch .. " load")
 end)
 
+-- Touchpad gestures (the virtual touchpad of yoga-touchpad, docs/yoga-book/touchpad.md).
+-- hyprgrass only sees touchscreens, so the same 3/4/5-finger swipes are bound here as
+-- Hyprland's own gestures, which libinput feeds from touchpads (the real touchscreen gestures
+-- stay hyprgrass's). They run once, when the swipe is recognised (no live following).
+-- Not ported: pinches (libinput pinches take two fingers) and the 3-finger hold-and-drag.
+-- Directions are the fingers' movement on the pad, like the hyprgrass ones.
+local function pad_gesture(fingers, direction, fn, what)
+    try("touchpad " .. fingers .. "-finger " .. direction, function()
+        hl.gesture({ fingers = fingers, direction = direction, action = function()
+            if yoga_glog then yoga_glog("touchpad " .. fingers .. "-finger swipe " .. direction) end
+            local ok, err = pcall(fn)
+            if not ok then warn(what .. ": " .. tostring(err)) end
+        end })
+    end)
+end
+local function ws_step(delta)   -- same as the 3-finger touchscreen swipe in book pose
+    if yoga_swipe_mark then yoga_swipe_mark() end
+    if yoga_book_step and yoga_book_step(delta, false) then return end
+    if yoga_host_ws_step then yoga_host_ws_step(delta) end
+end
+pad_gesture(3, "left",  function() ws_step(1) end,  "workspace")
+pad_gesture(3, "right", function() ws_step(-1) end, "workspace")
+pad_gesture(4, "left",  function() yoga_win_swipe("left") end,  "move window")
+pad_gesture(4, "right", function() yoga_win_swipe("right") end, "move window")
+pad_gesture(4, "up",    function() yoga_win_to_monitor("u") end, "move window")
+pad_gesture(4, "down",  function() yoga_win_to_monitor("d") end, "move window")
+pad_gesture(5, "up",    function() hl.exec_cmd(yoga.launcher_cmd .. " windows") end, "window switcher")
+
 -- Gestures: only with the plugin loaded and the switch off
 local hg = hl.plugin.hyprgrass
 if not hg or exists(state_dir .. "/plugins.off") then return end
