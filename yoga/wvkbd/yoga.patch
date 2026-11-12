@@ -1,9 +1,9 @@
 diff --git a/autocorrect.h b/autocorrect.h
 new file mode 100644
-index 0000000..f709e6b
+index 0000000..ba0942a
 --- /dev/null
 +++ b/autocorrect.h
-@@ -0,0 +1,310 @@
+@@ -0,0 +1,720 @@
 +/* Autocorrect for the Yoga on-screen keyboard (included by keyboard.c).
 + *
 + * The keyboard only sends key events, so it cannot read the text field. It keeps its own
@@ -30,6 +30,7 @@ index 0000000..f709e6b
 +#include <stdio.h>
 +#include <ctype.h>
 +#include <time.h>
++#include <math.h>
 +
 +#define AC_MAXW 24
 +#define AC_IDLE_MS 5000
@@ -45,6 +46,15 @@ index 0000000..f709e6b
 +    bool up[AC_MAXW + 2];
 +    size_t len;
 +    bool poison, nocorrect;
++    char prev[AC_MAXW + 2];       /* the word before the one being typed ("" when unknown) */
++    struct ac_big { char *k; uint32_t c; } *big;   /* bigram counts: "a b" -> n, and "a" -> total after a */
++    size_t bigcap, bign;
++    struct ac_next { char *k; char *n[3]; } *nx;   /* the three likeliest words after k */
++    size_t nxcap, nxn;
++    char sugg[3][AC_MAXW + 2];    /* the suggestion slots, as dictionary words ("" = empty) */
++    bool sugg_cap[3];             /* ... shown / typed with a capital first letter */
++    bool sugg_lit;                /* slot 0 is the word as typed (keep it), not a suggestion */
++    char label[3][AC_MAXW + 6];
 +    int64_t last_ms;
 +    bool undo_ok, undo_cap;
 +    char undo_orig[AC_MAXW + 2], undo_fixed[AC_MAXW + 4];
@@ -103,6 +113,98 @@ index 0000000..f709e6b
 +}
 +
 +static void
++ac_big_add(const char *k, uint32_t c)
++{
++    if (ac.bign * 2 >= ac.bigcap) {
++        struct ac_big *old = ac.big;
++        size_t oldcap = ac.bigcap;
++        ac.bigcap = oldcap ? oldcap * 2 : 1 << 18;
++        ac.big = calloc(ac.bigcap, sizeof(*ac.big));
++        for (size_t i = 0; i < oldcap; i++) {
++            if (!old[i].k) continue;
++            size_t j = ac_hash(old[i].k) & (ac.bigcap - 1);
++            while (ac.big[j].k) j = (j + 1) & (ac.bigcap - 1);
++            ac.big[j] = old[i];
++        }
++        free(old);
++    }
++    size_t i = ac_hash(k) & (ac.bigcap - 1);
++    while (ac.big[i].k) {
++        if (!strcmp(ac.big[i].k, k)) { ac.big[i].c += c; return; }
++        i = (i + 1) & (ac.bigcap - 1);
++    }
++    ac.big[i].k = strdup(k);
++    ac.big[i].c = c;
++    ac.bign++;
++}
++
++static uint32_t
++ac_big_get(const char *k)
++{
++    if (!ac.bigcap) return 0;
++    size_t i = ac_hash(k) & (ac.bigcap - 1);
++    while (ac.big[i].k) {
++        if (!strcmp(ac.big[i].k, k)) return ac.big[i].c;
++        i = (i + 1) & (ac.bigcap - 1);
++    }
++    return 0;
++}
++
++static void
++ac_next_add(const char *a, const char *b)
++{
++    if (ac.nxn * 2 >= ac.nxcap) {
++        struct ac_next *old = ac.nx;
++        size_t oldcap = ac.nxcap;
++        ac.nxcap = oldcap ? oldcap * 2 : 1 << 16;
++        ac.nx = calloc(ac.nxcap, sizeof(*ac.nx));
++        for (size_t i = 0; i < oldcap; i++) {
++            if (!old[i].k) continue;
++            size_t j = ac_hash(old[i].k) & (ac.nxcap - 1);
++            while (ac.nx[j].k) j = (j + 1) & (ac.nxcap - 1);
++            ac.nx[j] = old[i];
++        }
++        free(old);
++    }
++    size_t i = ac_hash(a) & (ac.nxcap - 1);
++    while (ac.nx[i].k && strcmp(ac.nx[i].k, a)) i = (i + 1) & (ac.nxcap - 1);
++    if (!ac.nx[i].k) { ac.nx[i].k = strdup(a); ac.nxn++; }
++    for (int s = 0; s < 3; s++)       /* the file is in descending count order: the first three win */
++        if (!ac.nx[i].n[s]) { ac.nx[i].n[s] = strdup(b); return; }
++}
++
++static const struct ac_next *
++ac_next_get(const char *a)
++{
++    if (!ac.nxcap) return NULL;
++    size_t i = ac_hash(a) & (ac.nxcap - 1);
++    while (ac.nx[i].k) {
++        if (!strcmp(ac.nx[i].k, a)) return &ac.nx[i];
++        i = (i + 1) & (ac.nxcap - 1);
++    }
++    return NULL;
++}
++
++/* file lines: "word1 word2 count" */
++static void
++ac_load_bigrams(const char *path)
++{
++    FILE *f = fopen(path, "r");
++    if (!f) return;
++    char line[160], a[AC_MAXW + 2], key[2 * AC_MAXW + 4];
++    while (fgets(line, sizeof line, f)) {
++        char b[AC_MAXW + 2];
++        unsigned long n;
++        if (sscanf(line, "%24s %24s %lu", a, b, &n) != 3 || n > 0xffffffffu / 2) continue;
++        snprintf(key, sizeof key, "%s %s", a, b);
++        ac_big_add(key, (uint32_t)n);
++        ac_big_add(a, (uint32_t)n);                  /* the total after a */
++        ac_next_add(a, b);
++    }
++    fclose(f);
++}
++
++static void
 +ac_load(const char *path, bool known)
 +{
 +    FILE *f = fopen(path, "r");
@@ -124,38 +226,245 @@ index 0000000..f709e6b
 +    if (ac.n) ac.loaded = true;
 +}
 +
-+/* the most frequent dictionary word one edit away from w */
++/* Key positions on the on-screen layout (Dvorak, each row offset like its keys), in key units.
++ * A slip lands on a neighbouring key far more often than on a distant one, so substituting a
++ * letter costs by how far apart the two keys are. */
 +static bool
-+ac_fix(const char *w, char *out)
++ac_keypos(char c, double *x, double *y)
 +{
-+    static const char al[] = "abcdefghijklmnopqrstuvwxyz'";
-+    size_t n = strlen(w);
-+    char t[AC_MAXW + 4];
-+    uint32_t best = AC_NONE;
-+#define AC_TRY() do { uint32_t r = ac_rank(t); if (r < best) { best = r; strcpy(out, t); } } while (0)
-+    for (size_t i = 0; i <= n; i++) {                /* dont -> don't: a missing apostrophe first, */
-+        memcpy(t, w, i); t[i] = '\''; memcpy(t + i + 1, w + i, n - i + 1);  /* no plain word beats it */
-+        if (ac_rank(t) != AC_NONE) { strcpy(out, t); return true; }
-+    }
-+    for (size_t i = 0; i < n; i++) {                 /* a letter too many */
-+        memcpy(t, w, i); memcpy(t + i, w + i + 1, n - i); AC_TRY();
-+    }
-+    for (size_t i = 0; i + 1 < n; i++) {             /* two letters swapped */
-+        memcpy(t, w, n + 1); t[i] = w[i + 1]; t[i + 1] = w[i]; AC_TRY();
-+    }
-+    for (size_t i = 0; i < n; i++)                   /* a wrong letter */
-+        for (const char *c = al; *c; c++) {
-+            if (*c == w[i]) continue;
-+            memcpy(t, w, n + 1); t[i] = *c; AC_TRY();
-+        }
-+    for (size_t i = 0; i <= n; i++)                  /* a letter missing */
-+        for (const char *c = al; *c; c++) {
-+            memcpy(t, w, i); t[i] = *c; memcpy(t + i + 1, w + i, n - i + 1); AC_TRY();
-+        }
-+#undef AC_TRY
-+    return best != AC_NONE;
++    static const struct { const char *keys; double x0; } rows[] = {
++        { "',.pyfgcrl", 1.5 }, { "aoeuidhtns", 1.75 }, { ";qjkxbmwvz", 2.25 } };
++    for (int r = 0; r < 3; r++)
++        for (int i = 0; rows[r].keys[i]; i++)
++            if (rows[r].keys[i] == c) {
++                *x = rows[r].x0 + i + 0.5;
++                *y = r;
++                return true;
++            }
++    return false;
 +}
 +
++static double
++ac_subcost_calc(char a, char b)
++{
++    double ax, ay, bx, by;
++    if (!ac_keypos(a, &ax, &ay) || !ac_keypos(b, &bx, &by)) return 2.0;
++    double d = sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by));   /* 1.0 = the next key */
++    double c = 0.3 + 0.5 * d;                         /* next key 0.8, two keys over 1.3, far 1.8+ */
++    return c > 2.0 ? 2.0 : c;
++}
++
++/* every pair, computed once: the distance routine below runs millions of cells per word */
++static float ac_sub[128][128];
++static bool ac_sub_ready;
++static void
++ac_sub_init(void)
++{
++    if (ac_sub_ready) return;
++    for (int a = 0; a < 128; a++)
++        for (int b = 0; b < 128; b++)
++            ac_sub[a][b] = (float)ac_subcost_calc((char)a, (char)b);
++    ac_sub_ready = true;
++}
++
++#define AC_MAXCOST 2.0   /* a word further than this from what was typed is not offered */
++
++/* Weighted edit distance from what was typed (a) to a dictionary word (b): slips by key distance,
++ * swapped neighbours cheap, a dropped / doubled / extra letter about one key away, a missing
++ * apostrophe nearly free (dont -> don't). Gives up once it cannot get under `limit`. */
++static double
++ac_dist(const char *a, size_t n, const char *b, size_t m, double limit)
++{
++    double d[AC_MAXW + 4][AC_MAXW + 4];
++    d[0][0] = 0;
++    for (size_t i = 1; i <= n; i++)
++        d[i][0] = d[i - 1][0] + (i > 1 && a[i - 1] == a[i - 2] ? 0.6 : 1.0);
++    for (size_t j = 1; j <= m; j++)
++        d[0][j] = d[0][j - 1] + (b[j - 1] == '\'' ? 0.2 : (j > 1 && b[j - 1] == b[j - 2] ? 0.6 : 1.0));
++    for (size_t i = 1; i <= n; i++) {
++        double rowmin = 1e9;
++        for (size_t j = 1; j <= m; j++) {
++            double sub = d[i - 1][j - 1] + (a[i - 1] == b[j - 1] ? 0.0 : ac_sub[(unsigned char)a[i - 1] & 127][(unsigned char)b[j - 1] & 127]);
++            double del = d[i - 1][j] + (i > 1 && a[i - 1] == a[i - 2] ? 0.6 : 1.0);   /* an extra letter typed */
++            double ins = d[i][j - 1] + (b[j - 1] == '\'' ? 0.2 : (j > 1 && b[j - 1] == b[j - 2] ? 0.6 : 0.75)); /* a letter left out (the commonest slip) */
++            double v = sub < del ? sub : del;
++            if (ins < v) v = ins;
++            if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] && a[i - 1] != a[i - 2]) {
++                double tr = d[i - 2][j - 2] + 0.6;                                    /* two swapped */
++                if (tr < v) v = tr;
++            }
++            d[i][j] = v;
++            if (v < rowmin) rowmin = v;
++        }
++        if (rowmin > limit) return 1e9;
++    }
++    return d[n][m];
++}
++
++/* ~log2 of a rank (rank 1 is the most frequent word) */
++static double
++ac_lg(uint32_t rank)
++{
++    uint32_t v = rank + 2;
++    int b = 0;
++    while (v >> (b + 1)) b++;
++    return b + (double)(v - (1u << b)) / (double)(1u << b);
++}
++
++/* A bonus for words that often follow the previous word (a bigram model: P(word | previous),
++ * counts from web text): up to 6 points when it nearly always does, about 2 for one time in a
++ * hundred, nothing for a pair never seen. In the same units as the score below, where one
++ * cost unit is worth 4. */
++static double
++ac_context_bonus(const char *cand)
++{
++    if (!ac.prev[0] || !ac.bigcap) return 0;
++    char key[2 * AC_MAXW + 4];
++    snprintf(key, sizeof key, "%s %s", ac.prev, cand);
++    uint32_t n = ac_big_get(key);
++    if (!n) return 0;
++    double cp = (double)n / (double)ac_big_get(ac.prev);
++    double b = 6.0 * (ac_lg((uint32_t)(cp * 1024.0)) - 1.0) / 9.0;
++    return b > 6.0 ? 6.0 : b;
++}
++
++struct ac_cand { char w[AC_MAXW + 2]; double sc; };
++
++static void
++ac_cand_add(struct ac_cand *c, int *n, int max, const char *w, double sc)
++{
++    for (int i = 0; i < *n; i++)
++        if (!strcmp(c[i].w, w)) {
++            if (sc >= c[i].sc) return;
++            for (; i + 1 < *n; i++) c[i] = c[i + 1];   /* drop the worse one, add again below */
++            (*n)--;
++            break;
++        }
++    if (*n == max && sc >= c[*n - 1].sc) return;
++    int i = *n < max ? (*n)++ : max - 1;
++    for (; i > 0 && c[i - 1].sc > sc; i--) c[i] = c[i - 1];
++    strcpy(c[i].w, w);
++    c[i].sc = sc;
++}
++
++
++/* ---- the lexicon and the cache -------------------------------------------------------------
++ * The scan below runs on a compact array of the words, sorted: a typed prefix is a binary search
++ * (completions), and the corrections only look at words of about the right length. Results are
++ * cached by (previous word, typed word): the user adds and removes one letter at a time, so a
++ * backspace hits the cache, and so does the correction at the space (it was worked out when the
++ * last letter was typed). */
++struct ac_lex { const char *w; uint32_t rank; uint8_t len; };
++static struct ac_lex *ac_lexi;
++static size_t ac_nlex;
++static bool ac_lex_dirty = true;
++
++static int
++ac_lex_cmp(const void *a, const void *b)
++{
++    return strcmp(((const struct ac_lex *)a)->w, ((const struct ac_lex *)b)->w);
++}
++
++struct ac_res {
++    bool used;
++    char prev[AC_MAXW + 2], word[AC_MAXW + 2];
++    char s[2][AC_MAXW + 2];          /* the two best suggestions (empty when there are none) */
++    char fix[AC_MAXW + 4];           /* the correction to make at a space ("" = leave it) */
++};
++#define AC_CACHE 1024
++static struct ac_res ac_cache[AC_CACHE];
++
++static void
++ac_cache_clear(void)
++{
++    memset(ac_cache, 0, sizeof ac_cache);
++    ac_lex_dirty = true;             /* (a learned word changes both) */
++}
++
++static void
++ac_lex_build(void)
++{
++    free(ac_lexi);
++    ac_lexi = malloc(sizeof(*ac_lexi) * (ac.n + 1));
++    ac_nlex = 0;
++    for (size_t k = 0; k < ac.cap; k++) {
++        if (!ac.tab[k].w) continue;
++        ac_lexi[ac_nlex].w = ac.tab[k].w;
++        ac_lexi[ac_nlex].rank = ac.tab[k].rank;
++        ac_lexi[ac_nlex].len = (uint8_t)strlen(ac.tab[k].w);
++        ac_nlex++;
++    }
++    qsort(ac_lexi, ac_nlex, sizeof(*ac_lexi), ac_lex_cmp);
++    ac_lex_dirty = false;
++    ac_sub_init();
++}
++
++/* What to offer for `word` after `prev`, and what to correct it to: the likeliest words by
++ *   4 x edit cost (key distance on the Dvorak layout, swaps, left-out letters) + 0.35 x log2(rank)
++ *   - the bigram bonus for following `prev`
++ * over completions of the typed prefix and corrections of it. The first letter is rarely the slip. */
++static const struct ac_res *
++ac_compute(const char *word, const char *prev)
++{
++    uint32_t h = ac_hash(prev) * 31u + ac_hash(word);
++    struct ac_res *r = &ac_cache[h & (AC_CACHE - 1)];
++    if (r->used && !strcmp(r->word, word) && !strcmp(r->prev, prev)) return r;
++    if (ac_lex_dirty) { memset(ac_cache, 0, sizeof ac_cache); ac_lex_build(); r = &ac_cache[h & (AC_CACHE - 1)]; }
++    memset(r, 0, sizeof *r);
++    r->used = true;
++    strcpy(r->word, word);
++    strcpy(r->prev, prev);
++
++    size_t n = strlen(word);
++    bool known = ac_rank(word) != AC_NONE;
++    struct ac_cand c[2];
++    int nc = 0;
++    double bestfix = 1e9;
++    /* (ac_context_bonus reads ac.prev: borrow it for `prev`) */
++    char saved[AC_MAXW + 2];
++    strcpy(saved, ac.prev);
++    strcpy(ac.prev, prev);
++
++    /* completions: the words starting with `word`, found by binary search */
++    size_t lo = 0, hi = ac_nlex;
++    while (lo < hi) {
++        size_t mid = (lo + hi) / 2;
++        if (strncmp(ac_lexi[mid].w, word, n) < 0) lo = mid + 1; else hi = mid;
++    }
++    for (size_t k = lo; k < ac_nlex && !strncmp(ac_lexi[k].w, word, n); k++) {
++        size_t m = ac_lexi[k].len;
++        if (m <= n) continue;
++        size_t extra = m - n;
++        double base = 4.0 * (0.3 + 0.1 * (extra > 6 ? 6 : extra)) + 0.35 * ac_lg(ac_lexi[k].rank);
++        if (nc == 2 && base - 6.0 >= c[1].sc) continue;           /* cannot make the top two */
++        ac_cand_add(c, &nc, 2, ac_lexi[k].w, base - ac_context_bonus(ac_lexi[k].w));
++    }
++    /* corrections: only words within two letters of the length */
++    if (n >= 2) {
++        for (size_t k = 0; k < ac_nlex; k++) {
++            size_t m = ac_lexi[k].len;
++            if ((m > n ? m - n : n - m) > 2) continue;
++            const char *w = ac_lexi[k].w;
++            if (m == n && !strcmp(w, word)) continue;
++            double cost = ac_dist(word, n, w, m, AC_MAXCOST);
++            if (cost > AC_MAXCOST) continue;
++            if (w[0] != word[0]) cost += 0.4;
++            if (cost > AC_MAXCOST + 0.4) continue;
++            double base = 4.0 * cost + 0.35 * ac_lg(ac_lexi[k].rank);
++            double lb = base - 6.0;                  /* the best it can get with the bigram bonus */
++            double pen = known ? 3.2 : 0.0;          /* it is a word: offer another only if much likelier */
++            bool want_fix = !known && lb < bestfix;
++            bool want_cand = (!known || cost <= AC_MAXCOST) && (nc < 2 || lb + pen < c[1].sc);
++            if (!want_fix && !want_cand) continue;
++            double sc = base - ac_context_bonus(w);
++            if (want_fix && sc < bestfix) { bestfix = sc; strcpy(r->fix, w); }
++            if (want_cand) ac_cand_add(c, &nc, 2, w, sc + pen);
++        }
++    }
++    for (int i = 0; i < nc; i++) strcpy(r->s[i], c[i].w);
++    strcpy(ac.prev, saved);
++    return r;
++}
 +static int64_t
 +ac_now_ms(void)
 +{
@@ -190,13 +499,17 @@ index 0000000..f709e6b
 +
 +/* replace the last `erase` characters by s (first letter capital if cap0) */
 +static void
-+ac_replace(struct kbd *kb, uint32_t time, size_t erase, const char *s, bool cap0)
++ac_replace(struct kbd *kb, uint32_t time, size_t erase, const char *s, bool cap0, bool space)
 +{
 +    zwp_virtual_keyboard_v1_modifiers(kb->vkbd, 0, 0, 0, 0);
 +    for (size_t i = 0; i < erase; i++) ac_tap(kb, time, KEY_BACKSPACE);
 +    for (size_t i = 0; s[i]; i++) {
 +        zwp_virtual_keyboard_v1_modifiers(kb->vkbd, (i == 0 && cap0) ? Shift : 0, 0, 0, 0);
 +        ac_tap(kb, time, dvorak_pos(ac_code(s[i])));
++    }
++    if (space) {
++        zwp_virtual_keyboard_v1_modifiers(kb->vkbd, 0, 0, 0, 0);
++        ac_tap(kb, time, dvorak_pos(KEY_SPACE));
 +    }
 +    zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
 +}
@@ -205,6 +518,7 @@ index 0000000..f709e6b
 +ac_learn(const char *w)
 +{
 +    ac_put(w, 0);
++    ac_cache_clear();
 +    if (!ac.known_path) return;
 +    FILE *f = fopen(ac.known_path, "a");
 +    if (f) { fprintf(f, "%s\n", w); fclose(f); }
@@ -214,7 +528,7 @@ index 0000000..f709e6b
 +ac_undo(struct kbd *kb, uint32_t time)
 +{
 +    /* the delimiter and the corrected word go; the typed word comes back and is not corrected again */
-+    ac_replace(kb, time, 1 + strlen(ac.undo_fixed), ac.undo_orig, ac.undo_cap);
++    ac_replace(kb, time, 1 + strlen(ac.undo_fixed), ac.undo_orig, ac.undo_cap, false);
 +    ac_learn(ac.undo_orig);
 +    ac.len = strlen(ac.undo_orig);
 +    memcpy(ac.word, ac.undo_orig, ac.len);
@@ -225,36 +539,40 @@ index 0000000..f709e6b
 +    return true;
 +}
 +
-+static void
++static bool
 +ac_try_correct(struct kbd *kb, uint32_t time)
 +{
 +    ac.word[ac.len] = 0;
-+    if (ac.word[ac.len - 1] == '\'') return;
++    if (ac.word[ac.len - 1] == '\'') return false;
 +    for (size_t i = 1; i < ac.len; i++)
-+        if (ac.up[i]) return;                         /* ALLCAPS, camelCase */
-+    if (ac_rank(ac.word) != AC_NONE) return;          /* a word we know */
++        if (ac.up[i]) return false;                   /* ALLCAPS, camelCase */
++    if (ac_rank(ac.word) != AC_NONE) return false;    /* a word we know */
++    const struct ac_res *res = ac_compute(ac.word, ac.prev);
++    if (!res->fix[0]) return false;
 +    char fix[AC_MAXW + 4];
-+    if (!ac_fix(ac.word, fix)) return;
-+    ac_replace(kb, time, ac.len, fix, ac.up[0]);
++    strcpy(fix, res->fix);
++    ac_replace(kb, time, ac.len, fix, ac.up[0], false);
 +    strcpy(ac.undo_orig, ac.word);
 +    strcpy(ac.undo_fixed, fix);
 +    ac.undo_cap = ac.up[0];
 +    ac.undo_ok = true;
++    return true;
 +}
 +
 +/* Called for every key press before it is sent. Returns true when the press was handled here. */
 +static bool
-+ac_on_key(struct kbd *kb, struct key *k, uint32_t time)
++ac_on_key_inner(struct kbd *kb, struct key *k, uint32_t time)
 +{
 +    if (!ac.enabled || !ac.loaded) return false;
 +    bool undo = ac.undo_ok;
 +    ac.undo_ok = false;
 +    if (k->type == Mod) return false;
 +    int64_t now = ac_now_ms();
-+    if (ac.len && now - ac.last_ms > AC_IDLE_MS) ac_reset_word();
++    if (now - ac.last_ms > AC_IDLE_MS) { ac_reset_word(); ac.prev[0] = 0; }
 +    ac.last_ms = now;
 +    if (k->type != Code || k->code_mod || (kb->mods & (Ctrl | Alt | Super | AltGr))) {
 +        ac_reset_word();
++        ac.prev[0] = 0;
 +        return false;
 +    }
 +    if (k->code == KEY_BACKSPACE) {
@@ -279,12 +597,18 @@ index 0000000..f709e6b
 +    bool punct = lab[0] && !lab[1] && strchr(".,;!?)", lab[0]);
 +    if (white || punct) {
 +        /* before a period only longer words: www. e.g. i.e. */
-+        if (ac.len >= (lab[0] == '.' ? 4 : 3) && !ac.poison && !ac.nocorrect) ac_try_correct(kb, time);
++        char cur[AC_MAXW + 2] = "";
++        if (ac.len >= 1 && !ac.poison) { memcpy(cur, ac.word, ac.len); cur[ac.len] = 0; }
++        if (ac.len >= (lab[0] == '.' ? 4 : 3) && !ac.poison && !ac.nocorrect && ac_try_correct(kb, time))
++            strcpy(cur, ac.undo_fixed);
++        /* the word just finished is the context of the next one; a sentence end forgets it */
++        strcpy(ac.prev, (k->code == KEY_ENTER || lab[0] == '.' || lab[0] == '!' || lab[0] == '?') ? "" : cur);
 +        ac_reset_word();
 +        ac.poison = !white && lab[0] == '.';          /* file.txt, e.g., www.x.com: until the next space */
 +        return false;
 +    }
 +    ac_reset_word();                                    /* digit, symbol, arrow...: not a plain word */
++    ac.prev[0] = 0;
 +    ac.poison = true;
 +    return false;
 +}
@@ -313,9 +637,95 @@ index 0000000..f709e6b
 +    FILE *f = fopen(ac.state_path, "w");
 +    if (f) { fputs(on ? "on\n" : "off\n", f); fclose(f); }
 +}
++
++/* ---- the suggestion row ---------------------------------------------------------------------
++ * Three slots like a phone keyboard's: while a word is being typed, [the word as typed | best |
++ * next best], the candidates being the completions of what is typed and the corrections of it
++ * (same scoring as the autocorrect, previous word included); between words, the three likeliest
++ * next words after the previous one. A tap puts the word in (replacing what was typed) and a space. */
++static void
++ac_suggest_update(void)
++{
++    memset(ac.sugg, 0, sizeof ac.sugg);
++    memset(ac.sugg_cap, 0, sizeof ac.sugg_cap);
++    ac.sugg_lit = false;
++    if (!ac.enabled || !ac.loaded || ac.poison) return;
++    if (ac.len == 0) {
++        const struct ac_next *nx = ac.prev[0] ? ac_next_get(ac.prev) : NULL;
++        static const char *start[3] = { "i", "the", "it" };
++        for (int i = 0; i < 3; i++) {
++            const char *w = nx ? nx->n[i] : start[i];
++            if (w) strcpy(ac.sugg[i], w);
++        }
++        return;
++    }
++    char word[AC_MAXW + 2];
++    memcpy(word, ac.word, ac.len);
++    word[ac.len] = 0;
++    strcpy(ac.sugg[0], word);
++    ac.sugg_lit = true;
++    ac.sugg_cap[0] = ac.up[0];
++    const struct ac_res *res = ac_compute(word, ac.prev);
++    for (int i = 0; i < 2; i++) {
++        strcpy(ac.sugg[1 + i], res->s[i]);
++        ac.sugg_cap[1 + i] = ac.up[0];
++    }
++}
++
++static const char *
++ac_label(unsigned slot)
++{
++    char *l = ac.label[slot > 2 ? 2 : slot];
++    const char *w = ac.sugg[slot > 2 ? 2 : slot];
++    if (!*w) { l[0] = 0; return l; }
++    char t[AC_MAXW + 4];
++    strcpy(t, w);
++    if (ac.sugg_cap[slot] || !strcmp(t, "i") || !strncmp(t, "i'", 2)) t[0] = toupper((unsigned char)t[0]);
++    if (slot == 0 && ac.sugg_lit) snprintf(l, AC_MAXW + 6, "\"%s\"", t);
++    else strcpy(l, t);
++    return l;
++}
++
++/* a tap on slot: the word in place of what was typed, then a space */
++static void
++ac_pick(struct kbd *kb, unsigned slot, uint32_t time)
++{
++    if (slot > 2 || !ac.sugg[slot][0]) return;
++    char w[AC_MAXW + 2];
++    strcpy(w, ac.sugg[slot]);
++    bool cap = ac.sugg_cap[slot] || !strcmp(w, "i") || !strncmp(w, "i'", 2);
++    if (slot == 0 && ac.sugg_lit) {
++        if (ac_rank(w) == AC_NONE) ac_learn(w);      /* kept as typed: never correct it again */
++        ac_replace(kb, time, 0, "", false, true);
++    } else {
++        ac_replace(kb, time, ac.len, w, cap, true);
++    }
++    strcpy(ac.prev, w);
++    ac_reset_word();
++    ac.undo_ok = false;
++    ac.last_ms = ac_now_ms();
++}
++
++static void ac_row_redraw(struct kbd *kb);
++
++/* every key press: track it (and correct), then bring the suggestions up to date */
++static bool
++ac_on_key(struct kbd *kb, struct key *k, uint32_t time)
++{
++    if (!ac.enabled || !ac.loaded) return false;
++    char old[3][AC_MAXW + 2];
++    bool old_cap[3], old_lit = ac.sugg_lit;
++    memcpy(old, ac.sugg, sizeof old);
++    memcpy(old_cap, ac.sugg_cap, sizeof old_cap);
++    bool r = ac_on_key_inner(kb, k, time);
++    ac_suggest_update();
++    if (memcmp(old, ac.sugg, sizeof old) || memcmp(old_cap, ac.sugg_cap, sizeof old_cap) || old_lit != ac.sugg_lit)
++        ac_row_redraw(kb);          /* (only when the row changed) */
++    return r;
++}
 +#endif
 diff --git a/keyboard.c b/keyboard.c
-index ea3be7e..6a38717 100644
+index ea3be7e..dc35586 100644
 --- a/keyboard.c
 +++ b/keyboard.c
 @@ -5,6 +5,8 @@
@@ -327,7 +737,58 @@ index ea3be7e..6a38717 100644
  #include "keyboard.h"
  #include <linux/input-event-codes.h>
  
-@@ -54,7 +56,7 @@ kbd_next_layer(struct kbd *kb, struct key *k, bool invert)
+@@ -23,6 +25,50 @@
+ #endif
+ #include KEYMAP
+ 
++/* Every key event the keyboard sends goes through vk_key, which remembers which keys are down.
++ * A key left down (its release lost) repeats in the compositor until something presses it again,
++ * so kbd_release_stuck() lets go of all of them once no finger is on the screen. */
++static inline void
++vk_send(struct zwp_virtual_keyboard_v1 *v, uint32_t t, uint32_t code, uint32_t state)
++{
++    zwp_virtual_keyboard_v1_key(v, t, code, state);
++}
++static uint8_t vk_down[768 / 8];
++static struct zwp_virtual_keyboard_v1 *vk_last;
++static void
++vk_key(struct zwp_virtual_keyboard_v1 *v, uint32_t t, uint32_t code, uint32_t state)
++{
++    vk_last = v;
++    if (code < 768) {
++        if (state == WL_KEYBOARD_KEY_STATE_PRESSED) vk_down[code / 8] |= 1 << (code % 8);
++        else vk_down[code / 8] &= ~(1 << (code % 8));
++    }
++    vk_send(v, t, code, state);
++}
++#define zwp_virtual_keyboard_v1_key vk_key
++
++void
++kbd_release_stuck(uint32_t time)
++{
++    for (uint32_t c = 1; c < 768; c++) {
++        if (!(vk_down[c / 8] & (1 << (c % 8)))) continue;
++        /* latched modifiers are down on purpose (until the next key or the Shift key is tapped again) */
++        if (c == KEY_LEFTSHIFT || c == KEY_RIGHTSHIFT || c == KEY_LEFTCTRL || c == KEY_RIGHTCTRL ||
++            c == KEY_LEFTALT || c == KEY_RIGHTALT || c == KEY_LEFTMETA || c == KEY_RIGHTMETA ||
++            c == KEY_CAPSLOCK)
++            continue;
++        vk_key(vk_last, time, c, WL_KEYBOARD_KEY_STATE_RELEASED);
++        const char *dir = getenv("XDG_RUNTIME_DIR");
++        char path[256];
++        snprintf(path, sizeof path, "%s/yoga-osk-stuck.log", dir ? dir : "/tmp");
++        FILE *f = fopen(path, "a");
++        if (f) {
++            fprintf(f, "%ld released stuck key %u\n", (long)time, c);
++            fclose(f);
++        }
++    }
++}
++
+ void
+ kbd_switch_layout(struct kbd *kb, struct layout *l, size_t layer_index)
+ {
+@@ -54,7 +100,7 @@ kbd_next_layer(struct kbd *kb, struct key *k, bool invert)
          ((bool)kb->compose)) {
          // with modifiers ctrl/alt/altgr: switch to the first layer
          layer_index = 0;
@@ -336,7 +797,7 @@ index ea3be7e..6a38717 100644
      } else if ((kb->mods & Shift) || (kb->mods & CapsLock) || (invert)) {
          // with modifiers shift/capslock or invert set: switch to the previous
          // layout in the layer sequence
-@@ -73,7 +75,7 @@ kbd_next_layer(struct kbd *kb, struct key *k, bool invert)
+@@ -73,7 +119,7 @@ kbd_next_layer(struct kbd *kb, struct key *k, bool invert)
              }
              layer_index = layercount - 1;
          }
@@ -345,7 +806,61 @@ index ea3be7e..6a38717 100644
              kb->mods ^= Shift;
      } else {
          // normal behaviour: switch to the next layout in the layer sequence
-@@ -277,6 +279,108 @@ kbd_get_layer_index(struct kbd *kb, struct layout *l)
+@@ -204,20 +250,40 @@ kbd_init(struct kbd *kb, struct layout *layouts, char *layer_names_list,
+     create_and_upload_keymap(kb, kb->layout->keymap_name, 0);
+ }
+ 
++#define SUGGEST_ROW_H 0.6
++/* the height of the row starting at k, in key rows */
++static double
++kbd_row_weight(struct key *k)
++{
++    for (; k->type != EndRow && k->type != Last; k++)
++        if (k->type == Suggest || (k->type == Pad && k->code == 1))
++            return SUGGEST_ROW_H;
++    return 1.0;
++}
++
+ void
+ kbd_init_layout(struct layout *l, uint32_t width, uint32_t height)
+ {
+     uint32_t x = 0, y = 0;
+-    uint8_t rows = kbd_get_rows(l);
+-
+-    l->keyheight = height / rows;
++    /* A row holding suggestion slots (or the Pad marker with code 1 that stands in for it on the
++     * other layers) is only SUGGEST_ROW_H of a key row high, so the keys stay square: the
++     * height is shared out by weight. */
++    double weight = 0.0;
++    for (struct key *r = l->keys; r->type != Last; ) {
++        weight += kbd_row_weight(r);
++        while (r->type != EndRow && r->type != Last) r++;
++        if (r->type == EndRow) r++;
++    }
++    l->keyheight = height / weight;
+ 
+     struct key *k = l->keys;
+     double rowlength = kbd_get_row_length(k);
+     double rowwidth = 0.0;
++    uint32_t rowh = l->keyheight * kbd_row_weight(k);
+     while (k->type != Last) {
+         if (k->type == EndRow) {
+-            y += l->keyheight;
++            y += rowh;
++            rowh = l->keyheight * kbd_row_weight(k + 1);
+             x = 0;
+             rowwidth = 0.0;
+             rowlength = kbd_get_row_length(k + 1);
+@@ -232,7 +298,7 @@ kbd_init_layout(struct layout *l, uint32_t width, uint32_t height)
+                 x++;
+             }
+         }
+-        k->h = l->keyheight;
++        k->h = rowh;
+         k++;
+     }
+ }
+@@ -277,6 +343,114 @@ kbd_get_layer_index(struct kbd *kb, struct layout *l)
      return 0;
  }
  
@@ -429,32 +944,38 @@ index ea3be7e..6a38717 100644
 +#include "autocorrect.h"
 +
 +void
-+kbd_autocorrect_init(const char *words, const char *known, const char *state)
++kbd_autocorrect_init(const char *words, const char *known, const char *state, const char *bigrams)
 +{
 +    if (state) ac.state_path = strdup(state);
 +    if (known) ac.known_path = strdup(known);
 +    if (words) ac_load(words, false);
 +    if (known) ac_load(known, true);
++    if (bigrams && ac.loaded) ac_load_bigrams(bigrams);
++    if (ac.loaded) ac_lex_build();     /* (so the first key typed does not pay for it) */
 +    ac_read_state();
++    ac_suggest_update();
 +}
 +
 +void
 +kbd_autocorrect_reload(void)
 +{
 +    ac_read_state();
++    ac_suggest_update();
 +}
 +
 +void
 +kbd_autocorrect_reset(void)
 +{
 +    ac_reset_word();
++    ac.prev[0] = 0;
 +    ac.undo_ok = false;
++    ac_suggest_update();
 +}
 +
  void
  zwp_virtual_keyboard_v1_key_mods(struct zwp_virtual_keyboard_v1 *vkbd, uint32_t time, uint32_t mods, enum wl_keyboard_key_state state)
  {
-@@ -294,17 +398,42 @@ zwp_virtual_keyboard_v1_key_mods(struct zwp_virtual_keyboard_v1 *vkbd, uint32_t
+@@ -294,17 +468,44 @@ zwp_virtual_keyboard_v1_key_mods(struct zwp_virtual_keyboard_v1 *vkbd, uint32_t
          zwp_virtual_keyboard_v1_key(vkbd, time, KEY_RIGHTALT, state);
  }
  
@@ -466,6 +987,7 @@ index ea3be7e..6a38717 100644
 +    zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, k->code, WL_KEYBOARD_KEY_STATE_PRESSED);
 +    zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
 +    kbd_draw_layout(kb);
++    kbd_draw_key(kb, k, Press);      /* the popup bubble, for as long as the key is held */
 +}
 +
 +void
@@ -477,6 +999,7 @@ index ea3be7e..6a38717 100644
 +    kb->held_mods &= ~k->code;
 +    zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, k->code, WL_KEYBOARD_KEY_STATE_RELEASED);
 +    zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
++    kbd_clear_last_popup(kb);        /* the bubble goes with the key */
 +    kbd_draw_layout(kb);
 +}
 +
@@ -504,7 +1027,7 @@ index ea3be7e..6a38717 100644
  
          if (kb->last_press->type == Copy) {
              if (kb->debug) fprintf(stderr, "release copy key (unlatch_shift=%d, mods=%d)\n", unlatch_shift, kb->mods);
-@@ -320,10 +449,13 @@ kbd_unpress_key(struct kbd *kb, uint32_t time)
+@@ -320,10 +521,13 @@ kbd_unpress_key(struct kbd *kb, uint32_t time)
                  zwp_virtual_keyboard_v1_key(kb->vkbd, time, KEY_TAB,
                                              WL_KEYBOARD_KEY_STATE_RELEASED);
              } else {
@@ -521,7 +1044,7 @@ index ea3be7e..6a38717 100644
              }
          }
  
-@@ -349,6 +481,10 @@ kbd_unpress_key(struct kbd *kb, uint32_t time)
+@@ -349,6 +553,10 @@ kbd_unpress_key(struct kbd *kb, uint32_t time)
              zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, AltGr, WL_KEYBOARD_KEY_STATE_RELEASED);
          }
  
@@ -532,7 +1055,7 @@ index ea3be7e..6a38717 100644
          if (unlatch_shift||unlatch_ctrl||unlatch_alt||unlatch_super||unlatch_altgr||unlatch_tab) {
              zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods, 0, 0, 0);
          }
-@@ -356,7 +492,7 @@ kbd_unpress_key(struct kbd *kb, uint32_t time)
+@@ -356,7 +564,7 @@ kbd_unpress_key(struct kbd *kb, uint32_t time)
          if (kb->compose >= 2) {
              kb->compose = 0;
              kbd_switch_layout(kb, kb->last_abc_layout, kb->last_abc_index);
@@ -541,17 +1064,23 @@ index ea3be7e..6a38717 100644
              kbd_draw_layout(kb);
          } else {
              kbd_draw_key(kb, kb->last_press, Unpress);
-@@ -437,6 +573,9 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
+@@ -437,6 +645,15 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
          }
      }
  
++    if (k->type == Suggest) {
++        ac_pick(kb, k->code, time);
++        ac_suggest_update();
++        ac_row_redraw(kb);
++        return;
++    }
 +    if (ac_on_key(kb, k, time))
 +        return;
 +
      switch (k->type) {
      case Code:
          if (k->code_mod) {
-@@ -458,12 +597,20 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
+@@ -458,12 +675,20 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
              // shift space is tab
              zwp_virtual_keyboard_v1_key_mods(kb->vkbd, time, Shift, WL_KEYBOARD_KEY_STATE_RELEASED);
              zwp_virtual_keyboard_v1_modifiers(kb->vkbd, kb->mods ^ Shift, 0, 0, 0);
@@ -575,7 +1104,7 @@ index ea3be7e..6a38717 100644
          }
          if (kb->print || kb->print_intersect)
              kbd_print_key_stdout(kb, k);
-@@ -473,7 +620,16 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
+@@ -473,7 +698,16 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
              kb->compose++;
          }
          break;
@@ -592,7 +1121,7 @@ index ea3be7e..6a38717 100644
          kb->mods ^= k->code;
          if (kb->mods & k->code) {
              if (kb->debug)
-@@ -507,6 +663,18 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
+@@ -507,6 +741,19 @@ kbd_press_key(struct kbd *kb, struct key *k, uint32_t time)
              kb->last_abc_layout = &kb->layouts[kb->layers[0]];
          }
          break;
@@ -602,6 +1131,7 @@ index ea3be7e..6a38717 100644
 +        break;
 +    case Auto:
 +        ac_set_enabled(!ac.enabled);
++        ac_suggest_update();
 +        kbd_draw_layout(kb);
 +        break;
 +    case Hide:
@@ -611,10 +1141,11 @@ index ea3be7e..6a38717 100644
      case Compose:
          // switch to the associated layout determined by the *next* keypress
          if (kb->compose == 0) {
-@@ -645,6 +813,15 @@ kbd_draw_key(struct kbd *kb, struct key *k, enum key_draw_type type)
+@@ -645,6 +892,16 @@ kbd_draw_key(struct kbd *kb, struct key *k, enum key_draw_type type)
  {
      const char *label = ((kb->mods & Shift)||((kb->mods & CapsLock) && 
          strlen(k->label) == 1 && isalpha(k->label[0]))) ? k->shift_label : k->label;
++    if (k->type == Suggest) label = ac_label(k->code);
 +    if (kb->fn) {
 +        const struct fn_entry *fe = fn_lookup(k);
 +        if (fe)
@@ -627,7 +1158,23 @@ index ea3be7e..6a38717 100644
      if (kb->debug)
          fprintf(stderr, "Draw key +%d+%d %dx%d -> %s\n", k->x, k->y, k->w, k->h,
                  label);
-@@ -716,13 +893,20 @@ kbd_draw_layout(struct kbd *kb)
+@@ -700,6 +957,15 @@ kbd_draw_key(struct kbd *kb, struct key *k, enum key_draw_type type)
+     }
+ }
+ 
++/* redraw the suggestion slots of the layer in view (they change with every key) */
++static void
++ac_row_redraw(struct kbd *kb)
++{
++    if (!kb->surf || !kb->layout) return;
++    for (struct key *k = kb->layout->keys; k->type != Last; k++)
++        if (k->type == Suggest && k->w) kbd_draw_key(kb, k, None);
++}
++
+ void
+ kbd_draw_layout(struct kbd *kb)
+ {
+@@ -716,13 +982,21 @@ kbd_draw_layout(struct kbd *kb)
      }
  
      while (next_key->type != Last) {
@@ -641,19 +1188,20 @@ index ea3be7e..6a38717 100644
 +            (next_key->type == Mod && next_key->code == Alt && (kb->mods & AltGr)) ||
 +            (next_key->type == Auto && ac.enabled && ac.loaded) ||
              (next_key->type == Compose && kb->compose)) {
-+            /* (a lit Auto key is not a key press: no popup bubble above it) */
++            /* (a lit key here shows a state, latched or held: it is not a key press, so no popup
++             * bubble above it; one would be left open when the key lets go) */
 +            bool popup = kb->show_popup;
-+            if (next_key->type == Auto) kb->show_popup = false;
++            kb->show_popup = false;
              kbd_draw_key(kb, next_key, Press);
 +            kb->show_popup = popup;
          } else {
              kbd_draw_key(kb, next_key, None);
          }
 diff --git a/keyboard.h b/keyboard.h
-index f1cf4c0..7187706 100644
+index f1cf4c0..d1e758f 100644
 --- a/keyboard.h
 +++ b/keyboard.h
-@@ -24,6 +24,10 @@ enum key_type {
+@@ -24,6 +24,11 @@ enum key_type {
  	NextLayer, // Layout switch to the next layout in the layers sequence
  	Compose,   // Compose modifier key, switches to a specific associated layout
  	           // upon next keypress
@@ -661,10 +1209,11 @@ index f1cf4c0..7187706 100644
 +	Hide,      // Hide the keyboard (like SIGUSR1), shown again with SIGUSR2
 +	FnKey,     // Fn latch: the next key is its Fn-layer meaning (F keys, arrows, paging), then it unlatches
 +	Auto,      // Turn autocorrect on/off (autocorrect.h)
++	Suggest,   // A suggestion slot (code = 0..2) in the short top row (autocorrect.h)
  	EndRow,    // Incidates the end of a key row
  	Last,      // Indicated the end of a layout
  };
-@@ -64,7 +68,7 @@ struct clr_scheme {
+@@ -64,7 +69,7 @@ struct clr_scheme {
  struct key {
  	const char *label;       // primary label
  	const char *shift_label; // secondary label
@@ -673,7 +1222,7 @@ index f1cf4c0..7187706 100644
  	const enum key_type type;
  
  	const uint32_t
-@@ -111,6 +115,10 @@ struct kbd {
+@@ -111,6 +116,10 @@ struct kbd {
  	bool shift_space_is_tab;
  	bool exclusive;
  	uint8_t mods;
@@ -684,23 +1233,24 @@ index f1cf4c0..7187706 100644
  	uint8_t compose;
  	struct key *last_press;
  	struct key *last_swipe;
-@@ -132,6 +140,11 @@ struct kbd {
+@@ -132,6 +141,12 @@ struct kbd {
  	uint32_t last_popup_x, last_popup_y, last_popup_w, last_popup_h;
  };
  
 +/* autocorrect (autocorrect.h) */
-+void kbd_autocorrect_init(const char *words, const char *known, const char *state);
++void kbd_autocorrect_init(const char *words, const char *known, const char *state, const char *bigrams);
 +void kbd_autocorrect_reload(void);
 +void kbd_autocorrect_reset(void);
++void kbd_release_stuck(uint32_t time);   /* let go of keys whose release was lost */
 +
  void draw_inset(struct drwsurf *ds, uint32_t x, uint32_t y, uint32_t width,
                  uint32_t height, uint32_t border, Color color, int rounding);
  void draw_over_inset(struct drwsurf *ds, uint32_t x, uint32_t y, uint32_t width,
-@@ -142,6 +155,10 @@ void kbd_init(struct kbd *kb, struct layout *layouts,
+@@ -142,6 +157,10 @@ void kbd_init(struct kbd *kb, struct layout *layouts,
  void kbd_init_layout(struct layout *l, uint32_t width, uint32_t height);
  struct key *kbd_get_key(struct kbd *kb, uint32_t x, uint32_t y);
  size_t kbd_get_layer_index(struct kbd *kb, struct layout *l);
-+#define HELD_MODS (Shift | Ctrl | Alt | AltGr)
++#define HELD_MODS (Shift | Ctrl | Alt | Super | AltGr)
 +struct key *kbd_fn_remap(struct kbd *kb, struct key *k);
 +void kbd_hold_mod(struct kbd *kb, struct key *k, uint32_t time);
 +void kbd_unhold_mod(struct kbd *kb, struct key *k, uint32_t time);
@@ -794,13 +1344,14 @@ index aae951d..084eef9 100644
          key <RTSH>               {	[         Shift_R ] };\
          key <KPMU>               {\
 diff --git a/layout.mobintl.h b/layout.mobintl.h
-index d42c19f..5fc839c 100644
+index d42c19f..db80eb1 100644
 --- a/layout.mobintl.h
 +++ b/layout.mobintl.h
-@@ -174,17 +174,6 @@ static struct layout layouts[NumLayouts] = {
+@@ -173,18 +173,12 @@ static struct layout layouts[NumLayouts] = {
+  * - layout: layout to switch to when key is pressed
   */
  static struct key keys_full[] = {
-   {"Esc", "Esc", 1.0, Code, KEY_ESC, .scheme = 1},
+-  {"Esc", "Esc", 1.0, Code, KEY_ESC, .scheme = 1},
 -  {"Ctr", "Ctr", 1.0, Mod, Ctrl, .scheme = 1},
 -  {"↑", "↑", 1.0, Code, KEY_UP, .scheme = 1},
 -  {"↓", "↓", 1.0, Code, KEY_DOWN, .scheme = 1},
@@ -810,12 +1361,16 @@ index d42c19f..5fc839c 100644
 -  {"-", "_", 1.0, Code, KEY_MINUS, &layouts[ComposeMath] },
 -  {"/", ">", 1.0, Code, KEY_SLASH,  &layouts[ComposePunctuation] },
 -  {"Tab", "Ins", 1.0, Code, KEY_TAB, .shift_code = KEY_INSERT, .scheme = 1},
--  {"", "", 0.0, EndRow},
--
++  {"", "", 5.0, Suggest, 0},
++  {"", "", 5.0, Suggest, 1},
++  {"", "", 5.0, Suggest, 2},
+   {"", "", 0.0, EndRow},
+ 
++  {"Esc", "Esc", 1.0, Code, KEY_ESC, .scheme = 1},
    {"1", "!", 1.0, Code, KEY_1},
    {"2", "@", 1.0, Code, KEY_2},
    {"3", "#", 1.0, Code, KEY_3},
-@@ -193,52 +182,69 @@ static struct key keys_full[] = {
+@@ -193,52 +187,69 @@ static struct key keys_full[] = {
    {"6", "^", 1.0, Code, KEY_6},
    {"7", "&", 1.0, Code, KEY_7},
    {"8", "*", 1.0, Code, KEY_8},
@@ -927,7 +1482,7 @@ index d42c19f..5fc839c 100644
  
    /* end of layout */
    {"", "", 0.0, Last},
-@@ -319,16 +325,20 @@ static struct key keys_full_wide[] = {
+@@ -319,16 +330,23 @@ static struct key keys_full_wide[] = {
  };
  
  static struct key keys_special[] = {
@@ -941,6 +1496,9 @@ index d42c19f..5fc839c 100644
 -  {"⇊", "⇊", 1.0, Code, KEY_PAGEDOWN, .scheme = 1},
 -  {"⇤", "⇤", 1.0, Code, KEY_HOME, .scheme = 1},
 -  {"⇥", "⇥", 1.0, Code, KEY_END, .scheme = 1},
++  {"", "", 15.0, Pad, 1},
++  {"", "", 0.0, EndRow},
++
 +  {"`", "~", 1.0, Code, KEY_GRAVE},
 +  {"F1", "F1", 1.0, Code, KEY_F1, .scheme = 1},
 +  {"F2", "F2", 1.0, Code, KEY_F2, .scheme = 1},
@@ -958,7 +1516,7 @@ index d42c19f..5fc839c 100644
    {"", "", 0.0, EndRow},
  
    {"1", "!", 1.0, Code, KEY_1},
-@@ -366,6 +376,8 @@ static struct key keys_special[] = {
+@@ -366,6 +384,8 @@ static struct key keys_special[] = {
    {"⌫", "⌫", 1.0, Code, KEY_BACKSPACE, .scheme = 1},
    {"", "", 0.0, EndRow},
  
@@ -967,9 +1525,15 @@ index d42c19f..5fc839c 100644
    {"Abc", "Abc", 1.0, BackLayer, .scheme = 1},
    {"⌨͕", "⌨͔", 1.0, NextLayer, .scheme = 1},
    {",", "'", 1.0, Code, KEY_COMMA, &layouts[ComposeMath]},
-@@ -1103,79 +1115,97 @@ static struct key keys_index[] = {
+@@ -1102,80 +1122,106 @@ static struct key keys_index[] = {
+ };
  
  static struct key keys_landscape[] = {
++  {"", "", 5.0, Suggest, 0},
++  {"", "", 5.0, Suggest, 1},
++  {"", "", 5.0, Suggest, 2},
++  {"", "", 0.0, EndRow},
++
    {"Esc", "Esc", 1.0, Code, KEY_ESC, .scheme = 1},
 -  {"", "", 0.5, Pad, .scheme = 1},
 -  {"q", "Q", 1.0, Code, KEY_Q, &layouts[Emoji]},
@@ -1109,6 +1673,9 @@ index d42c19f..5fc839c 100644
 -  {"0", ")", 1.0, Code, KEY_0, &layouts[ComposeBracket]},
 -  {"", "", 0.5, Pad, .scheme = 1},
 -  {"Tab", "Ins", 1.0, Code, KEY_TAB, .shift_code = KEY_INSERT, .scheme = 1},
++  {"", "", 15.0, Pad, 1},
++  {"", "", 0.0, EndRow},
++
 +  {"`", "~", 1.0, Code, KEY_GRAVE},
 +  {"F1", "F1", 1.0, Code, KEY_F1, .scheme = 1},
 +  {"F2", "F2", 1.0, Code, KEY_F2, .scheme = 1},
@@ -1126,7 +1693,7 @@ index d42c19f..5fc839c 100644
    {"", "", 0.0, EndRow},
  
    {"⇈", "⇈", 1.0, Code, KEY_PAGEUP, .scheme = 1},
-@@ -1207,6 +1237,8 @@ static struct key keys_landscape_special[] = {
+@@ -1207,6 +1253,8 @@ static struct key keys_landscape_special[] = {
    {"⌫", "⌫", 1.5, Code, KEY_BACKSPACE, .scheme = 1},
    {"", "", 0.0, EndRow},
  
@@ -1136,7 +1703,7 @@ index d42c19f..5fc839c 100644
    {"⌨͕", "⌨͔", 1.0, NextLayer, .scheme = 1},
    {"Ctr", "Ctr", 1.0, Mod, Ctrl, .scheme = 1},
 diff --git a/main.c b/main.c
-index be7fb07..36ead9c 100644
+index be7fb07..3200a4f 100644
 --- a/main.c
 +++ b/main.c
 @@ -70,10 +70,40 @@ static bool run_display = true;
@@ -1155,7 +1722,7 @@ index be7fb07..36ead9c 100644
 + * (e.g. eDP-2) instead of letting the compositor pick one */
 +static char *want_output = NULL;
 +static bool fixed_edge = false;  /* --fixed: the Move key / SIGRTMIN+1 do nothing */
-+static char *ac_words = NULL, *ac_known = NULL, *ac_state = NULL; /* autocorrect files */
++static char *ac_words = NULL, *ac_known = NULL, *ac_state = NULL, *ac_bigrams = NULL; /* autocorrect files */
 +static bool anchor_top = false; /* --top: dock to the top edge instead of the bottom */
 +static struct wl_output *target_output = NULL;
 +static uint32_t target_output_global = 0;
@@ -1180,7 +1747,7 @@ index be7fb07..36ead9c 100644
  static uint32_t custom_width = 0;
  static double width_ratio = 1.0;
  static enum { DOCK_FULL = 0, DOCK_LEFT = 1, DOCK_RIGHT = 2 } dock_mode = DOCK_FULL;
-@@ -251,6 +281,51 @@ estrdup(const char *s)
+@@ -251,6 +281,67 @@ estrdup(const char *s)
      return p;
  }
  
@@ -1190,12 +1757,28 @@ index be7fb07..36ead9c 100644
 +#define MAX_HELD 4
 +static struct { int32_t id; struct key *key; } held_touch[MAX_HELD];
 +static int32_t key_touch = -1000;
++static int touches_down = 0;   /* fingers on the keyboard right now */
++
++/* a line in $XDG_RUNTIME_DIR/yoga-osk-stuck.log: what the touch handling did that it normally does not */
++static void
++osk_log(const char *what, int n)
++{
++    const char *dir = getenv("XDG_RUNTIME_DIR");
++    char path[256];
++    snprintf(path, sizeof path, "%s/yoga-osk-stuck.log", dir ? dir : "/tmp");
++    FILE *f = fopen(path, "a");
++    if (f) {
++        fprintf(f, "%ld %s %d\n", (long)time(NULL), what, n);
++        fclose(f);
++    }
++}
 +
 +static void
 +touch_press(int32_t id, struct key *k, uint32_t time)
 +{
 +    k = kbd_fn_remap(&keyboard, k);
 +    if (!k) {
++        osk_log("touch down ignored: surface not configured", layer_surface_configured * 2 + popup_xdg_surface_configured);
 +        return;
 +    }
 +    if (k->type == Mod && (k->code & HELD_MODS)) {
@@ -1232,7 +1815,12 @@ index be7fb07..36ead9c 100644
  void
  wl_touch_down(void *data, struct wl_touch *wl_touch, uint32_t serial,
                uint32_t time, struct wl_surface *surface, int32_t id,
-@@ -270,7 +345,7 @@ wl_touch_down(void *data, struct wl_touch *wl_touch, uint32_t serial,
+@@ -266,11 +357,12 @@ wl_touch_down(void *data, struct wl_touch *wl_touch, uint32_t serial,
+     touch_x = wl_fixed_to_int(x);
+     touch_y = wl_fixed_to_int(y);
+ 
++    touches_down++;
+     kbd_unpress_key(&keyboard, time);
  
      next_key = kbd_get_key(&keyboard, touch_x, touch_y);
      if (next_key) {
@@ -1241,16 +1829,20 @@ index be7fb07..36ead9c 100644
      } else if (keyboard.compose) {
          keyboard.compose = 0;
          kbd_switch_layout(&keyboard, keyboard.prevlayout,
-@@ -286,7 +361,7 @@ wl_touch_up(void *data, struct wl_touch *wl_touch, uint32_t serial,
+@@ -286,7 +378,11 @@ wl_touch_up(void *data, struct wl_touch *wl_touch, uint32_t serial,
          return;
      }
  
 -    kbd_release_key(&keyboard, time);
 +    touch_release(id, time);
++    if (touches_down > 0 && --touches_down == 0) {
++        /* no finger left: no typed key may still be down */
++        kbd_release_stuck(time);
++    }
  }
  
  void
-@@ -302,7 +377,9 @@ wl_touch_motion(void *data, struct wl_touch *wl_touch, uint32_t time,
+@@ -302,7 +398,9 @@ wl_touch_motion(void *data, struct wl_touch *wl_touch, uint32_t time,
      touch_x = wl_fixed_to_int(x);
      touch_y = wl_fixed_to_int(y);
  
@@ -1261,13 +1853,16 @@ index be7fb07..36ead9c 100644
  }
  
  void
-@@ -313,6 +390,13 @@ wl_touch_frame(void *data, struct wl_touch *wl_touch)
+@@ -313,6 +411,16 @@ wl_touch_frame(void *data, struct wl_touch *wl_touch)
  void
  wl_touch_cancel(void *data, struct wl_touch *wl_touch)
  {
 +    // the compositor took the touches (a gesture): nothing may stay held
 +    uint32_t time = (uint32_t) (monotime() + keyboard.last_press_offset);
++    osk_log("touch cancelled by the compositor, fingers down:", touches_down);
++    touches_down = 0;
 +    kbd_unpress_key(&keyboard, time);
++    kbd_release_stuck(time);
 +    release_latched_mods();
 +    if (layer_surface_configured && popup_xdg_surface_configured) {
 +        kbd_draw_layout(&keyboard);
@@ -1275,7 +1870,7 @@ index be7fb07..36ead9c 100644
  }
  
  void
-@@ -371,13 +455,13 @@ wl_pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t serial,
+@@ -371,13 +479,13 @@ wl_pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t serial,
      if (cur_press) {
          kbd_unpress_key(&keyboard, time);
      } else {
@@ -1291,7 +1886,7 @@ index be7fb07..36ead9c 100644
          } else if (keyboard.compose) {
              keyboard.compose = 0;
              kbd_switch_layout(&keyboard, keyboard.prevlayout,
-@@ -471,12 +555,19 @@ handle_global(void *data, struct wl_registry *registry, uint32_t name,
+@@ -471,12 +579,19 @@ handle_global(void *data, struct wl_registry *registry, uint32_t name,
              registry, name, &zwp_virtual_keyboard_manager_v1_interface, 1);
      } else if (im_auto && strcmp(interface, zwp_input_method_manager_v2_interface.name) == 0) {
          im_mgr = wl_registry_bind(registry, name, &zwp_input_method_manager_v2_interface, 1);
@@ -1311,7 +1906,7 @@ index be7fb07..36ead9c 100644
  }
  
  static void
-@@ -658,6 +749,7 @@ layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *surface,
+@@ -658,6 +773,7 @@ layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *surface,
  void
  layer_surface_closed(void *data, struct zwlr_layer_surface_v1 *surface)
  {
@@ -1319,20 +1914,21 @@ index be7fb07..36ead9c 100644
      zwlr_layer_surface_v1_destroy(surface);
      wl_surface_destroy(draw_surf.surf);
      run_display = false;
-@@ -680,6 +772,12 @@ usage(char *argv0)
+@@ -680,6 +796,13 @@ usage(char *argv0)
      fprintf(stderr, "  -R [int]    - Rounding radius in pixels\n");
      fprintf(stderr, "  --fn [font] - Set font (e.g: DejaVu Sans 20)\n");
      fprintf(stderr, "  --hidden    - Start hidden (send SIGUSR2 to show)\n");
 +    fprintf(stderr, "  --fixed     - Keep the edge: ignore the Move key / SIGRTMIN+1\n");
 +    fprintf(stderr, "  --top       - Dock to the top edge of the output (default: bottom)\n");
 +    fprintf(stderr, "  --words FILE - Autocorrect dictionary, one word per line, most frequent first\n");
++    fprintf(stderr, "  --bigrams FILE - Word pair counts (\"a b n\" lines) that weight corrections by the previous word\n");
 +    fprintf(stderr, "  --known FILE - Words autocorrect leaves alone (undone corrections are added)\n");
 +    fprintf(stderr, "  --ac-state FILE - Autocorrect on/off state (SIGRTMIN+2 re-reads it)\n");
 +    fprintf(stderr, "  --output NAME - Show on this output (e.g. eDP-2); also $WVKBD_OUTPUT\n");
      fprintf(stderr, "  --no-popup             - Disable the key-press popup\n");
      fprintf(stderr, "  --no-highlight         - Don't highlight a key while pressed\n");
      fprintf(stderr, "  --no-feedback          - Disable all key-press feedback "
-@@ -738,6 +836,31 @@ list_layers()
+@@ -738,6 +861,31 @@ list_layers()
      }
  }
  
@@ -1364,7 +1960,7 @@ index be7fb07..36ead9c 100644
  void
  hide()
  {
-@@ -748,6 +871,13 @@ hide()
+@@ -748,6 +896,13 @@ hide()
      // Ensure active keys are released, so they're not repeated infinitely.
      uint32_t time = (uint32_t) (monotime() + keyboard.last_press_offset);
      kbd_unpress_key(&keyboard, time);
@@ -1378,7 +1974,7 @@ index be7fb07..36ead9c 100644
  
      if (wfs_draw_surf) {
          wp_fractional_scale_v1_destroy(wfs_draw_surf);
-@@ -812,12 +942,13 @@ show()
+@@ -812,12 +967,13 @@ show()
              wp_viewporter_get_viewport(viewporter, draw_surf.surf);
      }
  
@@ -1394,7 +1990,7 @@ index be7fb07..36ead9c 100644
      uint32_t req_w = 0;
      if (dock_mode == DOCK_LEFT) {
          anchor |= ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
-@@ -880,7 +1011,7 @@ refresh_available_dimension()
+@@ -880,7 +1036,7 @@ refresh_available_dimension()
  {
      struct wl_surface *surface = wl_compositor_create_surface(compositor);
      struct zwlr_layer_surface_v1 *layer_surface = zwlr_layer_shell_v1_get_layer_surface(
@@ -1403,7 +1999,7 @@ index be7fb07..36ead9c 100644
      zwlr_layer_surface_v1_set_anchor(layer_surface,
                                       ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
                                       ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
-@@ -1084,6 +1215,25 @@ main(int argc, char **argv)
+@@ -1084,6 +1240,26 @@ main(int argc, char **argv)
                  exit(1);
              }
              fc_font_pattern = estrdup(argv[++i]);
@@ -1412,13 +2008,14 @@ index be7fb07..36ead9c 100644
 +        } else if (!strcmp(argv[i], "--top")) {
 +            anchor_top = true;
 +        } else if (!strcmp(argv[i], "--words") || !strcmp(argv[i], "--known") ||
-+                   !strcmp(argv[i], "--ac-state")) {
++                   !strcmp(argv[i], "--ac-state") || !strcmp(argv[i], "--bigrams")) {
 +            if (i >= argc - 1) {
 +                usage(argv[0]);
 +                exit(1);
 +            }
 +            char **dst = !strcmp(argv[i], "--words") ? &ac_words :
-+                         !strcmp(argv[i], "--known") ? &ac_known : &ac_state;
++                         !strcmp(argv[i], "--known") ? &ac_known :
++                         !strcmp(argv[i], "--bigrams") ? &ac_bigrams : &ac_state;
 +            *dst = estrdup(argv[++i]);
 +        } else if (!strcmp(argv[i], "--output")) {
 +            if (i >= argc - 1) {
@@ -1429,7 +2026,7 @@ index be7fb07..36ead9c 100644
          } else if (!strcmp(argv[i], "-o")) {
              keyboard.print = true;
          } else if (!strcmp(argv[i], "-O")) {
-@@ -1217,6 +1367,8 @@ main(int argc, char **argv)
+@@ -1217,6 +1393,8 @@ main(int argc, char **argv)
      keyboard.surf = &draw_surf;
      keyboard.popup_surf = &popup_draw_surf;
  
@@ -1438,7 +2035,7 @@ index be7fb07..36ead9c 100644
      struct wl_registry *registry = wl_display_get_registry(display);
      wl_registry_add_listener(registry, &registry_listener, NULL);
      wl_display_roundtrip(display);
-@@ -1254,8 +1406,28 @@ main(int argc, char **argv)
+@@ -1254,8 +1432,28 @@ main(int argc, char **argv)
      keyboard.shift_space_is_tab = false;
      #endif
  
@@ -1463,11 +2060,11 @@ index be7fb07..36ead9c 100644
 +    }
      kbd_init(&keyboard, (struct layout *)&layouts, layer_names_list,
               landscape_layer_names_list);
-+    kbd_autocorrect_init(ac_words, ac_known, ac_state);
++    kbd_autocorrect_init(ac_words, ac_known, ac_state, ac_bigrams);
  
      if (im_mgr != NULL) {
          struct zwp_input_method_v2 *input_method =
-@@ -1287,7 +1459,13 @@ main(int argc, char **argv)
+@@ -1287,7 +1485,13 @@ main(int argc, char **argv)
      sigaddset(&signal_mask, SIGUSR1);
      sigaddset(&signal_mask, SIGUSR2);
      sigaddset(&signal_mask, SIGRTMIN);
@@ -1481,7 +2078,7 @@ index be7fb07..36ead9c 100644
      if (sigprocmask(SIG_BLOCK, &signal_mask, NULL) == -1) {
          die("Failed to disable handled signals: %d\n", errno);
      }
-@@ -1321,11 +1499,32 @@ main(int argc, char **argv)
+@@ -1321,11 +1525,32 @@ main(int argc, char **argv)
                  show();
              else if (si.ssi_signo == SIGRTMIN)
                  toggle_visibility();

@@ -544,6 +544,29 @@ return function(host)
         if yoga_bottom_reserved then keep_cursor_off_bottom() end
     end
 
+    -- Touching the on-screen keyboard (or the touchpad strip) makes Hyprland warp the pointer to
+    -- the touch point, which is on the parked bottom panel: the cursor ended up under the keys
+    -- every time a key was tapped. While the panel is reserved, watch for that and put the
+    -- pointer back where it was on the top panel (where it was left, not the nearest point).
+    local yoga_cursor_last   -- the last pointer position seen off the bottom panel
+    hl.timer(function()
+        if not yoga_bottom_reserved then yoga_cursor_last = nil; return end
+        local top, bottom = yoga_panels()
+        if not (top and bottom and top.enabled and bottom.enabled) then return end
+        local c = hl.get_cursor_pos()
+        if not c then return end
+        local bw, bh = logical_size(bottom)
+        if c.x >= bottom.x and c.x < bottom.x + bw and c.y >= bottom.y and c.y < bottom.y + bh then
+            if yoga_cursor_last then
+                hl.dispatch(hl.dsp.cursor.move({ x = yoga_cursor_last.x, y = yoga_cursor_last.y }))
+            else
+                keep_cursor_off_bottom()
+            end
+        else
+            yoga_cursor_last = { x = c.x, y = c.y }
+        end
+    end, { timeout = 60, type = "repeat" })
+
     function yoga_set_reserved(on)
         on = on and true or false
         if on == yoga_bottom_reserved then return "unchanged" end
@@ -645,6 +668,10 @@ return function(host)
         if yoga_bottom_reserved and bottom and focused.name == bottom.name then
             if yoga_last_focus_monitor and yoga_last_focus_monitor ~= bottom.name then
                 hl.dispatch(hl.dsp.focus({ monitor = yoga_last_focus_monitor }))
+                -- (focusing a monitor warps the pointer to its middle: put it back where it was)
+                if yoga_cursor_last then
+                    hl.dispatch(hl.dsp.cursor.move({ x = yoga_cursor_last.x, y = yoga_cursor_last.y }))
+                end
             end
         else
             yoga_last_focus_monitor = focused.name

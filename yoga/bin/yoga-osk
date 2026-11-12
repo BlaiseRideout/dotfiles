@@ -18,9 +18,9 @@
 # It opens on the bottom panel: the monitor whose description contains
 # $YOGA_OSK_DESC (default "0x4182", the bottom Samsung panel), falling back to
 # whatever monitor the compositor picks. Override the connector directly with
-# $YOGA_OSK_OUTPUT (e.g. eDP-2). Height in logical pixels: $YOGA_OSK_HEIGHT; by default a third of the
-# panel's logical width (480 on the 1440-wide Yoga panel): the 5 rows of 15 key-units then make every
-# 1.0-wide key as high as it is wide.
+# $YOGA_OSK_OUTPUT (e.g. eDP-2). Height in logical pixels: $YOGA_OSK_HEIGHT; by default 5.6/15 of the
+# panel's logical width (538 on the 1440-wide Yoga panel): the 5 key rows of 15 key-units plus the short
+# suggestion row (0.6 of a key row) then make every 1.0-wide key as high as it is wide.
 # It docks to the TOP of that panel (the edge nearest the hinge), leaving the front
 # part of the bottom screen for the virtual touchpad; $YOGA_OSK_POSITION=bottom
 # docks it to the bottom edge instead.
@@ -49,6 +49,7 @@ float_height=${YOGA_OSK_FLOAT_HEIGHT:-340}
 ac_words=${YOGA_AUTOCORRECT_WORDS:-$HOME/.local/share/yoga/autocorrect-words.txt}
 ac_dir=${XDG_CONFIG_HOME:-$HOME/.config}/yoga
 ac_known=$ac_dir/autocorrect-known.txt
+ac_bigrams=${YOGA_AUTOCORRECT_BIGRAMS:-$HOME/.local/share/yoga/autocorrect-bigrams.txt}   # word pairs: the previous word weights the choice
 ac_state=$ac_dir/autocorrect
 top_desc=${YOGA_TOP_DESC:-0x4167}
 mode_file=${XDG_RUNTIME_DIR:-/tmp}/yoga-osk.mode
@@ -77,7 +78,7 @@ except Exception:
     pass' "$desc"
 }
 
-# the docked keyboard's height: a third of the panel's logical width (see above)
+# the docked keyboard's height: 5.6/15 of the panel's logical width (see above)
 dock_height() {
   [ -n "$height" ] && { echo "$height"; return; }
   hyprctl monitors -j 2>/dev/null | python3 -I -c '
@@ -87,7 +88,7 @@ try:
     for m in json.load(sys.stdin):
         if m["name"] == out:
             w = m["width"] if m.get("transform", 0) % 2 == 0 else m["height"]
-            print(round(w / m.get("scale", 1) / 3)); break
+            print(round(w / m.get("scale", 1) * 5.6 / 15)); break
 except Exception:
     pass' "$1"
 }
@@ -153,13 +154,14 @@ start() {
     args=(--hidden -H "$((float_height + 60))" -L "$float_height" --non-exclusive --fn "Sans 14")
   else
     out=$(bottom_output)
-    h=$(dock_height "$out"); h=${h:-480}
+    h=$(dock_height "$out"); h=${h:-538}
     args=(--hidden -H "$h" -L "$h" --fixed --fn "Sans 14")
     [ "$position" = top ] && args+=(--top)
   fi
   [ -n "$out" ] && args+=(--output "$out")
   mkdir -p "$ac_dir"
   [ -r "$ac_words" ] && args+=(--words "$ac_words" --known "$ac_known" --ac-state "$ac_state")
+  [ -r "$ac_bigrams" ] && args+=(--bigrams "$ac_bigrams")
   echo "$mode" > "$mode_file"
   setsid -f "$bin" "${args[@]}" >/dev/null 2>&1 </dev/null 9>&-    # (does not inherit the lock)
   for _ in $(seq 1 30); do
