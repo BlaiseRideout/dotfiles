@@ -6,7 +6,14 @@
 #     Dvorak: number row, Tab row, Caps/home row with Enter, Shift row, then
 #     Hide Esc Fn Ctrl Super Alt Space AltGr and the arrow keys. A key types what it
 #     shows (wvkbd uploads its own keymap, so the OS-level layout is not applied).
-#     "Fn" is the stock symbols/numbers layer.
+#   - "Fn" is a latch (like the old Shift/Ctrl latch: tap it, the next key is its Fn meaning, then it
+#     unlatches) and the layout stays put: the number row becomes F1-F12, and PgUp/Home/Up/End,
+#     PgDn/Left/Down/Right sit where keyd's NAV layer has them (the f g c r / d h t s keys in
+#     Dvorak; n is a second Up, as in keyd). The key labels change while Fn is latched. The old symbols
+#     layer's other keys sit there too: Esc=` Backspace=Del Tab=CapsLock ,=« .=» /=¡ (¿ shifted),
+#     Alt=AltGr (held) and Super=emoji layout.
+#   - Shift, Ctrl and Alt are HELD, not latched: they are down while a finger is on the key, so the
+#     keyboard now tracks touches by id (multi-touch). Super and Caps stay latches.
 #   - --top: dock to the top edge of the output (the Yoga puts the keyboard there so the
 #     front of the bottom screen is free for the virtual touchpad)
 #   - Dvorak positions: the system layout is Dvorak, and the compositor maps the keycodes
