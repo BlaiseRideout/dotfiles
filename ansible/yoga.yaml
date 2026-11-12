@@ -218,13 +218,71 @@
 # dependencies. The plugin itself is added as the user, not here:
 #   hyprpm update && hyprpm add https://github.com/horriblename/hyprgrass \
 #     && hyprpm enable hyprgrass          (and again after every Hyprland upgrade:
-#     yoga-touch update)
+#     yoga-touch update; needs the sudo password, so not done by ansible)
 - name: Install the Yoga touch UX packages
   when: yoga_touch | bool
   become: true
   community.general.pacman:
     name: [ hyprpm, cmake, glm, meson, ninja, cpio, pkgconf, git, gcc, make, wayland, wayland-protocols, pango, cairo, libxkbcommon ]
     state: present
+
+# hyprgrass (hyprpm) must be rebuilt for every Hyprland upgrade. hyprpm builds against the
+# RUNNING Hyprland and writes its state through its own `sudo` calls (password). So this runs as
+# the user, with a throwaway `sudo` shim first in PATH that feeds it the become password this play
+# was started with (become_ask_pass), and only when it is needed: the plugin missing from hyprpm
+# or hyprpm saying the headers are stale. It needs a running Hyprland that is already the
+# installed version (after a Hyprland upgrade: log out and in, then run this playbook).
+# Same thing by hand: `yoga-touch update`.
+- name: Add / rebuild hyprgrass for the running Hyprland (hyprpm)
+  when: yoga_touch | bool
+  no_log: true
+  environment:
+    YOGA_BECOME_PASS: "{{ ansible_become_password | default('') }}"
+  ansible.builtin.shell: |
+    set -u
+    touch="{{ playbook_dir }}/../yoga/bin/yoga-touch"
+    command -v hyprpm >/dev/null || { echo "SKIP no hyprpm"; exit 0; }
+    # a running Hyprland, and it must be the installed version (else the headers would be built for the old one)
+    rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+    sig=$(ls -t "$rt"/hypr 2>/dev/null | while read -r d; do pid=$(head -1 "$rt/hypr/$d/hyprland.lock" 2>/dev/null); [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && echo "$d" && break; done)
+    [ -n "$sig" ] || { echo "SKIP no running Hyprland (run this from the session)"; exit 0; }
+    export HYPRLAND_INSTANCE_SIGNATURE=$sig XDG_RUNTIME_DIR=$rt
+    have=$(grep -o '"[0-9a-f]\{40\}"' /usr/include/hyprland/src/version.h | tr -d '"')
+    run=$(hyprctl version -j 2>/dev/null | grep -o '"commit": *"[0-9a-f]*"' | grep -o '[0-9a-f]\{40\}')
+    [ "$have" = "$run" ] || { echo "SKIP the running Hyprland is not the installed one: log out and in first"; exit 0; }
+    # nothing to do when hyprgrass is registered and the headers are fine
+    if hyprpm list 2>&1 | grep -q hyprgrass && ! hyprpm reload -n 2>&1 | grep -qi 'headers'; then exit 0; fi
+    shim=$(mktemp -d); trap 'rm -rf "$shim"' EXIT
+    printf '#!/bin/sh\nexec /usr/bin/sudo -S -p "" "$@" <<EOF\n$YOGA_BECOME_PASS\nEOF\n' > "$shim/sudo"
+    chmod 700 "$shim/sudo"
+    export PATH="$shim:$PATH"
+    hyprpm update >&2 || exit 1
+    hyprpm list 2>&1 | grep -q hyprgrass || yes | hyprpm add https://github.com/horriblename/hyprgrass >&2 || exit 1
+    hyprpm enable hyprgrass >&2 || exit 1
+    rm -f "$HOME/.local/state/yoga-touch/plugins.off"
+    "$touch" load >&2 || true
+    echo UPDATED
+  args:
+    executable: /bin/bash
+  register: hyprgrass_update
+  changed_when: "'UPDATED' in hyprgrass_update.stdout"
+
+- name: Install the pacman hook that reminds to rebuild hyprgrass after a Hyprland upgrade
+  when: yoga_touch | bool
+  become: true
+  block:
+    - name: Make sure the hooks directory exists
+      ansible.builtin.file: { path: /etc/pacman.d/hooks, state: directory, mode: "0755" }
+    - name: Install the notice script
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/pacman/yoga-hyprgrass-notice"
+        dest: /usr/local/sbin/yoga-hyprgrass-notice
+        mode: "0755"
+    - name: Install the hook
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../yoga/pacman/yoga-hyprgrass.hook"
+        dest: /etc/pacman.d/hooks/yoga-hyprgrass.hook
+        mode: "0644"
 
 # wvkbd is not packaged: build v0.21 plus yoga/wvkbd/yoga.patch (Dvorak, a Hide key, autocorrect,
 # --output so it opens on the bottom panel) into ~/.local/bin/wvkbd-yoga as the

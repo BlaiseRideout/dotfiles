@@ -1,0 +1,12 @@
+# After Hyprland is upgraded, say that hyprgrass needs `yoga-touch update` (see
+# yoga/pacman/yoga-hyprgrass-notice). Installed to /etc/pacman.d/hooks/ by ansible/yoga.yaml.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = hyprland
+
+[Action]
+Description = Reminding to rebuild hyprgrass for the new Hyprland
+When = PostTransaction
+Exec = /usr/local/sbin/yoga-hyprgrass-notice

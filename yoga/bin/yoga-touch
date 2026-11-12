@@ -92,6 +92,19 @@ recover() {
   note "touch plugins off" "unloaded $n plugin file(s), config reloaded; 'yoga-touch enable' turns them back on"
 }
 
+# After a Hyprland upgrade (pacman) hyprpm refuses the plugin ("headers are not up-to-date",
+# seen 2026-11-11 after 0.57.2) and every gesture is dead. hyprpm builds against the RUNNING
+# Hyprland and writes its state through sudo (password), so this cannot be fixed unattended at
+# login or from a pacman hook; instead say so loudly. Fix: `yoga-touch update` in a terminal
+# (add/enable are in `yoga-touch update` too).
+hyprpm_ensure() {
+  local out
+  out=$(hyprpm reload -n 2>&1)
+  if printf '%s' "$out" | grep -qi 'headers are not up-to-date\|headers version mismatch\|cannot find headers'; then
+    note "gestures are off: hyprgrass is out of date" "run 'yoga-touch update' in a terminal (Hyprland was upgraded)"
+  fi
+}
+
 load() {
   if [ -e "$off" ]; then say "plugins switched off ($off); 'yoga-touch enable' lifts it"; return 0; fi
   if [ -e "$loading" ]; then
@@ -111,6 +124,7 @@ load() {
   if [ -n "${YOGA_HYPRGRASS_SO:-}" ]; then
     hyprctl plugin load "$YOGA_HYPRGRASS_SO"
   elif command -v hyprpm >/dev/null; then
+    hyprpm_ensure
     hyprpm reload -n
   else
     rm -f "$loading"
@@ -154,7 +168,10 @@ case "${1:-status}" in
   load)    load ;;
   update)
     command -v hyprpm >/dev/null || { say "hyprpm is not installed"; exit 1; }
-    hyprpm update && rm -f "$off" "$loading" && load ;;
+    hyprpm update || exit 1
+    hyprpm list 2>&1 | grep -q hyprgrass || yes | hyprpm add https://github.com/horriblename/hyprgrass || exit 1
+    hyprpm enable hyprgrass || exit 1
+    rm -f "$off" "$loading"; load ;;
   status)
     [ -e "$off" ] && echo "switch: OFF (plugins.off exists)" || echo "switch: on"
     [ -e "$loading" ] && echo "crash guard: loading marker present (set $(date -d @"$(cat "$loading")" +%T))" || echo "crash guard: clear"

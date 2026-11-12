@@ -1,0 +1,15 @@
+#!/bin/bash
+# Run by yoga-hyprgrass.hook after hyprland is installed/upgraded: tell the logged-in user that
+# hyprgrass must be rebuilt. It cannot be rebuilt here: hyprpm builds against the RUNNING
+# Hyprland (still the old one during the upgrade) and writes its state through sudo with a
+# password. So: restart Hyprland, then run `yoga-touch update` in a terminal.
+# (yoga-touch load also notices stale headers at the next login.)
+for d in /run/user/*; do
+  uid=${d##*/}; user=$(id -nu "$uid" 2>/dev/null) || continue
+  [ -S "$d/bus" ] || continue
+  runuser -u "$user" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$d/bus" \
+    notify-send -u critical -a yoga-touch "Hyprland was upgraded" \
+    "Touch gestures need hyprgrass rebuilt: log out and back in, then run 'yoga-touch update' in a terminal." \
+    >/dev/null 2>&1 || true
+done
+exit 0
